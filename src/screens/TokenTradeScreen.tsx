@@ -35,12 +35,13 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import Svg, {Circle, Path} from 'react-native-svg';
-import {parseUnits} from 'viem';
+import {formatUnits, parseUnits} from 'viem';
 import {TokenChartPanel} from '../components/TokenChartPanel';
 import {CHAIN_LABEL, NATIVE_SYMBOL, assetDecimalsForChain, currencyAddress, type ChainKey} from '../core/chainData';
 import {DEV_FEE_PCT} from '../core/fees';
 import {getRelayQuote, summarizeQuote, type QuoteSummary, type RelayQuote} from '../core/relayQuote';
 import {executeRelayQuote, type ExecuteStep} from '../core/executeRelayQuote';
+import {checkFallbackRoute, tryFallbackProviders, type FallbackRouteParams} from '../core/fallbackDex';
 import {TransactionIntentError} from '../core/txIntentFirewall';
 import {
   estimateEvmNativeFeeReserve,
@@ -138,6 +139,13 @@ export function TokenTradeScreen({
   // needs the actual RelayQuote (steps + the intent relayQuote.ts tagged
   // it with), not the display-only numbers summarizeQuote() derives.
   const rawQuoteRef = useRef<RelayQuote | null>(null);
+  // Set only when Relay itself has no route and a fallback DEX aggregator
+  // (fallbackDex.ts) could quote this pair instead — mutually exclusive
+  // with rawQuoteRef above (exactly one of the two is non-null whenever
+  // `quote` is non-null). handleTrade below re-quotes fresh against these
+  // params rather than reusing the preview amount, same as the Relay path
+  // re-executes the exact quote it locked in rather than a display value.
+  const fallbackParamsRef = useRef<FallbackRouteParams | null>(null);
 
   type ExecuteState = 'idle' | ExecuteStep | 'success' | 'error';
   const [executeState, setExecuteState] = useState<ExecuteState>('idle');
@@ -282,12 +290,14 @@ export function TokenTradeScreen({
     if (amtNum <= 0) {
       setQuote(null);
       rawQuoteRef.current = null;
+      fallbackParamsRef.current = null;
       setQuoteLoading(false);
       return;
     }
     if (!session) {
       setQuote(null);
       rawQuoteRef.current = null;
+      fallbackParamsRef.current = null;
       setQuoteLoading(false);
       return;
     }
@@ -298,6 +308,7 @@ export function TokenTradeScreen({
     if (payDecimals === undefined || payDecimals === null) {
       setQuote(null);
       rawQuoteRef.current = null;
+      fallbackParamsRef.current = null;
       setQuoteLoading(false);
       return;
     }
@@ -328,6 +339,7 @@ export function TokenTradeScreen({
           // after a faster later one would otherwise flash outdated numbers.
           if (requestId !== quoteRequestIdRef.current) return;
           rawQuoteRef.current = q;
+          fallbackParamsRef.current = null;
           // Only used if Relay's own response omits currency.decimals on
           // the receiving side (summarizeQuote's own doc comment) — the
           // receiving side is the token on Buy (tokenDecimals, already
@@ -337,12 +349,56 @@ export function TokenTradeScreen({
           setQuote(summarizeQuote(q, receiveDecimalsFallback));
           setQuoteLoading(false);
         })
-        .catch(err => {
+        .catch(relayErr => {
           if (requestId !== quoteRequestIdRef.current) return;
-          setQuote(null);
-          rawQuoteRef.current = null;
-          setQuoteLoading(false);
-          setQuoteError(err instanceof Error ? err.message : 'Could not get a quote — try again.');
+          const relayErrorMessage = relayErr instanceof Error ? relayErr.message : 'Could not get a quote — try again.';
+          // Relay itself has no route for this pair — try a fallback DEX
+          // aggregator (fallbackDex.ts) before giving up, same real gap
+          // mobile's own DexScreen.tsx closes: a thin/new token Relay's
+          // solver network hasn't indexed can still have a real quote
+          // through 1inch/0x directly. Solana has no fallback coverage
+          // here (checkFallbackRoute returns null immediately for it),
+          // so this always falls straight through to the original error
+          // on that chain.
+          const receiveDecimalsFallback = isBuySide ? (tokenDecimals ?? 18) : (assetDecimalsForChain(token.chainKey, NATIVE_SYMBOL[token.chainKey]) ?? 18);
+          const fallbackParams: FallbackRouteParams = {
+            chainKey: token.chainKey,
+            sellToken: isBuySide ? nativeCurrency : token.address,
+            buyToken: isBuySide ? token.address : nativeCurrency,
+            sellAmount: amountBaseUnits,
+            takerAddress: userAddress,
+            buyDecimals: receiveDecimalsFallback,
+          };
+          checkFallbackRoute(fallbackParams)
+            .then(fallback => {
+              if (requestId !== quoteRequestIdRef.current) return;
+              if (!fallback) {
+                rawQuoteRef.current = null;
+                fallbackParamsRef.current = null;
+                setQuote(null);
+                setQuoteLoading(false);
+                setQuoteError(relayErrorMessage);
+                return;
+              }
+              rawQuoteRef.current = null;
+              fallbackParamsRef.current = fallbackParams;
+              let receivedAmountFormatted: string | null = null;
+              try {
+                receivedAmountFormatted = formatUnits(BigInt(fallback.buyAmount), receiveDecimalsFallback);
+              } catch {
+                receivedAmountFormatted = null;
+              }
+              setQuote({totalFeeUsd: null, etaSeconds: null, receivedAmountFormatted, payAmountUsd: null, receiveAmountUsd: null, priceImpactPct: null});
+              setQuoteLoading(false);
+            })
+            .catch(() => {
+              if (requestId !== quoteRequestIdRef.current) return;
+              rawQuoteRef.current = null;
+              fallbackParamsRef.current = null;
+              setQuote(null);
+              setQuoteLoading(false);
+              setQuoteError(relayErrorMessage);
+            });
         });
     }, QUOTE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
@@ -363,15 +419,39 @@ export function TokenTradeScreen({
 
   async function handleTrade() {
     const quoteToExecute = rawQuoteRef.current;
-    if (!quoteToExecute || !session) return;
+    const fallbackParams = fallbackParamsRef.current;
+    if ((!quoteToExecute && !fallbackParams) || !session) return;
     setExecuteError(null);
     setExecuteWarnings([]);
     setExecuteTxHashes([]);
     const fromAddress = solana ? session.solana.address : session.evm.address;
     try {
-      const result = await executeRelayQuote(quoteToExecute, session, step => setExecuteState(step));
-      setExecuteWarnings(result.warnings);
-      setExecuteTxHashes(result.txHashes);
+      let txHashes: string[];
+      let warnings: string[];
+      let receivedAmountFormatted: string | null;
+      if (quoteToExecute) {
+        const result = await executeRelayQuote(quoteToExecute, session, step => setExecuteState(step));
+        txHashes = result.txHashes;
+        warnings = result.warnings;
+        receivedAmountFormatted = quote?.receivedAmountFormatted ?? null;
+      } else {
+        // Fallback path re-quotes fresh (tryFallbackProviders runs its
+        // own quoteAllProviders internally) rather than reusing the
+        // preview amount — same as the Relay path only ever executes the
+        // exact quote it already locked in, never a display value.
+        setExecuteState('signing');
+        const result = await tryFallbackProviders({...fallbackParams!, privateKeyHex: session.evm.privateKey});
+        setExecuteState('done');
+        txHashes = [result.hash];
+        warnings = [];
+        try {
+          receivedAmountFormatted = formatUnits(BigInt(result.buyAmount), fallbackParams!.buyDecimals ?? 18);
+        } catch {
+          receivedAmountFormatted = null;
+        }
+      }
+      setExecuteWarnings(warnings);
+      setExecuteTxHashes(txHashes);
       setExecuteState('success');
       addTxHistoryEntry({
         status: 'success',
@@ -381,8 +461,8 @@ export function TokenTradeScreen({
         paySymbol,
         receiveSymbol,
         payAmount: amount,
-        receivedAmountFormatted: quote?.receivedAmountFormatted ?? null,
-        hashes: result.txHashes,
+        receivedAmountFormatted,
+        hashes: txHashes,
         fromAddress,
       });
     } catch (err) {
@@ -410,7 +490,7 @@ export function TokenTradeScreen({
     }
   }
 
-  const canTrade = Boolean(rawQuoteRef.current) && Boolean(session) && !insufficientBalance && (executeState === 'idle' || executeState === 'error');
+  const canTrade = (Boolean(rawQuoteRef.current) || Boolean(fallbackParamsRef.current)) && Boolean(session) && !insufficientBalance && (executeState === 'idle' || executeState === 'error');
   const isExecuting = executeState !== 'idle' && executeState !== 'error' && executeState !== 'success';
 
   // Same real bug both DexScreen.tsx's own pillHint and the site's own
