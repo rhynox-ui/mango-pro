@@ -29,6 +29,7 @@ import {
 import {CHAIN_LABEL, type ChainKey} from '../core/chainData';
 import {fetchUsdcPortfolio, USDC_SUPPORTED_CHAINS, type UsdcPortfolio} from '../core/usdcBalances';
 import {sendUsdc, isValidRecipientAddress} from '../wallet/sendUsdc';
+import {filterTxHistoryForAccount, getTxHistory, subscribeTxHistory} from '../wallet/txHistory';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {useSession} from '../wallet/SessionContext';
 
@@ -75,7 +76,7 @@ function joinedLabel(): string {
   return `Joined ${now.toLocaleDateString('en-US', {month: 'long', year: 'numeric'})}`;
 }
 
-export function ProfileScreen({onOpenSettings}: {onOpenSettings: () => void}) {
+export function ProfileScreen({onOpenSettings, onOpenHistory}: {onOpenSettings: () => void; onOpenHistory: () => void}) {
   const {colors} = useTheme();
   const {session} = useSession();
   const styles = makeStyles(colors);
@@ -94,6 +95,19 @@ export function ProfileScreen({onOpenSettings}: {onOpenSettings: () => void}) {
   const [positionTab, setPositionTab] = useState<PositionTab>('Open');
   const [assetFilter, setAssetFilter] = useState<AssetFilterKey>('All');
   const joined = useMemo(joinedLabel, []);
+
+  // Real trade count for the meta chip below — was a hardcoded "0
+  // trades" before txHistory.ts existed, same "real shell, not a mock"
+  // reasoning as everything else this screen shows for a new account.
+  const [tradeCount, setTradeCount] = useState(0);
+  useEffect(() => {
+    function recount(entries: ReturnType<typeof getTxHistory>) {
+      const scoped = session ? filterTxHistoryForAccount(entries, {evmAddress: session.evm.address, solanaAddress: session.solana.address}) : entries;
+      setTradeCount(scoped.filter(e => e.status === 'success').length);
+    }
+    recount(getTxHistory());
+    return subscribeTxHistory(recount);
+  }, [session]);
 
   useEffect(() => {
     if (!session) return;
@@ -170,7 +184,7 @@ export function ProfileScreen({onOpenSettings}: {onOpenSettings: () => void}) {
       )}
 
       <View style={styles.headerIcons}>
-        <TouchableOpacity hitSlop={8}>
+        <TouchableOpacity hitSlop={8} onPress={onOpenHistory}>
           <HistoryIcon color={colors.textSecondary} />
         </TouchableOpacity>
         <TouchableOpacity hitSlop={8} onPress={onOpenSettings}>
@@ -223,7 +237,7 @@ export function ProfileScreen({onOpenSettings}: {onOpenSettings: () => void}) {
         </View>
         <View style={styles.metaItem}>
           <RepeatIcon color={colors.textMuted} size={13} />
-          <Text style={styles.metaText}>0 trades</Text>
+          <Text style={styles.metaText}>{tradeCount} {tradeCount === 1 ? 'trade' : 'trades'}</Text>
         </View>
         <View style={styles.metaItem}>
           <CalendarIcon color={colors.textMuted} size={13} />

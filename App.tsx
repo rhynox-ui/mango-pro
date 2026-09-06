@@ -38,10 +38,11 @@ import {SearchScreen} from './src/screens/SearchScreen';
 import {TokenTradeScreen, type DemoToken} from './src/screens/TokenTradeScreen';
 import {ProfileScreen} from './src/screens/ProfileScreen';
 import {SettingsScreen} from './src/screens/SettingsScreen';
+import {HistoryScreen} from './src/screens/HistoryScreen';
 import type {TokenSearchResult} from './src/core/tokenSearch';
 
 type Tab = 'home' | 'search' | 'swap' | 'profile';
-type Screen = 'tabs' | 'settings';
+type Screen = 'tabs' | 'settings' | 'history';
 type AuthState = 'loading' | 'welcome' | 'create' | 'import' | 'locked' | 'unlocked';
 
 const TABS: {key: Tab; label: string; icon: TabIconName}[] = [
@@ -166,7 +167,10 @@ function AppInner(): React.JSX.Element {
   const [selectedToken, setSelectedToken] = useState<DemoToken | undefined>(undefined);
 
   const showingSettings = screen === 'settings';
+  const showingHistory = screen === 'history';
+  const showingPushedScreen = showingSettings || showingHistory;
   const openSettings = () => setScreen('settings');
+  const openHistory = () => setScreen('history');
 
   function selectSearchResult(result: TokenSearchResult) {
     setSelectedToken({chainKey: result.chainKey, address: result.tokenAddress, symbol: result.symbol});
@@ -185,6 +189,8 @@ function AppInner(): React.JSX.Element {
           <View style={styles.body}>
             {showingSettings ? (
               <SettingsScreen onBack={() => setScreen('tabs')} />
+            ) : showingHistory ? (
+              <HistoryScreen onBack={() => setScreen('tabs')} />
             ) : tab === 'home' ? (
               <HomeScreen />
             ) : tab === 'search' ? (
@@ -192,11 +198,11 @@ function AppInner(): React.JSX.Element {
             ) : tab === 'swap' ? (
               <TokenTradeScreen token={selectedToken} onOpenSearch={() => setTab('search')} />
             ) : (
-              <ProfileScreen onOpenSettings={openSettings} />
+              <ProfileScreen onOpenSettings={openSettings} onOpenHistory={openHistory} />
             )}
           </View>
 
-          {!showingSettings && (
+          {!showingPushedScreen && (
             <View style={styles.tabBar}>
               {TABS.map(t => {
                 const active = tab === t.key;

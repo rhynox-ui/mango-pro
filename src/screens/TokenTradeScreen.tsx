@@ -53,6 +53,7 @@ import {
   fetchWalletTokenBalance,
 } from '../wallet/walletRpc';
 import {computeMaxAmount, formatAmountForInput, useAvailableBalance} from '../wallet/useAvailableBalance';
+import {addTxHistoryEntry} from '../wallet/txHistory';
 import {useSession} from '../wallet/SessionContext';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {TradeSettingsSheet} from '../components/TradeSettingsSheet';
@@ -366,11 +367,24 @@ export function TokenTradeScreen({
     setExecuteError(null);
     setExecuteWarnings([]);
     setExecuteTxHashes([]);
+    const fromAddress = solana ? session.solana.address : session.evm.address;
     try {
       const result = await executeRelayQuote(quoteToExecute, session, step => setExecuteState(step));
       setExecuteWarnings(result.warnings);
       setExecuteTxHashes(result.txHashes);
       setExecuteState('success');
+      addTxHistoryEntry({
+        status: 'success',
+        chainKey: token.chainKey,
+        chainLabel: CHAIN_LABEL[token.chainKey],
+        isBuySide,
+        paySymbol,
+        receiveSymbol,
+        payAmount: amount,
+        receivedAmountFormatted: quote?.receivedAmountFormatted ?? null,
+        hashes: result.txHashes,
+        fromAddress,
+      });
     } catch (err) {
       // TransactionIntentError carries its own complete, user-facing
       // explanation (txIntentFirewall.ts's own fail() message) — shown
@@ -380,6 +394,19 @@ export function TokenTradeScreen({
       const message = err instanceof TransactionIntentError ? err.message : err instanceof Error ? err.message : 'The trade failed. Nothing left this wallet unless a status above says otherwise.';
       setExecuteError(message);
       setExecuteState('error');
+      addTxHistoryEntry({
+        status: 'error',
+        chainKey: token.chainKey,
+        chainLabel: CHAIN_LABEL[token.chainKey],
+        isBuySide,
+        paySymbol,
+        receiveSymbol,
+        payAmount: amount,
+        receivedAmountFormatted: null,
+        hashes: [],
+        errorMessage: message,
+        fromAddress,
+      });
     }
   }
 
@@ -521,10 +548,15 @@ export function TokenTradeScreen({
               style={[styles.amountInput, styles.prAmountInput]}
             />
           </View>
-          {session && (
-            <Text style={styles.balanceTextSmall} numberOfLines={1}>
-              {balanceLoading ? '…' : balance !== null ? `${formatAmountForInput(balance)} avail.` : ''}
-            </Text>
+          {(quote?.payAmountUsd != null || session) && (
+            <View style={styles.prMetaRow}>
+              <Text style={styles.usdEquivText}>{quote?.payAmountUsd != null ? `≈ $${quote.payAmountUsd.toFixed(2)}` : ''}</Text>
+              {session && (
+                <Text style={styles.balanceTextSmall} numberOfLines={1}>
+                  {balanceLoading ? '…' : balance !== null ? `${formatAmountForInput(balance)} avail.` : ''}
+                </Text>
+              )}
+            </View>
           )}
         </View>
         <View style={[styles.card, styles.payReceiveCard]}>
@@ -542,7 +574,7 @@ export function TokenTradeScreen({
               </Text>
             )}
           </View>
-          {quote?.receiveAmountUsd != null && <Text style={styles.usdEquivText}>≈ ${quote.receiveAmountUsd.toFixed(2)}</Text>}
+          {quote?.receiveAmountUsd != null && <Text style={styles.usdEquivTextRight}>≈ ${quote.receiveAmountUsd.toFixed(2)}</Text>}
         </View>
       </View>
 
@@ -641,12 +673,14 @@ function makeStyles(colors: Colors) {
     payReceiveRow: {flexDirection: 'row', gap: 8, marginTop: 12},
     payReceiveCard: {flex: 1, padding: 12},
     prMainRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6},
-    balanceTextSmall: {color: colors.textMuted, fontSize: 10, textAlign: 'right', marginTop: 4},
+    prMetaRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4, gap: 6},
+    balanceTextSmall: {color: colors.textMuted, fontSize: 10, flexShrink: 1},
     amountInput: {flex: 1, fontSize: 16, fontWeight: '600', color: colors.textPrimary},
     prAmountInput: {textAlign: 'right'},
     prReceiveAmount: {flex: 1, color: colors.textPrimary, fontSize: 16, fontWeight: '600', textAlign: 'right'},
     receiveAmountTextMuted: {color: colors.textMuted},
-    usdEquivText: {color: colors.textMuted, fontSize: 10, fontWeight: '600', textAlign: 'right', marginTop: 4},
+    usdEquivText: {color: colors.textMuted, fontSize: 10, fontWeight: '600'},
+    usdEquivTextRight: {color: colors.textMuted, fontSize: 10, fontWeight: '600', textAlign: 'right', marginTop: 4},
     quickPctRow: {flexDirection: 'row', gap: 6, marginTop: 10, marginBottom: 2},
     quickPctPill: {flex: 1, alignItems: 'center', backgroundColor: colors.pillBg, borderRadius: 999, paddingVertical: 7},
     quickPctPillActive: {backgroundColor: colors.ctaBg},
