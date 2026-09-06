@@ -262,6 +262,7 @@ export function TokenTradeScreen({
   }
 
   const canTrade = Boolean(rawQuoteRef.current) && Boolean(session) && (executeState === 'idle' || executeState === 'error');
+  const isExecuting = executeState !== 'idle' && executeState !== 'error' && executeState !== 'success';
 
   // Same real bug both DexScreen.tsx's own pillHint and the site's own
   // swapPillHint fix (the site's is a direct, explicitly-commented port
@@ -306,23 +307,45 @@ export function TokenTradeScreen({
           per the product decision behind this screen. */}
       <TokenChartPanel chainKey={token.chainKey} tokenAddress={token.address} />
 
-      {/* Buy/Sell — the inactive side flips direction, same as
-          DexScreen.tsx's own handleSwapAssets(); there's no execute step
-          yet to gate a submit on, so both sides just toggle for now. */}
+      {/* Buy/Sell does double duty, same as DexScreen.tsx's own pill row
+          (and the site's own explicitly-commented port of it): the
+          INACTIVE side just flips direction; the ACTIVE side IS the
+          submit control — no separate button below duplicating its job.
+          Gated on canTrade exactly like the flip case always was un-gated
+          — tapping the already-active side with nothing to submit yet is
+          a no-op, explained by pillHint below, not a dead second button. */}
       <View style={styles.buySellRow}>
         <TouchableOpacity
-          onPress={() => setIsBuySide(true)}
-          style={[styles.buySellPillBuy, isBuySide && styles.buySellPillBuyActive]}
+          onPress={() => (!isBuySide ? setIsBuySide(true) : canTrade && handleTrade())}
+          style={[styles.buySellPillBuy, isBuySide && styles.buySellPillBuyActive, isBuySide && !canTrade && styles.buySellPillDisabled]}
           activeOpacity={0.8}>
-          <Text style={[styles.buySellArrowBuy, isBuySide && styles.buySellTextOnColor]}>↗</Text>
-          <Text style={[styles.buySellTextBuy, isBuySide && styles.buySellTextOnColor]}>Buy</Text>
+          {isBuySide && isExecuting ? (
+            <>
+              <ActivityIndicator color="#fff" size="small" />
+              <Text style={[styles.buySellTextBuy, styles.buySellTextOnColor]}>{executeStatusLabel(executeState)}</Text>
+            </>
+          ) : (
+            <>
+              <Text style={[styles.buySellArrowBuy, isBuySide && styles.buySellTextOnColor]}>↗</Text>
+              <Text style={[styles.buySellTextBuy, isBuySide && styles.buySellTextOnColor]}>Buy</Text>
+            </>
+          )}
         </TouchableOpacity>
         <TouchableOpacity
-          onPress={() => setIsBuySide(false)}
-          style={[styles.buySellPillSell, !isBuySide && styles.buySellPillSellActive]}
+          onPress={() => (isBuySide ? setIsBuySide(false) : canTrade && handleTrade())}
+          style={[styles.buySellPillSell, !isBuySide && styles.buySellPillSellActive, !isBuySide && !canTrade && styles.buySellPillDisabled]}
           activeOpacity={0.8}>
-          <Text style={[styles.buySellArrowSell, !isBuySide && styles.buySellTextOnColor]}>↘</Text>
-          <Text style={[styles.buySellTextSell, !isBuySide && styles.buySellTextOnColor]}>Sell</Text>
+          {!isBuySide && isExecuting ? (
+            <>
+              <ActivityIndicator color="#fff" size="small" />
+              <Text style={[styles.buySellTextSell, styles.buySellTextOnColor]}>{executeStatusLabel(executeState)}</Text>
+            </>
+          ) : (
+            <>
+              <Text style={[styles.buySellArrowSell, !isBuySide && styles.buySellTextOnColor]}>↘</Text>
+              <Text style={[styles.buySellTextSell, !isBuySide && styles.buySellTextOnColor]}>Sell</Text>
+            </>
+          )}
         </TouchableOpacity>
       </View>
 
@@ -345,9 +368,10 @@ export function TokenTradeScreen({
         <View style={[styles.card, styles.payReceiveCard]}>
           <Text style={styles.cardLabel}>You pay</Text>
           <View style={styles.prMainRow}>
-            <View style={styles.assetSelector}>
+            <TouchableOpacity style={styles.assetSelector} onPress={onOpenSearch} activeOpacity={0.7} disabled={!onOpenSearch}>
               <Text style={styles.assetSelectorText}>{paySymbol}</Text>
-            </View>
+              <Text style={styles.assetSelectorChevron}>⌄</Text>
+            </TouchableOpacity>
             <TextInput
               value={amount}
               onChangeText={setAmount}
@@ -361,9 +385,10 @@ export function TokenTradeScreen({
         <View style={[styles.card, styles.payReceiveCard]}>
           <Text style={styles.cardLabel}>You receive</Text>
           <View style={styles.prMainRow}>
-            <View style={styles.assetSelector}>
+            <TouchableOpacity style={styles.assetSelector} onPress={onOpenSearch} activeOpacity={0.7} disabled={!onOpenSearch}>
               <Text style={styles.assetSelectorText}>{receiveSymbol}</Text>
-            </View>
+              <Text style={styles.assetSelectorChevron}>⌄</Text>
+            </TouchableOpacity>
             {quoteLoading ? (
               <ActivityIndicator color={colors.textMuted} size="small" />
             ) : (
@@ -388,7 +413,7 @@ export function TokenTradeScreen({
         <Text style={styles.etaText}>{quote?.etaSeconds != null ? `ETA: ${formatEta(quote.etaSeconds)}` : 'ETA: ~1 min'}</Text>
       </View>
 
-      {executeState === 'success' ? (
+      {executeState === 'success' && (
         <View style={styles.executeResult}>
           <Text style={styles.executeSuccessText}>Trade sent</Text>
           {executeTxHashes.map(hash => (
@@ -402,17 +427,6 @@ export function TokenTradeScreen({
             </Text>
           ))}
         </View>
-      ) : (
-        <TouchableOpacity style={[styles.buyButton, !canTrade && styles.buyButtonDisabled]} disabled={!canTrade} onPress={handleTrade} activeOpacity={0.8}>
-          {executeState === 'idle' || executeState === 'error' ? (
-            <Text style={styles.buyButtonText}>{isBuySide ? 'Buy' : 'Sell'}</Text>
-          ) : (
-            <View style={styles.buyButtonPendingRow}>
-              <ActivityIndicator color={colors.ctaText} size="small" />
-              <Text style={styles.buyButtonText}>{executeStatusLabel(executeState)}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
       )}
       {executeError && <Text style={styles.errorText}>{executeError}</Text>}
 
@@ -490,6 +504,7 @@ function makeStyles(colors: Colors) {
     quickPctTextActive: {color: colors.ctaText},
     assetSelector: {flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.pillBg, borderRadius: 999, paddingHorizontal: 6, paddingVertical: 3},
     assetSelectorText: {color: colors.textPrimary, fontSize: 11, fontWeight: '700'},
+    assetSelectorChevron: {color: colors.textMuted, fontSize: 11, fontWeight: '700'},
     buySellRow: {flexDirection: 'row', gap: 8, marginTop: 10, marginBottom: 2},
     buySellPillBuy: {
       flex: 1,
@@ -517,6 +532,7 @@ function makeStyles(colors: Colors) {
       borderColor: colors.danger,
     },
     buySellPillSellActive: {backgroundColor: colors.danger, borderColor: colors.danger},
+    buySellPillDisabled: {opacity: 0.4},
     buySellArrowBuy: {fontSize: 14, fontWeight: '800', color: colors.gain},
     buySellArrowSell: {fontSize: 14, fontWeight: '800', color: colors.danger},
     buySellTextBuy: {fontSize: 13.5, fontWeight: '700', color: colors.gain},
@@ -542,16 +558,6 @@ function makeStyles(colors: Colors) {
     feeText: {color: colors.accentDeep, fontSize: 11, fontWeight: '500'},
     etaText: {color: colors.textSecondary, fontSize: 11},
 
-    buyButton: {
-      marginTop: 12,
-      backgroundColor: colors.ctaBg,
-      borderRadius: 14,
-      paddingVertical: 14,
-      alignItems: 'center',
-    },
-    buyButtonDisabled: {opacity: 0.4},
-    buyButtonText: {color: colors.ctaText, fontSize: 15, fontWeight: '700'},
-    buyButtonPendingRow: {flexDirection: 'row', alignItems: 'center', gap: 8},
     executeResult: {marginTop: 12, alignItems: 'center', gap: 4, paddingVertical: 10},
     executeSuccessText: {color: colors.gain, fontSize: 15, fontWeight: '700'},
     executeHashText: {color: colors.textMuted, fontSize: 11, fontFamily: 'monospace'},
