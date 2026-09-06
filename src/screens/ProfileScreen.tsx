@@ -167,13 +167,15 @@ export function ProfileScreen({onOpenSettings, onOpenHistory}: {onOpenSettings: 
 
   async function handleConfirmWithdraw() {
     if (!session || !withdrawChain) return;
-    // Google-login sessions have no privateKey to sign with at all (see
-    // keys.ts/particleAuth.ts) — refuse cleanly rather than letting
-    // sendUsdc below throw from an empty key. canSubmitWithdraw already
-    // keeps the button disabled for this case; this is the same
+    // Google-login sessions sign real EVM withdrawals through Particle's
+    // own MPC path now (sendUsdc.ts) — Solana stays refused here rather
+    // than letting sendUsdc throw from an empty key, since Particle's
+    // own Solana signing wire format isn't confirmed from any reachable
+    // source (see particleSigning.ts's own header). canSubmitWithdraw
+    // already keeps the button disabled for this case; this is the same
     // guarantee if handleConfirmWithdraw is ever reached another way.
-    if (session.authMethod === 'google') {
-      setWithdrawError("Withdrawing isn't available yet for Google sign-in accounts — this is coming in a future update.");
+    if (session.authMethod === 'google' && withdrawChain === 'solana') {
+      setWithdrawError("Withdrawing isn't available yet for Google sign-in accounts on Solana — this is coming in a future update.");
       setWithdrawStep('error');
       return;
     }
@@ -192,7 +194,7 @@ export function ProfileScreen({onOpenSettings, onOpenHistory}: {onOpenSettings: 
   const withdrawAmountNumber = Number(withdrawAmount);
   const withdrawChainBalance = balanceForChain(withdrawChain);
   const canSubmitWithdraw =
-    session?.authMethod !== 'google' &&
+    (session?.authMethod !== 'google' || withdrawChain !== 'solana') &&
     withdrawChain !== null &&
     isValidRecipientAddress(withdrawChain, withdrawAddress.trim()) &&
     withdrawAmountNumber > 0 &&
@@ -512,8 +514,8 @@ export function ProfileScreen({onOpenSettings, onOpenHistory}: {onOpenSettings: 
                 </View>
                 <Text style={styles.modalHint}>Available on {CHAIN_LABEL[withdrawChain]}: ${formatUsd(withdrawChainBalance)}</Text>
 
-                {session?.authMethod === 'google' && (
-                  <Text style={styles.modalWarning}>Withdrawing isn't available yet for Google sign-in accounts — this is coming in a future update.</Text>
+                {session?.authMethod === 'google' && withdrawChain === 'solana' && (
+                  <Text style={styles.modalWarning}>Withdrawing isn't available yet for Google sign-in accounts on Solana — this is coming in a future update.</Text>
                 )}
 
                 <Text style={styles.modalWarning}>

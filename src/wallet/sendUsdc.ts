@@ -55,12 +55,31 @@ async function sendEvmUsdc(chainKey: ChainKey, session: DerivedAccounts, toAddre
   if (!tokenAddress) throw new Error(`No verified USDC address for ${chainKey}.`);
   const chain = getViemChain(chainKey);
   const transport = transportFor(chain.id);
-  const account = privateKeyToAccount(session.evm.privateKey as `0x${string}`);
   const publicClient = createPublicClient({chain, transport});
-  const walletClient = createWalletClient({account, chain, transport});
+  const fromAddress = session.evm.address as `0x${string}`;
 
   const amountRaw = parseUnits(amountUsdc, USDC_DECIMALS);
   const data = encodeFunctionData({abi: ERC20_TRANSFER_ABI, functionName: 'transfer', args: [toAddress as `0x${string}`, amountRaw]});
+
+  // Google-login sessions carry no privateKey to build a viem
+  // walletClient from at all (see keys.ts/particleAuth.ts) — sign
+  // through Particle's own MPC path instead. Wire format confirmed in
+  // particleSigning.ts's own header. Dynamic import, not a static one:
+  // particleSigning.ts pulls in @particle-network/rn-auth-core, which
+  // touches react-native's own NativeModules at module load — fine
+  // under Metro, but this file is also imported directly by
+  // scripts/verify-send-usdc.mjs's plain-Node offline checks, which
+  // never exercises this branch and shouldn't have to load
+  // react-native at all just to import isValidRecipientAddress.
+  if (session.authMethod === 'google') {
+    const {sendEvmTransactionViaParticle} = await import('./particleSigning.ts');
+    const hash = await sendEvmTransactionViaParticle(fromAddress, {chainId: chain.id, to: tokenAddress as `0x${string}`, data});
+    await publicClient.waitForTransactionReceipt({hash});
+    return {hash};
+  }
+
+  const account = privateKeyToAccount(session.evm.privateKey as `0x${string}`);
+  const walletClient = createWalletClient({account, chain, transport});
   const [gasLimit, {maxFeePerGas, maxPriorityFeePerGas}] = await Promise.all([
     publicClient.estimateGas({account: account.address, to: tokenAddress as `0x${string}`, data}),
     publicClient.estimateFeesPerGas(),
@@ -122,6 +141,13 @@ export async function sendUsdc(chainKey: ChainKey, session: DerivedAccounts, toA
     throw new Error(`That doesn't look like a valid ${chainKey === 'solana' ? 'Solana' : 'wallet'} address.`);
   }
   if (chainKey === 'solana') {
+    // See particleSigning.ts's own header — Particle's Solana signing
+    // wire format isn't confirmed from any reachable source, so this
+    // stays refused for Google sessions rather than attempting to sign
+    // with session.solana.privateKey === ''.
+    if (session.authMethod === 'google') {
+      throw new Error("Solana withdrawals aren't available yet for Google sign-in accounts.");
+    }
     const {signature} = await sendSolanaUsdc(session, toAddress, amountUsdc);
     return {txId: signature};
   }

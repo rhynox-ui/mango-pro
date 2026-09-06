@@ -449,15 +449,23 @@ export function TokenTradeScreen({
     const quoteToExecute = rawQuoteRef.current;
     const fallbackParams = fallbackParamsRef.current;
     if ((!quoteToExecute && !fallbackParams) || !session) return;
-    // Google-login sessions carry real addresses but a deliberately empty
-    // privateKey (see keys.ts/particleAuth.ts) — Particle's MPC model
-    // never hands this app a raw key to sign with at all. Refuse cleanly
-    // here rather than letting privateKeyToAccount('') below throw a
-    // confusing low-level error; canTrade/pillHint already keep the pill
-    // itself disabled for this case, this is the same guarantee for
-    // anyone who reaches handleTrade some other way.
-    if (session.authMethod === 'google') {
-      setExecuteError("Trading isn't available yet for Google sign-in accounts — this is coming in a future update.");
+    // Google-login sessions sign real Relay-quoted EVM trades through
+    // Particle's own MPC path (executeRelayQuote.ts) — but two paths
+    // still aren't covered and stay refused here rather than letting a
+    // lower-level call fail confusingly: Solana (Particle's own signing
+    // wire format for it isn't confirmed from any reachable source —
+    // see particleSigning.ts's own header) and the same-chain fallback-
+    // DEX path (fallbackDex.ts's own execute functions still take a raw
+    // privateKeyHex directly, not yet wired to Particle). canTrade/
+    // pillHint already keep the pill disabled for both cases; this is
+    // the same guarantee for anyone who reaches handleTrade another way.
+    if (session.authMethod === 'google' && solana) {
+      setExecuteError("Trading isn't available yet for Google sign-in accounts on Solana — this is coming in a future update.");
+      setExecuteState('error');
+      return;
+    }
+    if (session.authMethod === 'google' && !quoteToExecute) {
+      setExecuteError("This route needs a fallback path that isn't available yet for Google sign-in accounts — this is coming in a future update.");
       setExecuteState('error');
       return;
     }
@@ -542,12 +550,12 @@ export function TokenTradeScreen({
     }
   }
 
-  const canTrade =
-    (Boolean(rawQuoteRef.current) || Boolean(fallbackParamsRef.current)) &&
-    Boolean(session) &&
-    session?.authMethod !== 'google' &&
-    !insufficientBalance &&
-    (executeState === 'idle' || executeState === 'error');
+  // A Google session can trade for real now — but only a Relay-quoted
+  // EVM route (rawQuoteRef, not the fallback-only case) on a non-Solana
+  // chain; see handleTrade's own header comment for why those two stay
+  // refused.
+  const googleSessionCanTrade = session?.authMethod !== 'google' || (!solana && Boolean(rawQuoteRef.current));
+  const canTrade = (Boolean(rawQuoteRef.current) || Boolean(fallbackParamsRef.current)) && Boolean(session) && googleSessionCanTrade && !insufficientBalance && (executeState === 'idle' || executeState === 'error');
   const isExecuting = executeState !== 'idle' && executeState !== 'error' && executeState !== 'success';
 
   // Same real bug both DexScreen.tsx's own pillHint and the site's own
@@ -565,8 +573,10 @@ export function TokenTradeScreen({
   // never duplicates it.
   const pillHint = !session
     ? 'Unlock your wallet to trade'
-    : session.authMethod === 'google'
-    ? "Trading isn't available yet for Google sign-in accounts"
+    : session.authMethod === 'google' && solana
+    ? "Trading isn't available yet for Google sign-in accounts on Solana"
+    : session.authMethod === 'google' && !googleSessionCanTrade
+    ? "This route isn't available yet for Google sign-in accounts"
     : insufficientBalance
       ? null
       : amtNum <= 0

@@ -123,6 +123,68 @@ async function sendRelayEvmStep(
 }
 
 /**
+ * Same shape as sendRelayEvmStep above (simulate first, check the
+ * native balance actually covers value + worst-case gas, THEN send) but
+ * for a Google-login session: there's no local account to build a
+ * walletClient from, so the final sign+broadcast goes through
+ * particleSigning.ts's Particle MPC path instead of viem's
+ * walletClient.sendTransaction. Kept as a fully separate function
+ * rather than threading a branch through sendRelayEvmStep itself —
+ * zero risk of this new path changing behavior for the existing,
+ * already-relied-on local-signing one.
+ */
+async function sendRelayEvmStepViaParticle(evmAddress: `0x${string}`, publicClient: ReturnType<typeof createPublicClient>, chainId: number, item: RelayTransactionStepItem): Promise<string> {
+  const {to, data, value} = item.data ?? {};
+  if (!to) throw new Error('The routing service returned a transaction with no destination address.');
+  const tx = {to: to as `0x${string}`, data: (data || undefined) as `0x${string}` | undefined, value: value ? BigInt(value) : 0n};
+
+  try {
+    await publicClient.call({account: evmAddress, to: tx.to, data: tx.data, value: tx.value});
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message && !/timeout|network|fetch|429|403/i.test(message)) {
+      throw new Error(`This transaction would revert: ${message}`);
+    }
+  }
+
+  let gas: bigint;
+  let maxFeePerGas: bigint;
+  let nativeBalance: bigint;
+  try {
+    const [gasEstimate, fees, balance] = await Promise.all([
+      publicClient.estimateGas({account: evmAddress, to: tx.to, data: tx.data, value: tx.value}),
+      publicClient.estimateFeesPerGas(),
+      publicClient.getBalance({address: evmAddress}),
+    ]);
+    gas = gasEstimate;
+    maxFeePerGas = fees.maxFeePerGas;
+    nativeBalance = balance;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : '';
+    if (/gas required exceeds allowance|insufficient funds/i.test(message)) {
+      const symbol = publicClient.chain?.nativeCurrency?.symbol || 'the native coin';
+      throw new Error(`Insufficient ${symbol} for network fees. A token balance can't pay for gas — you need ${symbol} on this chain too.`);
+    }
+    throw err;
+  }
+  const worstCaseCost = tx.value + gas * maxFeePerGas;
+  if (nativeBalance < worstCaseCost) {
+    const symbol = publicClient.chain?.nativeCurrency?.symbol || 'the native coin';
+    throw new Error(`Insufficient ${symbol} for network fees. A token balance can't pay for gas — you need ${symbol} on this chain too.`);
+  }
+
+  // Dynamic import, not a static one: particleSigning.ts pulls in
+  // @particle-network/rn-auth-core, which touches react-native's own
+  // NativeModules at module load — fine under Metro, but this file is
+  // also imported directly by scripts/verify-execute-relay-quote.mjs's
+  // plain-Node offline checks, which never exercises this branch.
+  const {sendEvmTransactionViaParticle} = await import('../wallet/particleSigning.ts');
+  const hash = await sendEvmTransactionViaParticle(evmAddress, {chainId, to: tx.to, data: tx.data, value: tx.value});
+  await publicClient.waitForTransactionReceipt({hash});
+  return hash;
+}
+
+/**
  * Signs and sends one Solana-side Relay step, with the two hardened
  * fallbacks mango-mobile's own relayBridge.js added after live
  * failures: a clear "insufficient SOL" message when the preflight
@@ -245,11 +307,22 @@ export async function executeRelayQuote(quote: RelayQuote, session: DerivedAccou
   }
 
   onStep?.('signing');
+  const isGoogleSession = session.authMethod === 'google';
   const txHashes: string[] = [];
-  let evmClients: {walletClient: ReturnType<typeof createWalletClient>; publicClient: ReturnType<typeof createPublicClient>} | null = null;
+  let evmClients: {walletClient: ReturnType<typeof createWalletClient> | null; publicClient: ReturnType<typeof createPublicClient>} | null = null;
 
   for (const item of pendingItems) {
     if (isSolanaShaped(item)) {
+      if (isGoogleSession) {
+        // See particleSigning.ts's own header: Particle's Solana signing
+        // wire format isn't confirmed from any reachable source, so this
+        // stays refused rather than guessed at with real funds — same
+        // gate TokenTradeScreen.tsx/ProfileScreen.tsx already show for
+        // Solana-chain trades before execution is even attempted; this
+        // is the same guarantee if this function is ever reached another
+        // way.
+        throw new Error("Solana trades aren't available yet for Google sign-in accounts.");
+      }
       const signature = await signAndSendRelaySolanaStep(item, session.solana.privateKey);
       txHashes.push(signature);
       continue;
@@ -259,14 +332,14 @@ export async function executeRelayQuote(quote: RelayQuote, session: DerivedAccou
     if (!evmClients || evmClients.publicClient.chain?.id !== chainId) {
       const viemChain = viemChainForChainId(chainId);
       if (!viemChain) throw new Error(`No EVM chain configured for chain id ${chainId}.`);
-      const account = privateKeyToAccount(session.evm.privateKey as `0x${string}`);
       const transport = transportFor(chainId);
-      evmClients = {
-        walletClient: createWalletClient({account, chain: viemChain, transport}),
-        publicClient: createPublicClient({chain: viemChain, transport}),
-      };
+      const publicClient = createPublicClient({chain: viemChain, transport});
+      const walletClient = isGoogleSession ? null : createWalletClient({account: privateKeyToAccount(session.evm.privateKey as `0x${string}`), chain: viemChain, transport});
+      evmClients = {walletClient, publicClient};
     }
-    const hash = await sendRelayEvmStep(evmClients.walletClient, evmClients.publicClient, item);
+    const hash = isGoogleSession
+      ? await sendRelayEvmStepViaParticle(session.evm.address as `0x${string}`, evmClients.publicClient, chainId, item)
+      : await sendRelayEvmStep(evmClients.walletClient!, evmClients.publicClient, item);
     txHashes.push(hash);
   }
 
