@@ -2,35 +2,36 @@
 //
 // The app's primary landing screen — a token-discovery dashboard, not a
 // traditional wallet homepage: portfolio balance up top, then straight
-// into what's moving (top traders, trending tokens) before anything
-// wallet-shaped. This is deliberately the first thing a new account
-// lands on (see App.tsx's default tab); Profile/Settings are secondary,
-// reached through the bottom nav and Profile's own gear icon.
+// into what's moving (trending tokens) before anything wallet-shaped.
+// This is deliberately the first thing a new account lands on (see
+// App.tsx's default tab); Profile/Settings are secondary, reached
+// through the bottom nav and Profile's own gear icon.
 //
 // Colors follow this app's own monochrome rule rather than the
-// reference mock's flat blue accents (tab indicator, "New" badge,
-// verified badge) — see palette.ts's header for why UI chrome here never
-// gets a flat brand color. GAIN/DANGER for price movement is a direct,
-// deliberate match to the reference: those are semantic trading colors
-// in this design system already, not branding.
+// reference mock's flat blue accents (tab indicator, "New" badge) — see
+// palette.ts's header for why UI chrome here never gets a flat brand
+// color. GAIN/DANGER for price movement is a direct, deliberate match to
+// the reference: those are semantic trading colors in this design
+// system already, not branding.
 //
-// Trader carousel and token list are mock data (src/data/mockDiscovery)
-// — the one deliberate exception to this app's "no fake numbers"
-// discipline, because an empty discovery feed wouldn't demonstrate the
-// product at all. The portfolio balance is NOT mocked: a new account
-// genuinely has $0.
+// No trader leaderboard and no "verified" checkmark — an explicit
+// product decision to defer both until the app has real revenue/trade
+// history: a leaderboard needs real PnL to compute, and a flat
+// "verified" badge misrepresents permissionless tokens before there's a
+// real safety signal (GoPlus) behind it.
+//
+// The token list is mock data (src/data/mockDiscovery) — the one
+// deliberate exception to this app's "no fake numbers" discipline,
+// because an empty discovery feed wouldn't demonstrate the product at
+// all. The portfolio balance is NOT mocked: a new account genuinely has $0.
 
 import {useState} from 'react';
 import {FlatList, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
-import {FilterIcon, StarIcon, VerifiedBadge} from '../components/icons';
-import {MOCK_TOKENS, MOCK_TRADERS, TOKEN_FILTERS, type DiscoveryToken, type TokenFilter} from '../data/mockDiscovery';
+import {FilterIcon, StarIcon} from '../components/icons';
+import {MOCK_TOKENS, TOKEN_FILTERS, type DiscoveryToken, type TokenFilter} from '../data/mockDiscovery';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 
 type DiscoveryTab = 'watchlist' | 'tokens' | 'perps';
-
-function fmtProfit(n: number): string {
-  return `+$${n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-}
 
 export function HomeScreen() {
   const {colors} = useTheme();
@@ -54,27 +55,6 @@ export function HomeScreen() {
             <Text style={styles.balance}>$0.00</Text>
             <View style={styles.logoMarkSpacer} />
           </View>
-
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.traderRow}>
-            {MOCK_TRADERS.map(trader => (
-              <View key={trader.id} style={styles.traderCard}>
-                <View style={styles.traderCardHeader}>
-                  <View style={styles.traderAvatar}>
-                    <Text style={styles.traderAvatarText}>{trader.avatarInitial}</Text>
-                  </View>
-                  <Text style={styles.traderUsername} numberOfLines={1}>
-                    {trader.username}
-                  </Text>
-                </View>
-                <View style={styles.traderCardBody}>
-                  <View style={styles.traderTokenAvatar} />
-                  <Text style={styles.traderProfit} numberOfLines={1}>
-                    {fmtProfit(trader.profitUsd)}
-                  </Text>
-                </View>
-              </View>
-            ))}
-          </ScrollView>
 
           <View style={styles.discoveryTabs}>
             <TouchableOpacity style={styles.discoveryTab} onPress={() => setTab('watchlist')} activeOpacity={0.7}>
@@ -118,15 +98,8 @@ function TokenRow({token, colors}: {token: DiscoveryToken; colors: Colors}) {
   const positive = token.change24h >= 0;
   return (
     <View style={styles.tokenRow}>
-      <View style={styles.tokenAvatarWrap}>
-        <View style={styles.tokenAvatar}>
-          <Text style={styles.tokenAvatarText}>{token.avatarInitial}</Text>
-        </View>
-        {token.verified && (
-          <View style={styles.verifiedBadgeWrap}>
-            <VerifiedBadge bg={colors.ctaBg} check={colors.ctaText} size={15} />
-          </View>
-        )}
+      <View style={styles.tokenAvatar}>
+        <Text style={styles.tokenAvatarText}>{token.avatarInitial}</Text>
       </View>
       <View style={styles.tokenInfo}>
         <Text style={styles.tokenSymbol} numberOfLines={1}>
@@ -154,7 +127,7 @@ function makeStyles(colors: Colors) {
       justifyContent: 'space-between',
       paddingHorizontal: 16,
       paddingTop: 4,
-      paddingBottom: 16,
+      paddingBottom: 12,
     },
     logoMark: {
       paddingHorizontal: 10,
@@ -166,43 +139,12 @@ function makeStyles(colors: Colors) {
     logoMarkSpacer: {width: 56},
     balance: {color: colors.textPrimary, fontSize: 26, fontWeight: '700'},
 
-    traderRow: {paddingHorizontal: 16, gap: 10, paddingBottom: 4},
-    traderCard: {
-      width: 220,
-      borderRadius: 16,
-      backgroundColor: colors.panel,
-      borderWidth: 1,
-      borderColor: colors.panelBorder,
-      overflow: 'hidden',
-    },
-    traderCardHeader: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
-      paddingHorizontal: 12,
-      paddingVertical: 10,
-      backgroundColor: colors.input,
-    },
-    traderAvatar: {
-      width: 22,
-      height: 22,
-      borderRadius: 11,
-      backgroundColor: colors.pillBg,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    traderAvatarText: {color: colors.textPrimary, fontSize: 11, fontWeight: '700'},
-    traderUsername: {color: colors.textPrimary, fontSize: 14, fontWeight: '700', flexShrink: 1},
-    traderCardBody: {flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12},
-    traderTokenAvatar: {width: 34, height: 34, borderRadius: 17, backgroundColor: colors.pillBg},
-    traderProfit: {color: colors.gain, fontSize: 15.5, fontWeight: '700', flexShrink: 1},
-
     discoveryTabs: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 22,
       paddingHorizontal: 16,
-      paddingTop: 18,
+      paddingTop: 10,
       borderBottomWidth: 1,
       borderBottomColor: colors.divider,
     },
@@ -253,7 +195,6 @@ function makeStyles(colors: Colors) {
       borderBottomWidth: 1,
       borderBottomColor: colors.divider,
     },
-    tokenAvatarWrap: {width: 52, height: 52},
     tokenAvatar: {
       width: 52,
       height: 52,
@@ -263,7 +204,6 @@ function makeStyles(colors: Colors) {
       justifyContent: 'center',
     },
     tokenAvatarText: {color: colors.textPrimary, fontSize: 17, fontWeight: '700'},
-    verifiedBadgeWrap: {position: 'absolute', bottom: -1, right: -1},
     tokenInfo: {flex: 1, minWidth: 0, gap: 3},
     tokenSymbol: {color: colors.textPrimary, fontSize: 17, fontWeight: '700'},
     tokenMarketCap: {color: colors.textMuted, fontSize: 12.5},
