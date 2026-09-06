@@ -1,10 +1,23 @@
-name: Android debug APK
+name: Android release APK
 
-# Builds a real, installable debug APK on every push to main (and on
-# demand) and uploads it as a workflow artifact — the practical way to
-# get a sideloadable build onto a real device for testing (Google login
-# in particular needs a real device/emulator with Play Services; there's
-# no way to produce or run that from this repo's own dev sandbox).
+# Builds a real, installable APK on every push to main (and on demand)
+# and uploads it as a workflow artifact — the practical way to get a
+# sideloadable build onto a real device for testing (Google login in
+# particular needs a real device/emulator with Play Services; there's no
+# way to produce or run that from this repo's own dev sandbox).
+#
+# Builds the `release` variant, NOT `assembleDebug` — a real device
+# hit "Unable to load script" on the first debug APK this workflow
+# produced: android/app/build.gradle's own react block documents why
+# ("the list of variants that are debuggable... skip the bundling of the
+# JS bundle and the assets. Default is 'debug', 'debugOptimized'"), so a
+# debug APK expects to fetch JS from a live Metro dev server rather than
+# carrying it, and there's no dev machine on the same network as a
+# tester's phone for it to reach. `release` bundles the JS into the APK
+# itself and is signed with the debug keystore (android/app/build.gradle's
+# own signingConfigs.debug, already wired into buildTypes.release) — a
+# real production release would need its own signing config, but that's
+# out of scope for a sideloaded test build.
 on:
   push:
     branches: [main]
@@ -45,13 +58,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build debug APK
+      - name: Build release APK (bundles JS — no Metro needed on-device)
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew assembleRelease --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: mango-pro-debug
-          path: android/app/build/outputs/apk/debug/*.apk
+          name: mango-pro-release
+          path: android/app/build/outputs/apk/release/*.apk
           retention-days: 30
