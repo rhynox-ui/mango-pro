@@ -263,6 +263,28 @@ export function TokenTradeScreen({
 
   const canTrade = Boolean(rawQuoteRef.current) && Boolean(session) && (executeState === 'idle' || executeState === 'error');
 
+  // Same real bug both DexScreen.tsx's own pillHint and the site's own
+  // swapPillHint fix (the site's is a direct, explicitly-commented port
+  // of mobile's — same priority order, reused here): a freshly opened
+  // trade screen with no amount typed is the single most common state
+  // here, and a dimmed pill that does nothing and says nothing reads as
+  // broken, not as "you haven't told me how much yet". !session takes
+  // top priority, same as both references' own "not connected" check —
+  // "Unlock", not "Connect", since this wallet is embedded and local
+  // rather than an external one to connect. Kept to the states that map
+  // onto this screen (no balance/route-support gating here yet — that
+  // lands with real balance-fetching); the errors block below the pay/
+  // receive cards still owns every other message, so this never
+  // duplicates one (same reasoning the site's own comment gives for
+  // leaving `insufficient` out of its hint).
+  const pillHint = !session
+    ? 'Unlock your wallet to trade'
+    : amtNum <= 0
+      ? `Enter an amount to ${isBuySide ? `buy ${token.symbol}` : `sell ${token.symbol}`}`
+      : quoteLoading
+        ? 'Finding the best route…'
+        : null;
+
   return (
     <View style={styles.screen}>
       <View style={styles.chainRow}>
@@ -303,6 +325,8 @@ export function TokenTradeScreen({
           <Text style={[styles.buySellTextSell, !isBuySide && styles.buySellTextOnColor]}>Sell</Text>
         </TouchableOpacity>
       </View>
+
+      {pillHint !== null && <Text style={styles.buySellHint}>{pillHint}</Text>}
 
       {/* Disabled: balance is null until balance-fetching is wired —
           same gating DexScreen.tsx's own quick-percent row already uses. */}
@@ -355,7 +379,6 @@ export function TokenTradeScreen({
       {!isBuySide && tokenDecimalsError && <Text style={styles.errorText}>{tokenDecimalsError}</Text>}
       {!isBuySide && !tokenDecimalsError && tokenDecimals === null && amtNum > 0 && <Text style={styles.noteText}>Verifying this token…</Text>}
       {quoteError && <Text style={styles.errorText}>{quoteError}</Text>}
-      {amtNum > 0 && !session && !quoteError && <Text style={styles.noteText}>Unlock your wallet to get a live quote.</Text>}
 
       <View style={styles.feeRow}>
         <View style={styles.feeRowLeft}>
@@ -499,6 +522,7 @@ function makeStyles(colors: Colors) {
     buySellTextBuy: {fontSize: 13.5, fontWeight: '700', color: colors.gain},
     buySellTextSell: {fontSize: 13.5, fontWeight: '700', color: colors.danger},
     buySellTextOnColor: {color: '#fff'},
+    buySellHint: {color: colors.textMuted, fontSize: 11, textAlign: 'center', marginTop: -4, marginBottom: 6},
     noteText: {color: colors.textMuted, fontSize: 11, marginTop: 6, textAlign: 'center'},
     errorText: {color: colors.danger, fontSize: 11, marginTop: 6, textAlign: 'center'},
     feeRow: {
