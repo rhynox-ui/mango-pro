@@ -10,22 +10,32 @@
 // Swap/Limit/DCA segmented control above this at all — so the chart
 // keeps the vertical space that row would have cost it.
 //
-// What's real here versus what's a placeholder, stated plainly: the
-// chart (TokenChartPanel) is real, live DexScreener data. The trade form
-// itself has no wallet or quote backend wired up yet (Phase 1, per the
-// build plan's §8 phase order) — so Buy/Sell direction, the amount
-// field, and the percent row are all genuinely interactive, but "You
-// receive" has no live quote to show, balances are null (so percent
-// buttons are correctly disabled, not faked with a made-up number), and
-// the fee row shows this app's real, already-verified rate (src/core/
-// fees.ts) rather than a guessed one.
+// What's real here versus what's a placeholder, stated plainly:
+// - The chart (TokenChartPanel) is real, live DexScreener data.
+// - Buy-side quotes are real, live Relay quotes (src/core/relayQuote.ts)
+//   once a wallet is unlocked — typing an amount debounces into an
+//   actual quote request, and "You receive"/fee/ETA reflect Relay's own
+//   numbers when one comes back.
+// - Sell-side quotes are NOT wired yet: converting a typed token amount
+//   into base units needs that token's on-chain decimals, which an
+//   arbitrary searched token doesn't carry (DexScreener's search
+//   response doesn't include it) — a real on-chain decimals() read is
+//   needed and isn't built yet. Shown as an honest note, not faked.
+// - Balances are still null (no balance-fetching wired yet), so the
+//   percent-quick-fill row stays correctly disabled.
+// - No execute/sign step yet — this only gets as far as a quote. Signing
+//   needs the intent-firewall + calldata-decode confirm screen (build
+//   plan §5), not built here yet.
 
-import {useMemo, useState} from 'react';
-import {StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {useEffect, useMemo, useRef, useState} from 'react';
+import {ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import Svg, {Circle, Path} from 'react-native-svg';
+import {parseUnits} from 'viem';
 import {TokenChartPanel} from '../components/TokenChartPanel';
-import {CHAIN_LABEL, NATIVE_SYMBOL, type ChainKey} from '../core/chainData';
+import {CHAIN_LABEL, NATIVE_SYMBOL, assetDecimalsForChain, currencyAddress, type ChainKey} from '../core/chainData';
 import {DEV_FEE_PCT} from '../core/fees';
+import {getRelayQuote, summarizeQuote, type QuoteSummary} from '../core/relayQuote';
+import {useSession} from '../wallet/SessionContext';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 
 export type DemoToken = {
@@ -45,8 +55,17 @@ const DEFAULT_DEMO_TOKEN: DemoToken = {
 
 const QUICK_PCT_OPTIONS = [0.25, 0.5, 0.75, 1] as const;
 
+// A quote round-trip is a real network call, not instant — debouncing
+// this means typing doesn't fire a request per keystroke.
+const QUOTE_DEBOUNCE_MS = 450;
+
 function formatFeePct(rate: number): string {
   return (rate * 100).toFixed(2).replace(/\.?0+$/, '');
+}
+
+function formatEta(seconds: number): string {
+  if (seconds < 60) return `~${Math.round(seconds)}s`;
+  return `~${Math.round(seconds / 60)}m`;
 }
 
 function SearchGlyph({color}: {color: string}) {
@@ -77,6 +96,7 @@ export function TokenTradeScreen({
   onOpenSettings?: () => void;
 }) {
   const {colors} = useTheme();
+  const {session} = useSession();
   const styles = useMemo(() => makeStyles(colors), [colors]);
 
   // true = Buy (paying the chain's native asset, receiving the token);
@@ -84,10 +104,69 @@ export function TokenTradeScreen({
   // convention DexScreen.tsx already uses for which side is "from".
   const [isBuySide, setIsBuySide] = useState(true);
   const [amount, setAmount] = useState('');
+  const [quote, setQuote] = useState<QuoteSummary | null>(null);
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [quoteError, setQuoteError] = useState<string | null>(null);
+  const quoteRequestIdRef = useRef(0);
 
   const paySymbol = isBuySide ? NATIVE_SYMBOL[token.chainKey] : token.symbol;
   const receiveSymbol = isBuySide ? token.symbol : NATIVE_SYMBOL[token.chainKey];
   const amtNum = Number(amount) || 0;
+
+  useEffect(() => {
+    setQuoteError(null);
+    if (!isBuySide || amtNum <= 0) {
+      setQuote(null);
+      setQuoteLoading(false);
+      return;
+    }
+    if (!session) {
+      setQuote(null);
+      setQuoteLoading(false);
+      return;
+    }
+    const nativeDecimals = assetDecimalsForChain(token.chainKey, NATIVE_SYMBOL[token.chainKey]);
+    if (nativeDecimals === undefined) {
+      setQuote(null);
+      setQuoteLoading(false);
+      return;
+    }
+
+    setQuoteLoading(true);
+    const requestId = ++quoteRequestIdRef.current;
+    const timer = setTimeout(() => {
+      let amountBaseUnits: string;
+      try {
+        amountBaseUnits = parseUnits(amount, nativeDecimals).toString();
+      } catch {
+        setQuoteLoading(false);
+        return;
+      }
+      const userAddress = token.chainKey === 'solana' ? session.solana.address : session.evm.address;
+      getRelayQuote({
+        fromChainKey: token.chainKey,
+        toChainKey: token.chainKey,
+        originCurrency: currencyAddress(token.chainKey, NATIVE_SYMBOL[token.chainKey]),
+        destinationCurrency: token.address,
+        amountBaseUnits,
+        userAddress,
+      })
+        .then(q => {
+          // Stale-response guard — a slower earlier request landing
+          // after a faster later one would otherwise flash outdated numbers.
+          if (requestId !== quoteRequestIdRef.current) return;
+          setQuote(summarizeQuote(q, 18));
+          setQuoteLoading(false);
+        })
+        .catch(err => {
+          if (requestId !== quoteRequestIdRef.current) return;
+          setQuote(null);
+          setQuoteLoading(false);
+          setQuoteError(err instanceof Error ? err.message : 'Could not get a quote — try again.');
+        });
+    }, QUOTE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [isBuySide, amount, amtNum, session, token]);
 
   return (
     <View style={styles.screen}>
@@ -111,8 +190,8 @@ export function TokenTradeScreen({
       <TokenChartPanel chainKey={token.chainKey} tokenAddress={token.address} />
 
       {/* Buy/Sell — the inactive side flips direction, same as
-          DexScreen.tsx's own handleSwapAssets(); there's no live quote
-          to gate a submit on yet, so both sides just toggle for now. */}
+          DexScreen.tsx's own handleSwapAssets(); there's no execute step
+          yet to gate a submit on, so both sides just toggle for now. */}
       <View style={styles.buySellRow}>
         <TouchableOpacity
           onPress={() => setIsBuySide(true)}
@@ -130,8 +209,8 @@ export function TokenTradeScreen({
         </TouchableOpacity>
       </View>
 
-      {/* Disabled: balance is null until a wallet exists (Phase 1) — same
-          gating DexScreen.tsx's own quick-percent row already uses. */}
+      {/* Disabled: balance is null until balance-fetching is wired —
+          same gating DexScreen.tsx's own quick-percent row already uses. */}
       <View style={styles.quickPctRow}>
         {QUICK_PCT_OPTIONS.map(pct => (
           <TouchableOpacity key={pct} style={styles.quickPctPill} disabled activeOpacity={0.7}>
@@ -166,19 +245,28 @@ export function TokenTradeScreen({
             <View style={styles.assetSelector}>
               <Text style={styles.assetSelectorText}>{receiveSymbol}</Text>
             </View>
-            <Text style={[styles.prReceiveAmount, styles.receiveAmountTextMuted]} numberOfLines={1}>
-              —
-            </Text>
+            {quoteLoading ? (
+              <ActivityIndicator color={colors.textMuted} size="small" />
+            ) : (
+              <Text style={[styles.prReceiveAmount, !quote?.receivedAmountFormatted && styles.receiveAmountTextMuted]} numberOfLines={1}>
+                {quote?.receivedAmountFormatted ?? '—'}
+              </Text>
+            )}
           </View>
+          {quote?.receiveAmountUsd != null && <Text style={styles.usdEquivText}>≈ ${quote.receiveAmountUsd.toFixed(2)}</Text>}
         </View>
       </View>
+
+      {!isBuySide && <Text style={styles.noteText}>Sell quotes need the token's on-chain decimals, not wired up yet — Buy quotes are live.</Text>}
+      {quoteError && <Text style={styles.errorText}>{quoteError}</Text>}
+      {isBuySide && amtNum > 0 && !session && !quoteError && <Text style={styles.noteText}>Unlock your wallet to get a live quote.</Text>}
 
       <View style={styles.feeRow}>
         <View style={styles.feeRowLeft}>
           <View style={styles.feeDot} />
-          <Text style={styles.feeText}>Fee {formatFeePct(DEV_FEE_PCT)}%</Text>
+          <Text style={styles.feeText}>{quote?.totalFeeUsd != null ? `Fee $${quote.totalFeeUsd.toFixed(2)}` : `Fee ${formatFeePct(DEV_FEE_PCT)}%`}</Text>
         </View>
-        <Text style={styles.etaText}>ETA: ~1 min</Text>
+        <Text style={styles.etaText}>{quote?.etaSeconds != null ? `ETA: ${formatEta(quote.etaSeconds)}` : 'ETA: ~1 min'}</Text>
       </View>
     </View>
   );
@@ -232,6 +320,7 @@ function makeStyles(colors: Colors) {
     prAmountInput: {textAlign: 'right'},
     prReceiveAmount: {flex: 1, color: colors.textPrimary, fontSize: 16, fontWeight: '600', textAlign: 'right'},
     receiveAmountTextMuted: {color: colors.textMuted},
+    usdEquivText: {color: colors.textMuted, fontSize: 10, fontWeight: '600', textAlign: 'right', marginTop: 4},
     quickPctRow: {flexDirection: 'row', gap: 6, marginTop: 10, marginBottom: 2},
     quickPctPill: {flex: 1, alignItems: 'center', backgroundColor: colors.pillBg, borderRadius: 999, paddingVertical: 7},
     quickPctPillActive: {backgroundColor: colors.ctaBg},
@@ -271,6 +360,8 @@ function makeStyles(colors: Colors) {
     buySellTextBuy: {fontSize: 13.5, fontWeight: '700', color: colors.gain},
     buySellTextSell: {fontSize: 13.5, fontWeight: '700', color: colors.danger},
     buySellTextOnColor: {color: '#fff'},
+    noteText: {color: colors.textMuted, fontSize: 11, marginTop: 6, textAlign: 'center'},
+    errorText: {color: colors.danger, fontSize: 11, marginTop: 6, textAlign: 'center'},
     feeRow: {
       flexDirection: 'row',
       justifyContent: 'space-between',
