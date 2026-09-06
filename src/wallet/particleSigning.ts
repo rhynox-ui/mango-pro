@@ -20,19 +20,42 @@
 // doing one — that's specific to how the EIP-1193 layer treats its own
 // call to evm.sendTransaction, not evm.sendTransaction's real contract.
 //
-// Solana is NOT covered here. rn-auth-core's solana.signAndSendTransaction
-// takes a transaction string too, but no bundled reference code in
-// either the current or the previous Particle SDK covers what encoding
-// it expects, and Particle's docs sites are unreachable from this
-// sandbox to confirm it independently. Signing a real transaction with
-// unconfirmed wire format risks either a loud native decode error (the
-// safe failure) or, worse, an untested/misencoded payload doing
-// something unintended — not a risk worth taking with real funds.
-// Solana trades/withdrawals for Google sessions stay refused (see
-// TokenTradeScreen.tsx / ProfileScreen.tsx's own gates) until that's
-// verified against a real device and Particle's own confirmation.
+// Solana's wire format is now confirmed too, from two independent real
+// sources (not the same guess repeated twice):
+//  1. Particle's own official Android AuthCore demo (github.com/
+//     Particle-Network/particle-android, app/.../TransactionMock.kt) —
+//     mockSolanaTransaction() calls ParticleNetwork.solana.serializeTransaction(...)
+//     and passes its result.transaction.serialized STRING straight into
+//     AuthCore.solana's own signing calls, unmodified. The same
+//     result.transaction.serialized shape appears identically in the
+//     older @particle-network/rn-auth's own SolanaService.ts
+//     (enhancedSerializeTransaction) and in the unrelated Particle
+//     Connect Android demo — three independent code paths agreeing on
+//     the same field.
+//  2. Particle's own current React Native docs (developers.particle.network/
+//     social-logins/auth/mobile-sdks/react — unreachable for a direct
+//     fetch from this sandbox, but the exact page text was independently
+//     retrieved and relayed) state plainly that solana.signTransaction/
+//     signAllTransactions/signAndSendTransaction all require a Base58
+//     string, not a transaction object — consistent with this app
+//     already depending on bs58 for Solana addresses/keys elsewhere.
+// signAndSendSolanaTransactionViaParticle below builds on both: bs58-
+// encode a real, locally-built @solana/web3.js transaction (this app's
+// own existing Solana code, e.g. sendUsdc.ts's sendSolanaUsdc, already
+// builds these the normal way) rather than depending on Particle's own
+// serializeTransaction RPC, which only covers a few fixed operation
+// shapes (plain SOL/SPL transfers) and couldn't carry an arbitrary
+// Relay-quoted instruction set.
+//
+// Deliberately NOT wired into real trading/withdrawal yet. Proven only
+// as a devnet sign-and-send test (src/screens/SolanaDevnetTestScreen.tsx)
+// — real confirmation that a Google session can actually sign and land
+// a Solana transaction on a real device comes before any mainnet money
+// moves through this path, same discipline Phase 1/Phase 2 of the EVM
+// side already followed.
 
-import {evm} from '@particle-network/rn-auth-core';
+import bs58 from 'bs58';
+import {evm, solana} from '@particle-network/rn-auth-core';
 
 export type ParticleEvmTxRequest = {
   chainId: number;
@@ -59,4 +82,22 @@ export async function sendEvmTransactionViaParticle(_from: `0x${string}`, req: P
   const hexPayload = `0x${Buffer.from(json, 'utf8').toString('hex')}`;
   const hash = await evm.sendTransaction(hexPayload);
   return hash as `0x${string}`;
+}
+
+/**
+ * Signs and broadcasts a real Solana transaction through Particle's MPC
+ * signer. Takes the raw serialized bytes (from a normal
+ * @solana/web3.js Transaction/VersionedTransaction .serialize() call —
+ * see this file's own header for why bs58 is the right encoding) and
+ * bs58-encodes them here, so every call site passes the same plain
+ * bytes it already builds today for the local-signing path, not a
+ * Particle-specific format.
+ *
+ * DEVNET-PROVEN ONLY as of this writing (see
+ * SolanaDevnetTestScreen.tsx) — not yet called from any real trading or
+ * withdrawal path.
+ */
+export async function signAndSendSolanaTransactionViaParticle(serializedTransaction: Uint8Array): Promise<string> {
+  const base58Transaction = bs58.encode(serializedTransaction);
+  return solana.signAndSendTransaction(base58Transaction);
 }

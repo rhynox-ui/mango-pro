@@ -21,6 +21,7 @@ import {
   GlobeIcon,
   HelpCircleIcon,
   LandmarkIcon,
+  RepeatIcon,
   ScaleIcon,
   ShieldCheckIcon,
   TelegramIcon,
@@ -29,8 +30,10 @@ import {
   type IconComponent,
 } from '../components/icons';
 import {useTheme, type Colors} from '../theme/ThemeContext';
+import {useSession} from '../wallet/SessionContext';
 import {SecurityScreen} from './SecurityScreen';
 import {AppearanceScreen} from './AppearanceScreen';
+import {SolanaDevnetTestScreen} from './SolanaDevnetTestScreen';
 
 // Same real URLs as mango-mobile's own src/settings/AboutModal.tsx —
 // one Mango, same channels, not a separate app's accounts.
@@ -48,8 +51,10 @@ type Row = {
 export function SettingsScreen({onBack, onOpenDepositWithdraw}: {onBack: () => void; onOpenDepositWithdraw: () => void}) {
   const {colors} = useTheme();
   const styles = makeStyles(colors);
+  const {session} = useSession();
   const [showSecurity, setShowSecurity] = useState(false);
   const [showAppearance, setShowAppearance] = useState(false);
+  const [showSolanaDevnetTest, setShowSolanaDevnetTest] = useState(false);
 
   // Security and Appearance push to their own real screen; Deposit and
   // Withdraw has no dedicated screen of its own to push to — Profile's
@@ -64,6 +69,13 @@ export function SettingsScreen({onBack, onOpenDepositWithdraw}: {onBack: () => v
     {key: 'notifications', label: 'Notifications', Icon: BellIcon},
     {key: 'security', label: 'Security', Icon: ShieldCheckIcon, onPress: () => setShowSecurity(true)},
     {key: 'deposit', label: 'Deposit and Withdraw', Icon: LandmarkIcon, onPress: onOpenDepositWithdraw},
+    // Diagnostic only, only meaningful for a Google-login session (see
+    // this row's own destination screen for why) — a local seed-phrase
+    // session already signs Solana transactions directly and has
+    // nothing to prove here.
+    ...(session?.authMethod === 'google'
+      ? [{key: 'solana-devnet-test', label: 'Solana signing test (devnet)', Icon: RepeatIcon, onPress: () => setShowSolanaDevnetTest(true)}]
+      : []),
     {key: 'legal', label: 'Legal and Privacy', Icon: ScaleIcon},
     {key: 'taxes', label: 'Taxes', Icon: FileTextIcon},
     {key: 'help', label: 'Help and Support', Icon: HelpCircleIcon},
@@ -77,6 +89,9 @@ export function SettingsScreen({onBack, onOpenDepositWithdraw}: {onBack: () => v
   }
   if (showAppearance) {
     return <AppearanceScreen onBack={() => setShowAppearance(false)} />;
+  }
+  if (showSolanaDevnetTest) {
+    return <SolanaDevnetTestScreen onBack={() => setShowSolanaDevnetTest(false)} />;
   }
 
   return (
