@@ -33,6 +33,21 @@ export function dexScreenerChainForChain(chainKey: ChainKey): string | null {
   return DEXSCREENER_CHAIN_IDS[chainKey] ?? null;
 }
 
+let reverseChainIds: Map<string, ChainKey> | null = null;
+
+/**
+ * The other direction of the map above — a DexScreener search result
+ * carries DexScreener's own chainId string, not our ChainKey, so search
+ * has to map it back. Returns null for any chain DexScreener covers that
+ * we don't (or can't yet route trades on) rather than guessing.
+ */
+export function chainKeyForDexScreenerChainId(dexScreenerChainId: string): ChainKey | null {
+  if (!reverseChainIds) {
+    reverseChainIds = new Map(Object.entries(DEXSCREENER_CHAIN_IDS).map(([key, id]) => [id as string, key as ChainKey]));
+  }
+  return reverseChainIds.get(dexScreenerChainId) ?? null;
+}
+
 export type ResolvedPair = {chainId: string; pairAddress: string};
 
 /**

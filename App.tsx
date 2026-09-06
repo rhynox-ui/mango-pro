@@ -21,9 +21,10 @@ import {TabIcon, type TabIconName} from './src/navigation/TabIcon';
 import {HomeScreen} from './src/screens/HomeScreen';
 import {SearchScreen} from './src/screens/SearchScreen';
 import {PlaceholderScreen} from './src/screens/PlaceholderScreen';
-import {TokenTradeScreen} from './src/screens/TokenTradeScreen';
+import {TokenTradeScreen, type DemoToken} from './src/screens/TokenTradeScreen';
 import {ProfileScreen} from './src/screens/ProfileScreen';
 import {SettingsScreen} from './src/screens/SettingsScreen';
+import type {TokenSearchResult} from './src/core/tokenSearch';
 
 type Tab = 'home' | 'search' | 'swap' | 'community' | 'profile';
 type Screen = 'tabs' | 'settings';
@@ -41,9 +42,15 @@ function AppInner(): React.JSX.Element {
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [tab, setTab] = useState<Tab>('home');
   const [screen, setScreen] = useState<Screen>('tabs');
+  const [selectedToken, setSelectedToken] = useState<DemoToken | undefined>(undefined);
 
   const showingSettings = screen === 'settings';
   const openSettings = () => setScreen('settings');
+
+  function selectSearchResult(result: TokenSearchResult) {
+    setSelectedToken({chainKey: result.chainKey, address: result.tokenAddress, symbol: result.symbol});
+    setTab('swap');
+  }
 
   return (
     <SafeAreaProvider>
@@ -55,9 +62,9 @@ function AppInner(): React.JSX.Element {
           ) : tab === 'home' ? (
             <HomeScreen />
           ) : tab === 'search' ? (
-            <SearchScreen />
+            <SearchScreen onSelectToken={selectSearchResult} />
           ) : tab === 'swap' ? (
-            <TokenTradeScreen onOpenSearch={() => setTab('search')} onOpenSettings={openSettings} />
+            <TokenTradeScreen token={selectedToken} onOpenSearch={() => setTab('search')} onOpenSettings={openSettings} />
           ) : tab === 'community' ? (
             <PlaceholderScreen title="Community" note="Following, leaderboards, and copy-trade discovery land in a later pass." />
           ) : (
