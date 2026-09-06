@@ -29,7 +29,7 @@ import {
 import {CHAIN_LABEL, type ChainKey} from '../core/chainData';
 import {fetchUsdcPortfolio, USDC_SUPPORTED_CHAINS, type UsdcPortfolio} from '../core/usdcBalances';
 import {sendUsdc, isValidRecipientAddress} from '../wallet/sendUsdc';
-import {filterTxHistoryForAccount, getTxHistory, subscribeTxHistory} from '../wallet/txHistory';
+import {filterTxHistoryForAccount, getTxHistory, subscribeTxHistory, type TxHistoryEntry} from '../wallet/txHistory';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {useSession} from '../wallet/SessionContext';
 
@@ -76,6 +76,20 @@ function joinedLabel(): string {
   return `Joined ${now.toLocaleDateString('en-US', {month: 'long', year: 'numeric'})}`;
 }
 
+// Same relative-time convention HistoryScreen.tsx's own formatWhen uses,
+// kept as its own small local copy rather than importing across screens
+// for one function — same reasoning TokenTradeScreen.tsx's own
+// formatUsd gives for not sharing formatters across screens.
+function formatWhen(timestamp: number): string {
+  const diffMs = Date.now() - timestamp;
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return new Date(timestamp).toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
+}
+
 export function ProfileScreen({onOpenSettings, onOpenHistory}: {onOpenSettings: () => void; onOpenHistory: () => void}) {
   const {colors} = useTheme();
   const {session} = useSession();
@@ -96,14 +110,22 @@ export function ProfileScreen({onOpenSettings, onOpenHistory}: {onOpenSettings: 
   const [assetFilter, setAssetFilter] = useState<AssetFilterKey>('All');
   const joined = useMemo(joinedLabel, []);
 
-  // Real trade count for the meta chip below — was a hardcoded "0
-  // trades" before txHistory.ts existed, same "real shell, not a mock"
-  // reasoning as everything else this screen shows for a new account.
+  // Real trade count for the meta chip below, and the real trades
+  // behind the Positions section's own "Closed" tab (see its own render
+  // site) — both were a hardcoded "0 trades"/"No closed positions yet"
+  // before txHistory.ts existed, same "real shell, not a mock" reasoning
+  // as everything else this screen shows for a new account. "Open"
+  // positions stay a real empty state — this app has no live balance/
+  // PnL tracking of held tokens yet, a materially bigger feature than
+  // just listing what already happened.
   const [tradeCount, setTradeCount] = useState(0);
+  const [closedTrades, setClosedTrades] = useState<TxHistoryEntry[]>([]);
   useEffect(() => {
     function recount(entries: ReturnType<typeof getTxHistory>) {
       const scoped = session ? filterTxHistoryForAccount(entries, {evmAddress: session.evm.address, solanaAddress: session.solana.address}) : entries;
-      setTradeCount(scoped.filter(e => e.status === 'success').length);
+      const successful = scoped.filter(e => e.status === 'success');
+      setTradeCount(successful.length);
+      setClosedTrades(successful);
     }
     recount(getTxHistory());
     return subscribeTxHistory(recount);
@@ -326,9 +348,29 @@ export function ProfileScreen({onOpenSettings, onOpenHistory}: {onOpenSettings: 
         ))}
       </View>
 
-      <Text style={styles.emptyPositions}>
-        {positionTab === 'Open' ? 'No open positions' : 'No closed positions yet'}
-      </Text>
+      {/* This app has nothing that's actually a Perp yet, so the Perps
+          filter always reads as empty here — an honest reflection of
+          what exists, not a bug. */}
+      {positionTab === 'Closed' && assetFilter !== 'Perps' && closedTrades.length > 0 ? (
+        <View style={styles.closedTradesList}>
+          {closedTrades.map(trade => (
+            <View key={trade.id} style={styles.closedTradeRow}>
+              <View style={[styles.closedTradeDot, !trade.isBuySide && styles.closedTradeDotSell]} />
+              <View style={styles.closedTradeMain}>
+                <Text style={styles.closedTradeTitle} numberOfLines={1}>
+                  {trade.isBuySide ? 'Bought' : 'Sold'} {trade.isBuySide ? trade.receiveSymbol : trade.paySymbol} on {trade.chainLabel}
+                </Text>
+                <Text style={styles.closedTradeSubtitle} numberOfLines={1}>
+                  {trade.payAmount} {trade.paySymbol} → {trade.receivedAmountFormatted ?? '?'} {trade.receiveSymbol}
+                </Text>
+              </View>
+              <Text style={styles.closedTradeWhen}>{formatWhen(trade.timestamp)}</Text>
+            </View>
+          ))}
+        </View>
+      ) : (
+        <Text style={styles.emptyPositions}>{positionTab === 'Open' ? 'No open positions' : 'No closed positions yet'}</Text>
+      )}
 
       <TouchableOpacity style={styles.showHiddenPill} activeOpacity={0.7}>
         <Text style={styles.showHiddenText}>Show hidden</Text>
@@ -678,6 +720,15 @@ function makeStyles(colors: Colors) {
     assetFilterTextActive: {color: colors.ctaText},
 
     emptyPositions: {color: colors.textMuted, fontSize: 13, textAlign: 'center', marginTop: 28},
+
+    closedTradesList: {paddingHorizontal: 16, marginTop: 14, gap: 2},
+    closedTradeRow: {flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.divider},
+    closedTradeDot: {width: 8, height: 8, borderRadius: 4, backgroundColor: colors.gain, flexShrink: 0},
+    closedTradeDotSell: {backgroundColor: colors.danger},
+    closedTradeMain: {flex: 1, minWidth: 0},
+    closedTradeTitle: {color: colors.textPrimary, fontSize: 13.5, fontWeight: '700'},
+    closedTradeSubtitle: {color: colors.textMuted, fontSize: 11.5, marginTop: 2},
+    closedTradeWhen: {color: colors.textMuted, fontSize: 11, flexShrink: 0},
 
     showHiddenPill: {
       alignSelf: 'center',

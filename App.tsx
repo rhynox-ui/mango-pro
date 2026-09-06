@@ -171,6 +171,14 @@ function AppInner(): React.JSX.Element {
   const showingPushedScreen = showingSettings || showingHistory;
   const openSettings = () => setScreen('settings');
   const openHistory = () => setScreen('history');
+  // Settings' own "Deposit and Withdraw" row has no dedicated screen of
+  // its own — Profile already IS that real destination (the totalCash
+  // row's +/- buttons), so this just takes the user there instead of
+  // duplicating that modal's state in a second place.
+  const goToWalletActions = () => {
+    setScreen('tabs');
+    setTab('profile');
+  };
 
   function selectSearchResult(result: TokenSearchResult) {
     setSelectedToken({chainKey: result.chainKey, address: result.tokenAddress, symbol: result.symbol});
@@ -188,7 +196,7 @@ function AppInner(): React.JSX.Element {
         <AuthGate>
           <View style={styles.body}>
             {showingSettings ? (
-              <SettingsScreen onBack={() => setScreen('tabs')} />
+              <SettingsScreen onBack={() => setScreen('tabs')} onOpenDepositWithdraw={goToWalletActions} />
             ) : showingHistory ? (
               <HistoryScreen onBack={() => setScreen('tabs')} />
             ) : tab === 'home' ? (

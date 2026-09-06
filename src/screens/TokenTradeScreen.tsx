@@ -711,6 +711,18 @@ export function TokenTradeScreen({
         <Text style={styles.etaText}>{quote?.etaSeconds != null ? `ETA: ${formatEta(quote.etaSeconds)}` : 'ETA: ~1 min'}</Text>
       </View>
 
+      {/* Real, Relay-quoted figure (relayQuote.ts's own summarizeQuote) —
+          was computed on every quote already but never actually shown
+          anywhere on this screen. Same >3% danger threshold Bridge's own
+          equivalent row already uses, so "high price impact" means the
+          same thing across this app rather than a screen-specific guess. */}
+      {quote?.priceImpactPct != null && (
+        <View style={styles.priceImpactRow}>
+          <Text style={styles.priceImpactLabel}>Price impact</Text>
+          <Text style={[styles.priceImpactValue, Math.abs(quote.priceImpactPct) > 3 && styles.priceImpactValueDanger]}>{Math.abs(quote.priceImpactPct).toFixed(2)}%</Text>
+        </View>
+      )}
+
       {executeState === 'success' && (
         <View style={styles.executeResult}>
           <Text style={styles.executeSuccessText}>Trade sent</Text>
@@ -861,6 +873,10 @@ function makeStyles(colors: Colors) {
     feeDot: {width: 6, height: 6, borderRadius: 3, backgroundColor: colors.accent},
     feeText: {color: colors.accentDeep, fontSize: 11, fontWeight: '500'},
     etaText: {color: colors.textSecondary, fontSize: 11},
+    priceImpactRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, paddingHorizontal: 4},
+    priceImpactLabel: {color: colors.textMuted, fontSize: 11},
+    priceImpactValue: {color: colors.textSecondary, fontSize: 11, fontWeight: '600'},
+    priceImpactValueDanger: {color: colors.danger, fontWeight: '700'},
 
     executeResult: {marginTop: 12, alignItems: 'center', gap: 4, paddingVertical: 10},
     executeSuccessText: {color: colors.gain, fontSize: 15, fontWeight: '700'},
