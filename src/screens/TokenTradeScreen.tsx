@@ -20,15 +20,19 @@
 //   fetched live (src/wallet/walletRpc.ts's fetchErc20TokenMetadata /
 //   fetchSplMintDecimals) the moment a token is selected, cached
 //   forever after (a token's decimals can never change once deployed).
-// - Balances are still null (no balance-fetching wired yet), so the
-//   percent-quick-fill row stays correctly disabled.
+// - Balances are real too: the pay side's native or on-chain token
+//   balance (fetchWalletNativeBalance/fetchWalletTokenBalance/Solana
+//   equivalents in walletRpc.ts) drives the 25/50/75/MAX quick-percent
+//   row, Max on a native pay side reserves a live gas estimate, and an
+//   amount over the real balance blocks the trade with a clear message
+//   instead of failing on-chain.
 // - Execution is real on both sides: tapping Buy/Sell runs the quote
 //   through src/core/txIntentFirewall.ts (via executeRelayQuote.ts)
 //   before signing anything, then signs and broadcasts directly with
 //   the session's own key — same non-custodial, direct-broadcast model
 //   as every other send in this app.
 
-import {useEffect, useMemo, useRef, useState} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import Svg, {Circle, Path} from 'react-native-svg';
 import {parseUnits} from 'viem';
@@ -38,7 +42,17 @@ import {DEV_FEE_PCT} from '../core/fees';
 import {getRelayQuote, summarizeQuote, type QuoteSummary, type RelayQuote} from '../core/relayQuote';
 import {executeRelayQuote, type ExecuteStep} from '../core/executeRelayQuote';
 import {TransactionIntentError} from '../core/txIntentFirewall';
-import {fetchErc20TokenMetadata, fetchSplMintDecimals} from '../wallet/walletRpc';
+import {
+  estimateEvmNativeFeeReserve,
+  estimateSolanaMaxReserveSol,
+  fetchErc20TokenMetadata,
+  fetchSplMintDecimals,
+  fetchWalletNativeBalance,
+  fetchWalletSolanaBalance,
+  fetchWalletSplTokenBalance,
+  fetchWalletTokenBalance,
+} from '../wallet/walletRpc';
+import {computeMaxAmount, formatAmountForInput, useAvailableBalance} from '../wallet/useAvailableBalance';
 import {useSession} from '../wallet/SessionContext';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {TradeSettingsSheet} from '../components/TradeSettingsSheet';
@@ -186,6 +200,75 @@ export function TokenTradeScreen({
     };
   }, [token]);
 
+  const solana = token.chainKey === 'solana';
+
+  // The real "how much can I spend" answer the quick-percent row below
+  // needs — native for Buy (chainData.ts already knows its decimals
+  // statically), the searched token itself for Sell (tokenDecimals,
+  // resolved above; unresolved yet just means no balance to report,
+  // same reasoning the quote effect below already applies).
+  const fetchPayBalance = useCallback((): Promise<number> => {
+    if (!session) return Promise.resolve(0);
+    if (isBuySide) {
+      return solana ? fetchWalletSolanaBalance(session.solana.address) : fetchWalletNativeBalance(token.chainKey, session.evm.address);
+    }
+    if (tokenDecimals === null) return Promise.resolve(0);
+    return solana
+      ? fetchWalletSplTokenBalance(token.address, tokenDecimals, session.solana.address)
+      : fetchWalletTokenBalance(token.chainKey, token.address, tokenDecimals, session.evm.address);
+  }, [session, isBuySide, solana, token, tokenDecimals]);
+
+  const {balance, loading: balanceLoading} = useAvailableBalance(session ? fetchPayBalance : null, [session, isBuySide, solana, token, tokenDecimals]);
+  const insufficientBalance = amtNum > 0 && balance !== null && amtNum > balance;
+
+  // Tracks which quick-percent preset (if any) the typed amount still
+  // matches, same real bug fix already shipped to mobile's DexScreen.tsx
+  // and the site's own Swap tab this session: without this, the row's
+  // highlighted pill silently goes stale the moment a user hand-edits
+  // the amount after tapping one, or flips Buy/Sell (a different
+  // balance entirely — the same percentage of it is a different typed
+  // number), reading as broken rather than a preset that no longer
+  // applies. Built in here from the start rather than shipped without
+  // it and patched later, having already paid for that lesson twice.
+  const [selectedPercent, setSelectedPercent] = useState<number | null>(null);
+  const [maxLoading, setMaxLoading] = useState(false);
+
+  function handleQuickPct(pct: number) {
+    if (balance === null) return;
+    setSelectedPercent(pct);
+    if (pct === 1) {
+      handleMax();
+      return;
+    }
+    setAmount(formatAmountForInput(balance * pct));
+  }
+
+  async function handleMax() {
+    if (balance === null) return;
+    if (!isBuySide) {
+      // Sell side pays the searched token — gas is paid separately in
+      // the chain's native asset, so the full token balance is spendable
+      // (same computeMaxAmount branch a non-native asset always takes).
+      setAmount(formatAmountForInput(balance));
+      return;
+    }
+    setMaxLoading(true);
+    try {
+      const feeReserve = solana ? await estimateSolanaMaxReserveSol() : await estimateEvmNativeFeeReserve(token.chainKey);
+      setAmount(formatAmountForInput(computeMaxAmount({balance, isNativeAsset: true, feeNative: feeReserve})));
+    } catch {
+      // The live fee estimate itself failed — fall back to the full
+      // balance rather than blocking Max entirely. executeRelayQuote's
+      // own pre-flight simulate+balance check (sendRelayEvmStep) still
+      // catches a genuinely insufficient result with a clear message
+      // before anything signs, so this fallback is never the last line
+      // of defense.
+      setAmount(formatAmountForInput(balance));
+    } finally {
+      setMaxLoading(false);
+    }
+  }
+
   useEffect(() => {
     setQuoteError(null);
     // A changed amount/side invalidates any in-flight execution result —
@@ -264,6 +347,19 @@ export function TokenTradeScreen({
     return () => clearTimeout(timer);
   }, [isBuySide, amount, amtNum, session, token, tokenDecimals, slippageBps]);
 
+  // Flipping side changes which balance the pay card is even reading
+  // (native vs. the searched token) — any preset percentage of the OLD
+  // balance no longer means anything against the new one, same reasoning
+  // pickChain/pickRecentPair clear it on mobile's own DexScreen.tsx.
+  function flipToBuy() {
+    setIsBuySide(true);
+    setSelectedPercent(null);
+  }
+  function flipToSell() {
+    setIsBuySide(false);
+    setSelectedPercent(null);
+  }
+
   async function handleTrade() {
     const quoteToExecute = rawQuoteRef.current;
     if (!quoteToExecute || !session) return;
@@ -287,7 +383,7 @@ export function TokenTradeScreen({
     }
   }
 
-  const canTrade = Boolean(rawQuoteRef.current) && Boolean(session) && (executeState === 'idle' || executeState === 'error');
+  const canTrade = Boolean(rawQuoteRef.current) && Boolean(session) && !insufficientBalance && (executeState === 'idle' || executeState === 'error');
   const isExecuting = executeState !== 'idle' && executeState !== 'error' && executeState !== 'success';
 
   // Same real bug both DexScreen.tsx's own pillHint and the site's own
@@ -298,19 +394,20 @@ export function TokenTradeScreen({
   // broken, not as "you haven't told me how much yet". !session takes
   // top priority, same as both references' own "not connected" check —
   // "Unlock", not "Connect", since this wallet is embedded and local
-  // rather than an external one to connect. Kept to the states that map
-  // onto this screen (no balance/route-support gating here yet — that
-  // lands with real balance-fetching); the errors block below the pay/
-  // receive cards still owns every other message, so this never
-  // duplicates one (same reasoning the site's own comment gives for
-  // leaving `insufficient` out of its hint).
+  // rather than an external one to connect. insufficientBalance is
+  // deliberately absent here too, same reasoning DexScreen.tsx's own
+  // pillHint comment gives: the dedicated "Insufficient balance" error
+  // text below the pay/receive cards already owns that message, so this
+  // never duplicates it.
   const pillHint = !session
     ? 'Unlock your wallet to trade'
-    : amtNum <= 0
-      ? `Enter an amount to ${isBuySide ? `buy ${token.symbol}` : `sell ${token.symbol}`}`
-      : quoteLoading
-        ? 'Finding the best route…'
-        : null;
+    : insufficientBalance
+      ? null
+      : amtNum <= 0
+        ? `Enter an amount to ${isBuySide ? `buy ${token.symbol}` : `sell ${token.symbol}`}`
+        : quoteLoading
+          ? 'Finding the best route…'
+          : null;
 
   return (
     <View style={styles.screen}>
@@ -347,7 +444,7 @@ export function TokenTradeScreen({
           a no-op, explained by pillHint below, not a dead second button. */}
       <View style={styles.buySellRow}>
         <TouchableOpacity
-          onPress={() => (!isBuySide ? setIsBuySide(true) : canTrade && handleTrade())}
+          onPress={() => (!isBuySide ? flipToBuy() : canTrade && handleTrade())}
           style={[styles.buySellPillBuy, isBuySide && styles.buySellPillBuyActive, isBuySide && !canTrade && styles.buySellPillDisabled]}
           activeOpacity={0.8}>
           {isBuySide && isExecuting ? (
@@ -363,7 +460,7 @@ export function TokenTradeScreen({
           )}
         </TouchableOpacity>
         <TouchableOpacity
-          onPress={() => (isBuySide ? setIsBuySide(false) : canTrade && handleTrade())}
+          onPress={() => (isBuySide ? flipToSell() : canTrade && handleTrade())}
           style={[styles.buySellPillSell, !isBuySide && styles.buySellPillSellActive, !isBuySide && !canTrade && styles.buySellPillDisabled]}
           activeOpacity={0.8}>
           {!isBuySide && isExecuting ? (
@@ -382,16 +479,25 @@ export function TokenTradeScreen({
 
       {pillHint !== null && <Text style={styles.buySellHint}>{pillHint}</Text>}
 
-      {/* Disabled: balance is null until balance-fetching is wired —
-          same gating DexScreen.tsx's own quick-percent row already uses. */}
+      {/* Disabled until the real pay-side balance resolves (fetchPayBalance
+          above) — same gating DexScreen.tsx's own quick-percent row uses.
+          The Custom chip only lights up once selectedPercent is null AND a
+          real amount is present, i.e. the typed amount no longer matches
+          any preset — same convention as the mobile/site fix this session
+          already shipped for the same row. */}
       <View style={styles.quickPctRow}>
         {QUICK_PCT_OPTIONS.map(pct => (
-          <TouchableOpacity key={pct} style={styles.quickPctPill} disabled activeOpacity={0.7}>
-            <Text style={styles.quickPctText}>{pct === 1 ? 'MAX' : `${pct * 100}%`}</Text>
+          <TouchableOpacity
+            key={pct}
+            style={[styles.quickPctPill, selectedPercent === pct && styles.quickPctPillActive]}
+            onPress={() => handleQuickPct(pct)}
+            disabled={balance === null || maxLoading}
+            activeOpacity={0.7}>
+            <Text style={[styles.quickPctText, selectedPercent === pct && styles.quickPctTextActive]}>{pct === 1 ? (maxLoading ? '…' : 'MAX') : `${pct * 100}%`}</Text>
           </TouchableOpacity>
         ))}
-        <View style={[styles.quickPctPill, amtNum > 0 && styles.quickPctPillActive]}>
-          <Text style={[styles.quickPctText, amtNum > 0 && styles.quickPctTextActive]}>Custom</Text>
+        <View style={[styles.quickPctPill, selectedPercent === null && amtNum > 0 && styles.quickPctPillActive]}>
+          <Text style={[styles.quickPctText, selectedPercent === null && amtNum > 0 && styles.quickPctTextActive]}>Custom</Text>
         </View>
       </View>
 
@@ -405,13 +511,21 @@ export function TokenTradeScreen({
             </TouchableOpacity>
             <TextInput
               value={amount}
-              onChangeText={setAmount}
+              onChangeText={text => {
+                setAmount(text);
+                setSelectedPercent(null);
+              }}
               placeholder="0"
               placeholderTextColor={colors.textMuted}
               keyboardType="decimal-pad"
               style={[styles.amountInput, styles.prAmountInput]}
             />
           </View>
+          {session && (
+            <Text style={styles.balanceTextSmall} numberOfLines={1}>
+              {balanceLoading ? '…' : balance !== null ? `${formatAmountForInput(balance)} avail.` : ''}
+            </Text>
+          )}
         </View>
         <View style={[styles.card, styles.payReceiveCard]}>
           <Text style={styles.cardLabel}>You receive</Text>
@@ -434,6 +548,7 @@ export function TokenTradeScreen({
 
       {!isBuySide && tokenDecimalsError && <Text style={styles.errorText}>{tokenDecimalsError}</Text>}
       {!isBuySide && !tokenDecimalsError && tokenDecimals === null && amtNum > 0 && <Text style={styles.noteText}>Verifying this token…</Text>}
+      {insufficientBalance && <Text style={styles.errorText}>Insufficient {paySymbol} balance</Text>}
       {quoteError && <Text style={styles.errorText}>{quoteError}</Text>}
 
       <View style={styles.feeRow}>
@@ -526,6 +641,7 @@ function makeStyles(colors: Colors) {
     payReceiveRow: {flexDirection: 'row', gap: 8, marginTop: 12},
     payReceiveCard: {flex: 1, padding: 12},
     prMainRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6},
+    balanceTextSmall: {color: colors.textMuted, fontSize: 10, textAlign: 'right', marginTop: 4},
     amountInput: {flex: 1, fontSize: 16, fontWeight: '600', color: colors.textPrimary},
     prAmountInput: {textAlign: 'right'},
     prReceiveAmount: {flex: 1, color: colors.textPrimary, fontSize: 16, fontWeight: '600', textAlign: 'right'},

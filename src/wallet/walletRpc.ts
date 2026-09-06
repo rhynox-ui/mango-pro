@@ -75,6 +75,20 @@ function setCached(key: string, data: number): void {
   balanceCache.set(key, {data, fetchedAt: Date.now()});
 }
 
+/** Real native-asset (ETH/BNB/POL/etc.) balance for an EVM chain — added alongside fetchWalletTokenBalance once TokenTradeScreen's Buy side needed a real "how much can I spend" answer instead of leaving the quick-percent row permanently disabled. */
+export async function fetchWalletNativeBalance(chainKey: ChainKey, address: string, {forceFresh = false}: {forceFresh?: boolean} = {}): Promise<number> {
+  const key = `evm-native:${chainKey}:${address.toLowerCase()}`;
+  if (!forceFresh) {
+    const cached = getCached(key);
+    if (cached !== null) return cached;
+  }
+  const client = getWalletPublicClient(chainKey);
+  const wei = await client.getBalance({address: address as `0x${string}`});
+  const balance = Number(wei) / 1e18;
+  setCached(key, balance);
+  return balance;
+}
+
 export async function fetchWalletTokenBalance(chainKey: ChainKey, tokenAddress: string, decimals: number, address: string, {forceFresh = false}: {forceFresh?: boolean} = {}): Promise<number> {
   const key = `evm-token:${chainKey}:${tokenAddress.toLowerCase()}:${address.toLowerCase()}`;
   if (!forceFresh) {
@@ -135,6 +149,74 @@ export async function fetchWalletSplTokenBalance(mintAddress: string, decimals: 
     }
   }
   throw lastError ?? new Error('Could not reach any Solana RPC endpoint.');
+}
+
+/**
+ * Real native SOL balance — same "quick-percent row needs a real
+ * balance" reason fetchWalletNativeBalance above exists, Solana side.
+ * Same multi-endpoint fallback as fetchWalletSplTokenBalance.
+ */
+export async function fetchWalletSolanaBalance(address: string, {forceFresh = false}: {forceFresh?: boolean} = {}): Promise<number> {
+  const key = `solana-native:${address}`;
+  if (!forceFresh) {
+    const cached = getCached(key);
+    if (cached !== null) return cached;
+  }
+  let lastError: unknown;
+  for (const url of SOLANA_RPC_ENDPOINTS) {
+    try {
+      const [{Connection, PublicKey}] = await Promise.all([import('@solana/web3.js')]);
+      const connection = new Connection(url, 'confirmed');
+      const lamports = await connection.getBalance(new PublicKey(address));
+      const balance = lamports / 1e9;
+      setCached(key, balance);
+      return balance;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError ?? new Error('Could not reach any Solana RPC endpoint.');
+}
+
+const EVM_NATIVE_TRANSFER_GAS_LIMIT = 21_000n;
+const SOLANA_BASE_FEE_LAMPORTS = 5_000;
+const SOLANA_RENT_EXEMPT_MINIMUM_LAMPORTS = 890_880;
+
+/**
+ * Heuristic gas-reserve estimate for Max on a native "You pay" side —
+ * same fallback branch mango-mobile's own sendTransaction.js
+ * estimateEvmSendFee uses when there's no known recipient yet (a
+ * documented, deliberate case there: a swap/bridge's real destination is
+ * a router contract only known once a quote comes back, not before Max
+ * is tapped). Not doubled the way that file's own DexScreen.tsx call
+ * site doubles it — that reserve covers TWO transactions (a separate
+ * protocol-fee transfer, then the swap itself); this app's own
+ * executeRelayQuote.ts has no such separate fee transfer — Relay's
+ * appFees are deducted atomically from the trade itself — so there is
+ * only ever the one transaction to reserve gas for.
+ */
+export async function estimateEvmNativeFeeReserve(chainKey: ChainKey): Promise<number> {
+  const client = getWalletPublicClient(chainKey);
+  const {maxFeePerGas} = await client.estimateFeesPerGas();
+  const feeWei = EVM_NATIVE_TRANSFER_GAS_LIMIT * maxFeePerGas;
+  return Number(feeWei) / 1e18;
+}
+
+/** Same reserve math as mango-mobile's own sendTransaction.js estimateSolanaMaxReserveSol — live rent-exemption minimum, falling back to its documented current on-chain value if every RPC endpoint fails. */
+export async function estimateSolanaMaxReserveSol(): Promise<number> {
+  let rentLamports = SOLANA_RENT_EXEMPT_MINIMUM_LAMPORTS;
+  for (const url of SOLANA_RPC_ENDPOINTS) {
+    try {
+      const {Connection} = await import('@solana/web3.js');
+      const connection = new Connection(url, 'confirmed');
+      const live = await connection.getMinimumBalanceForRentExemption(0);
+      if (Number.isFinite(live) && live > 0) rentLamports = live;
+      break;
+    } catch {
+      // Keep trying the next endpoint; the documented fallback above still applies if all of them fail.
+    }
+  }
+  return (rentLamports + SOLANA_BASE_FEE_LAMPORTS) / 1e9;
 }
 
 const ERC20_METADATA_ABI = [
