@@ -2,16 +2,20 @@
 //
 // Simplified from mango-mobile's own WelcomeScreen.tsx: that version is
 // built around a bespoke illustration asset (mango-hero.png) measured
-// pixel-for-pixel off a supplied reference design. No such asset exists
-// for Mango Pro, and fabricating one would just be a placeholder image
-// pretending to be real brand art — so this uses a plain icon + wordmark
-// hero instead. Same two actions, same "self-custodial" reassurance,
-// same monochrome palette.
+// pixel-for-pixel off a supplied reference design. Mango Pro doesn't
+// have that same full hero illustration, but it does have the real
+// mango mark (src/assets/mango-mark.png — same require()+Image
+// resizeMode="contain" pattern mobile's own WelcomeScreen/LockedScreen
+// use for their MANGO_MARK), so this uses that as the hero instead of
+// a wordmark placeholder. Same two actions, same "self-custodial"
+// reassurance, same monochrome palette.
 
 import {useMemo} from 'react';
-import {StyleSheet, Text, TouchableOpacity, View} from 'react-native';
+import {Image, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import Svg, {Path} from 'react-native-svg';
 import {useTheme, type Colors} from '../theme/ThemeContext';
+
+const MANGO_MARK = require('../assets/mango-mark.png');
 
 function ShieldCheck({color, size}: {color: string; size: number}) {
   return (
@@ -31,9 +35,7 @@ export function WelcomeScreen({onCreate, onImport}: {onCreate: () => void; onImp
       <View style={styles.spacer} />
 
       <View style={styles.hero}>
-        <View style={styles.mark}>
-          <Text style={styles.markText}>mango</Text>
-        </View>
+        <Image source={MANGO_MARK} style={styles.markImage} resizeMode="contain" />
         <Text style={styles.headline}>Start your journey</Text>
         <Text style={styles.subtitle}>New here? Let's build your wallet.</Text>
         <Text style={styles.subtitle}>Already have one? Just import it.</Text>
@@ -62,8 +64,7 @@ function makeStyles(colors: Colors) {
     screen: {flex: 1, backgroundColor: colors.bg, paddingHorizontal: 28},
     spacer: {flex: 1},
     hero: {alignItems: 'center', gap: 10},
-    mark: {paddingHorizontal: 16, paddingVertical: 10, borderRadius: 14, backgroundColor: colors.panel, marginBottom: 8},
-    markText: {color: colors.textPrimary, fontSize: 18, fontWeight: '800'},
+    markImage: {width: 96, height: 96, marginBottom: 8},
     headline: {color: colors.textPrimary, fontSize: 28, fontWeight: '800', textAlign: 'center', letterSpacing: -0.5},
     subtitle: {color: colors.textSecondary, fontSize: 14, textAlign: 'center', lineHeight: 20},
     actions: {paddingBottom: 32, gap: 12},

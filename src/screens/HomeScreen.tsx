@@ -26,10 +26,12 @@
 // all. The portfolio balance is NOT mocked: a new account genuinely has $0.
 
 import {useState} from 'react';
-import {FlatList, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
+import {FlatList, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {FilterIcon, StarIcon} from '../components/icons';
 import {MOCK_TOKENS, TOKEN_FILTERS, type DiscoveryToken, type TokenFilter} from '../data/mockDiscovery';
 import {useTheme, type Colors} from '../theme/ThemeContext';
+
+const MANGO_MARK = require('../assets/mango-mark.png');
 
 type DiscoveryTab = 'watchlist' | 'tokens' | 'perps';
 
@@ -50,7 +52,7 @@ export function HomeScreen() {
         <>
           <View style={styles.portfolioHeader}>
             <View style={styles.logoMark}>
-              <Text style={styles.logoMarkText}>mango</Text>
+              <Image source={MANGO_MARK} style={styles.logoMarkImage} resizeMode="contain" />
             </View>
             <Text style={styles.balance}>$0.00</Text>
             <View style={styles.logoMarkSpacer} />
@@ -135,7 +137,7 @@ function makeStyles(colors: Colors) {
       borderRadius: 10,
       backgroundColor: colors.panel,
     },
-    logoMarkText: {color: colors.textPrimary, fontSize: 13, fontWeight: '800', fontFamily: 'System'},
+    logoMarkImage: {width: 22, height: 22},
     logoMarkSpacer: {width: 56},
     balance: {color: colors.textPrimary, fontSize: 26, fontWeight: '700'},
 

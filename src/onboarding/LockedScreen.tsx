@@ -4,13 +4,16 @@
 // throttling (unlockAttempts.ts) and busy-state handling, minus
 // biometric unlock (react-native-keychain isn't a dependency here yet;
 // password-only unlock is a real, complete v1, and biometrics is a
-// straightforward follow-up once that dependency is added).
+// straightforward follow-up once that dependency is added). Also same
+// MANGO_MARK require()+Image pattern mobile's own LockedScreen uses.
 
 import {useEffect, useMemo, useRef, useState} from 'react';
-import {StyleSheet, Text, View} from 'react-native';
+import {Image, StyleSheet, Text, View} from 'react-native';
 import {ErrorText, PasswordField, PrimaryButton} from './ui';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {getLockoutStatus, recordFailedAttempt, recordSuccessfulUnlock} from '../wallet/unlockAttempts';
+
+const MANGO_MARK = require('../assets/mango-mark.png');
 
 function formatCountdown(ms: number): string {
   const totalSeconds = Math.ceil(ms / 1000);
@@ -72,9 +75,7 @@ export function LockedScreen({onUnlock}: {onUnlock: (password: string) => Promis
   return (
     <View style={styles.container}>
       <View style={styles.card}>
-        <View style={styles.logoCircle}>
-          <Text style={styles.logoText}>mango</Text>
-        </View>
+        <Image source={MANGO_MARK} style={styles.logoImage} resizeMode="contain" />
         <Text style={styles.title}>Welcome back</Text>
         <Text style={styles.subtitle}>Enter your password to unlock.</Text>
         <View style={styles.field}>
@@ -97,8 +98,7 @@ function makeStyles(colors: Colors) {
   return StyleSheet.create({
     container: {flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: colors.bg},
     card: {width: '100%', maxWidth: 380, backgroundColor: colors.panel, borderColor: colors.panelBorder, borderWidth: 1, borderRadius: 24, padding: 24, alignItems: 'center'},
-    logoCircle: {paddingHorizontal: 14, paddingVertical: 10, borderRadius: 14, backgroundColor: colors.pillBg, alignItems: 'center', justifyContent: 'center', marginBottom: 16},
-    logoText: {color: colors.textPrimary, fontSize: 15, fontWeight: '800'},
+    logoImage: {width: 56, height: 56, marginBottom: 16},
     title: {color: colors.textPrimary, fontSize: 18, fontWeight: '700', marginBottom: 6},
     subtitle: {color: colors.textSecondary, fontSize: 13, marginBottom: 20},
     field: {width: '100%', marginBottom: 4},
