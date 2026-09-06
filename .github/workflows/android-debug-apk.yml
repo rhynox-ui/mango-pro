@@ -25,10 +25,13 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # GitHub's ubuntu-latest runner ships an Android SDK with sdkmanager
-      # on PATH already — just fetch the exact platform/build-tools/NDK
-      # versions this app's own android/build.gradle pins, so CI builds
-      # against the same toolchain a local build would.
+      # First run revealed ubuntu-latest does NOT ship sdkmanager on PATH
+      # (that assumption was wrong) — this action installs the cmdline-
+      # tools and sets ANDROID_HOME/ANDROID_SDK_ROOT properly first, then
+      # sdkmanager fetches the exact platform/build-tools/NDK versions
+      # this app's own android/build.gradle pins.
+      - uses: android-actions/setup-android@v3
+
       - name: Install Android SDK components
         run: |
           yes | sdkmanager --licenses > /dev/null || true
