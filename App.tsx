@@ -2,11 +2,19 @@
  * Mango Pro — mobile app entry point.
  *
  * Two state machines stacked: an auth gate (loading -> welcome/create/
- * import or locked -> unlocked) in front of the five-tab app (Home,
- * Search, Swap, Community, Profile), same screen-switch pattern as
- * mango-mobile's own App.tsx rather than a navigation library. Settings
- * is a pushed screen reached from Profile's own gear icon, not a tab —
- * matching the reference this nav was built against.
+ * import or locked -> unlocked) in front of the four-tab app (Home,
+ * Search, Swap, Profile), same screen-switch pattern as mango-mobile's
+ * own App.tsx rather than a navigation library. Settings is a pushed
+ * screen reached from Profile's own gear icon, not a tab.
+ *
+ * The reference nav this was built against has a fifth tab, Community
+ * (following, leaderboards, copy-trade discovery) — deliberately not
+ * carried over. Mango Pro has no social layer to put behind it yet, and
+ * shipping a tab that only opens a placeholder is the same kind of
+ * fabrication this app avoids everywhere else (see ProfileScreen's own
+ * "Coming soon" pills for the honest way to flag an unbuilt feature —
+ * a whole nav destination going nowhere isn't that). Four real tabs
+ * beats five where one is empty.
  *
  * @format
  */
@@ -25,13 +33,12 @@ import {LockedScreen} from './src/onboarding/LockedScreen';
 import {TabIcon, type TabIconName} from './src/navigation/TabIcon';
 import {HomeScreen} from './src/screens/HomeScreen';
 import {SearchScreen} from './src/screens/SearchScreen';
-import {PlaceholderScreen} from './src/screens/PlaceholderScreen';
 import {TokenTradeScreen, type DemoToken} from './src/screens/TokenTradeScreen';
 import {ProfileScreen} from './src/screens/ProfileScreen';
 import {SettingsScreen} from './src/screens/SettingsScreen';
 import type {TokenSearchResult} from './src/core/tokenSearch';
 
-type Tab = 'home' | 'search' | 'swap' | 'community' | 'profile';
+type Tab = 'home' | 'search' | 'swap' | 'profile';
 type Screen = 'tabs' | 'settings';
 type AuthState = 'loading' | 'welcome' | 'create' | 'import' | 'locked' | 'unlocked';
 
@@ -39,7 +46,6 @@ const TABS: {key: Tab; label: string; icon: TabIconName}[] = [
   {key: 'home', label: 'Home', icon: 'home'},
   {key: 'search', label: 'Search', icon: 'search'},
   {key: 'swap', label: 'Swap', icon: 'swap'},
-  {key: 'community', label: 'Community', icon: 'community'},
   {key: 'profile', label: 'Profile', icon: 'profile'},
 ];
 
@@ -133,8 +139,6 @@ function AppInner(): React.JSX.Element {
               <SearchScreen onSelectToken={selectSearchResult} />
             ) : tab === 'swap' ? (
               <TokenTradeScreen token={selectedToken} onOpenSearch={() => setTab('search')} onOpenSettings={openSettings} />
-            ) : tab === 'community' ? (
-              <PlaceholderScreen title="Community" note="Following, leaderboards, and copy-trade discovery land in a later pass." />
             ) : (
               <ProfileScreen onOpenSettings={openSettings} />
             )}

@@ -2,12 +2,13 @@
 //
 // Same pattern as mango-mobile's own src/navigation/TabIcon.tsx: real
 // lucide icon path data rendered through react-native-svg, not invented
-// glyphs. Five destinations now (Home/Search/Swap/Community/Profile),
-// matching the reference nav's own five-icon layout.
+// glyphs. Four destinations (Home/Search/Swap/Profile) — the reference
+// nav's own fifth icon (Community) isn't carried over; see App.tsx's
+// own header comment for why.
 
 import Svg, {Circle, Path} from 'react-native-svg';
 
-export type TabIconName = 'home' | 'search' | 'swap' | 'community' | 'profile';
+export type TabIconName = 'home' | 'search' | 'swap' | 'profile';
 
 const STROKE = {fill: 'none', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const};
 
@@ -38,15 +39,6 @@ export function TabIcon({name, color, size = 20}: {name: TabIconName; color: str
           <Path d="M3 11v-1a4 4 0 0 1 4-4h14" />
           <Path d="m7 22-4-4 4-4" />
           <Path d="M21 13v1a4 4 0 0 1-4 4H3" />
-        </Svg>
-      );
-    case 'community':
-      return (
-        <Svg width={size} height={size} {...common}>
-          <Path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-          <Circle cx="9" cy="7" r="4" />
-          <Path d="M22 21v-2a4 4 0 0 0-3-3.87" />
-          <Path d="M16 3.13a4 4 0 0 1 0 7.75" />
         </Svg>
       );
     case 'profile':
