@@ -135,20 +135,55 @@ async function sendSolanaUsdc(session: DerivedAccounts, toAddress: string, amoun
   return {signature};
 }
 
+/**
+ * Same ATA/transfer instruction assembly as sendSolanaUsdc above, but
+ * for a Google-login session: no local secret key, so the built
+ * (unsigned) transaction is serialized and handed to Particle's own MPC
+ * signer instead, which signs AND broadcasts in one call. Fully
+ * separate from the local-signing function above.
+ */
+async function sendSolanaUsdcViaParticle(session: DerivedAccounts, toAddress: string, amountUsdc: string): Promise<{signature: string}> {
+  const mintAddress = TOKEN_ADDRESSES.USDC.solana;
+  if (!mintAddress) throw new Error('No verified USDC mint for solana.');
+  const [
+    {Connection, PublicKey, Transaction},
+    {getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction},
+  ] = await Promise.all([import('@solana/web3.js'), import('@solana/spl-token')]);
+
+  const connection = new Connection('https://rpc.solanatracker.io/public', 'confirmed');
+  const fromPublicKey = new PublicKey(session.solana.address);
+  const mintPublicKey = new PublicKey(mintAddress);
+  const toPublicKey = new PublicKey(toAddress);
+
+  const fromAta = await getAssociatedTokenAddress(mintPublicKey, fromPublicKey);
+  const toAta = await getAssociatedTokenAddress(mintPublicKey, toPublicKey);
+  const toAtaInfo = await connection.getAccountInfo(toAta);
+
+  const transaction = new Transaction();
+  if (toAtaInfo === null) {
+    transaction.add(createAssociatedTokenAccountInstruction(fromPublicKey, toAta, toPublicKey, mintPublicKey));
+  }
+  const amountRaw = parseUnits(amountUsdc, USDC_DECIMALS);
+  transaction.add(createTransferInstruction(fromAta, toAta, fromPublicKey, amountRaw));
+
+  const {blockhash, lastValidBlockHeight} = await connection.getLatestBlockhash('confirmed');
+  transaction.recentBlockhash = blockhash;
+  transaction.feePayer = fromPublicKey;
+  const serialized = transaction.serialize({requireAllSignatures: false, verifySignatures: false});
+
+  const {signAndSendSolanaTransactionViaParticle} = await import('./particleSigning.ts');
+  const signature = await signAndSendSolanaTransactionViaParticle(serialized);
+  await connection.confirmTransaction({signature, blockhash, lastValidBlockHeight}, 'confirmed');
+  return {signature};
+}
+
 /** Sends USDC on the given chain from the unlocked session's own account, direct to the chain — see this file's header for why there is no backend step. */
 export async function sendUsdc(chainKey: ChainKey, session: DerivedAccounts, toAddress: string, amountUsdc: string): Promise<{txId: string}> {
   if (!isValidRecipientAddress(chainKey, toAddress)) {
     throw new Error(`That doesn't look like a valid ${chainKey === 'solana' ? 'Solana' : 'wallet'} address.`);
   }
   if (chainKey === 'solana') {
-    // See particleSigning.ts's own header — Particle's Solana signing
-    // wire format isn't confirmed from any reachable source, so this
-    // stays refused for Google sessions rather than attempting to sign
-    // with session.solana.privateKey === ''.
-    if (session.authMethod === 'google') {
-      throw new Error("Solana withdrawals aren't available yet for Google sign-in accounts.");
-    }
-    const {signature} = await sendSolanaUsdc(session, toAddress, amountUsdc);
+    const {signature} = session.authMethod === 'google' ? await sendSolanaUsdcViaParticle(session, toAddress, amountUsdc) : await sendSolanaUsdc(session, toAddress, amountUsdc);
     return {txId: signature};
   }
   const {hash} = await sendEvmUsdc(chainKey, session, toAddress, amountUsdc);

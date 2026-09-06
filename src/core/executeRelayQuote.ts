@@ -266,6 +266,60 @@ async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secret
   return confirmOrTagError();
 }
 
+/**
+ * Same instruction/lookup-table/blockhash assembly as
+ * signAndSendRelaySolanaStep above, but for a Google-login session:
+ * there's no local secret key to sign with, so the built (unsigned)
+ * VersionedTransaction is serialized and handed to Particle's own MPC
+ * signer instead, which signs AND broadcasts in one call. Kept fully
+ * separate from the local-signing function above — zero risk of this
+ * path changing behavior for the existing, already-relied-on one.
+ */
+async function signAndSendRelaySolanaStepViaParticle(item: RelayTransactionStepItem, solanaAddress: string): Promise<string> {
+  const {Connection, PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction} = await import('@solana/web3.js');
+  const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
+  const payerKey = new PublicKey(solanaAddress);
+
+  const instructions = (item.data?.instructions ?? []).map(
+    ix =>
+      new TransactionInstruction({
+        keys: ix.keys.map(k => ({pubkey: new PublicKey(k.pubkey), isSigner: k.isSigner, isWritable: k.isWritable})),
+        programId: new PublicKey(ix.programId),
+        data: Buffer.from(ix.data, 'hex'),
+      }),
+  );
+  const lookupTables = (
+    await Promise.all((item.data?.addressLookupTableAddresses ?? []).map(addr => connection.getAddressLookupTable(new PublicKey(addr)).then(res => res.value)))
+  ).filter((t): t is NonNullable<typeof t> => Boolean(t));
+
+  const {blockhash} = await connection.getLatestBlockhash('confirmed');
+  const message = new TransactionMessage({payerKey, instructions, recentBlockhash: blockhash}).compileToV0Message(lookupTables);
+  const transaction = new VersionedTransaction(message);
+  const serialized = transaction.serialize();
+
+  // Dynamic import, not a static one — see sendRelayEvmStepViaParticle's
+  // own comment above for why (this file is also imported directly by
+  // scripts/verify-execute-relay-quote.mjs's plain-Node offline checks).
+  const {signAndSendSolanaTransactionViaParticle} = await import('../wallet/particleSigning.ts');
+  const signature = await signAndSendSolanaTransactionViaParticle(serialized);
+
+  const deadline = Date.now() + 90_000;
+  for (;;) {
+    const {value} = await connection.getSignatureStatuses([signature]);
+    const status = value?.[0];
+    if (status) {
+      if (status.err) {
+        const error = new Error(`Transaction ${signature} failed on-chain: ${JSON.stringify(status.err)}`);
+        (error as {signature?: string}).signature = signature;
+        throw error;
+      }
+      if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') return signature;
+    }
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for transaction ${signature} to confirm.`);
+    await new Promise(r => setTimeout(r, 1200));
+  }
+}
+
 export type ExecuteRelayQuoteResult = {txHashes: string[]; warnings: string[]};
 
 /**
@@ -313,17 +367,9 @@ export async function executeRelayQuote(quote: RelayQuote, session: DerivedAccou
 
   for (const item of pendingItems) {
     if (isSolanaShaped(item)) {
-      if (isGoogleSession) {
-        // See particleSigning.ts's own header: Particle's Solana signing
-        // wire format isn't confirmed from any reachable source, so this
-        // stays refused rather than guessed at with real funds — same
-        // gate TokenTradeScreen.tsx/ProfileScreen.tsx already show for
-        // Solana-chain trades before execution is even attempted; this
-        // is the same guarantee if this function is ever reached another
-        // way.
-        throw new Error("Solana trades aren't available yet for Google sign-in accounts.");
-      }
-      const signature = await signAndSendRelaySolanaStep(item, session.solana.privateKey);
+      const signature = isGoogleSession
+        ? await signAndSendRelaySolanaStepViaParticle(item, session.solana.address)
+        : await signAndSendRelaySolanaStep(item, session.solana.privateKey);
       txHashes.push(signature);
       continue;
     }

@@ -167,18 +167,6 @@ export function ProfileScreen({onOpenSettings, onOpenHistory}: {onOpenSettings: 
 
   async function handleConfirmWithdraw() {
     if (!session || !withdrawChain) return;
-    // Google-login sessions sign real EVM withdrawals through Particle's
-    // own MPC path now (sendUsdc.ts) — Solana stays refused here rather
-    // than letting sendUsdc throw from an empty key, since Particle's
-    // own Solana signing wire format isn't confirmed from any reachable
-    // source (see particleSigning.ts's own header). canSubmitWithdraw
-    // already keeps the button disabled for this case; this is the same
-    // guarantee if handleConfirmWithdraw is ever reached another way.
-    if (session.authMethod === 'google' && withdrawChain === 'solana') {
-      setWithdrawError("Withdrawing isn't available yet for Google sign-in accounts on Solana — this is coming in a future update.");
-      setWithdrawStep('error');
-      return;
-    }
     setWithdrawStep('sending');
     try {
       const {txId} = await sendUsdc(withdrawChain, session, withdrawAddress.trim(), withdrawAmount);
@@ -194,7 +182,6 @@ export function ProfileScreen({onOpenSettings, onOpenHistory}: {onOpenSettings: 
   const withdrawAmountNumber = Number(withdrawAmount);
   const withdrawChainBalance = balanceForChain(withdrawChain);
   const canSubmitWithdraw =
-    (session?.authMethod !== 'google' || withdrawChain !== 'solana') &&
     withdrawChain !== null &&
     isValidRecipientAddress(withdrawChain, withdrawAddress.trim()) &&
     withdrawAmountNumber > 0 &&
@@ -513,10 +500,6 @@ export function ProfileScreen({onOpenSettings, onOpenHistory}: {onOpenSettings: 
                   </TouchableOpacity>
                 </View>
                 <Text style={styles.modalHint}>Available on {CHAIN_LABEL[withdrawChain]}: ${formatUsd(withdrawChainBalance)}</Text>
-
-                {session?.authMethod === 'google' && withdrawChain === 'solana' && (
-                  <Text style={styles.modalWarning}>Withdrawing isn't available yet for Google sign-in accounts on Solana — this is coming in a future update.</Text>
-                )}
 
                 <Text style={styles.modalWarning}>
                   Sends are final. Double-check the network and address — sending to the wrong network or address may

@@ -47,12 +47,16 @@
 // shapes (plain SOL/SPL transfers) and couldn't carry an arbitrary
 // Relay-quoted instruction set.
 //
-// Deliberately NOT wired into real trading/withdrawal yet. Proven only
-// as a devnet sign-and-send test (src/screens/SolanaDevnetTestScreen.tsx)
-// — real confirmation that a Google session can actually sign and land
-// a Solana transaction on a real device comes before any mainnet money
-// moves through this path, same discipline Phase 1/Phase 2 of the EVM
-// side already followed.
+// Wired into real Solana trading (executeRelayQuote.ts) and withdrawal
+// (sendUsdc.ts) at the account owner's explicit, informed instruction —
+// against this file's own original plan to prove the encoding on a
+// real device via SolanaDevnetTestScreen.tsx first. That devnet test
+// still exists (Settings > "Solana signing test") and is the fastest
+// way to confirm this path independently of a real trade; it was not
+// run before this went live. If Particle's Base58 requirement turns
+// out subtly wrong in some case this file's own sources didn't cover,
+// the failure mode is whatever Particle's native SDK does with a
+// malformed payload — flagged here, not silently assumed safe.
 
 import bs58 from 'bs58';
 import {evm, solana} from '@particle-network/rn-auth-core';
