@@ -13,7 +13,7 @@
 // this app can't map to a ChainKey can't be handed to the trade screen,
 // so it's dropped rather than shown as a dead row.
 
-import {chainKeyForDexScreenerChainId} from './dexScreener';
+import {chainKeyForDexScreenerChainId, type DexScreenerPair} from './dexScreener';
 import type {ChainKey} from './chainData';
 
 export type TokenSearchResult = {
@@ -50,12 +50,12 @@ export async function searchTokens(query: string): Promise<TokenSearchResult[]> 
   try {
     const response = await fetch(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(trimmed)}`);
     if (!response.ok) return [];
-    const body = await response.json();
+    const body = (await response.json()) as {pairs?: DexScreenerPair[]};
     const pairs = Array.isArray(body?.pairs) ? body.pairs : [];
 
     const bestByKey = new Map<string, TokenSearchResult>();
     for (const pair of pairs) {
-      const chainKey = chainKeyForDexScreenerChainId(pair?.chainId);
+      const chainKey = pair?.chainId ? chainKeyForDexScreenerChainId(pair.chainId) : null;
       const tokenAddress = pair?.baseToken?.address;
       if (!chainKey || typeof tokenAddress !== 'string' || !tokenAddress) continue;
 

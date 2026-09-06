@@ -26,6 +26,11 @@ import {
 } from '../components/icons';
 import {CHAIN_LABEL} from '../core/chainData';
 import {useTheme, type Colors} from '../theme/ThemeContext';
+import {useSession} from '../wallet/SessionContext';
+
+function truncateAddress(address: string): string {
+  return `${address.slice(0, 6)}…${address.slice(-4)}`;
+}
 
 const TIME_RANGES = ['24h', '7d', '30d', 'All'] as const;
 type TimeRange = (typeof TIME_RANGES)[number];
@@ -43,6 +48,7 @@ function joinedLabel(): string {
 
 export function ProfileScreen({onOpenSettings}: {onOpenSettings: () => void}) {
   const {colors} = useTheme();
+  const {session} = useSession();
   const styles = makeStyles(colors);
   const [bannerOpen, setBannerOpen] = useState(false);
   const [timeRange, setTimeRange] = useState<TimeRange>('24h');
@@ -98,7 +104,10 @@ export function ProfileScreen({onOpenSettings}: {onOpenSettings: () => void}) {
       </View>
 
       <Text style={styles.name}>Your Profile</Text>
-      <Text style={styles.handle}>@you</Text>
+      {/* Real, from the unlocked wallet's own EVM account — no username
+          system exists yet, so the address is the identity shown until
+          one does. */}
+      <Text style={styles.handle}>{session ? truncateAddress(session.evm.address) : '—'}</Text>
       <TouchableOpacity>
         <Text style={styles.addBio}>+ Add a bio</Text>
       </TouchableOpacity>

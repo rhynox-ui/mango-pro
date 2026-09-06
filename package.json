@@ -10,15 +10,24 @@
     "test": "jest",
     "typecheck": "tsc --noEmit",
     "verify-fees": "node --experimental-strip-types scripts/verify-fees.mjs",
-    "verify": "npm run verify-fees"
+    "verify-wallet-crypto": "node --experimental-strip-types scripts/verify-wallet-crypto.mjs",
+    "verify": "npm run verify-fees && npm run verify-wallet-crypto"
   },
   "dependencies": {
+    "@noble/ciphers": "^2.3.0",
+    "@noble/hashes": "^2.3.0",
     "@react-native-async-storage/async-storage": "^3.1.1",
+    "@solana/web3.js": "^1.98.4",
+    "bip39": "^3.1.0",
+    "bs58": "^6.0.0",
+    "buffer": "^6.0.3",
     "react": "19.2.3",
     "react-native": "0.87.0",
+    "react-native-get-random-values": "^2.0.0",
     "react-native-safe-area-context": "^5.5.2",
     "react-native-svg": "^15.15.5",
-    "react-native-webview": "^14.0.1"
+    "react-native-webview": "^14.0.1",
+    "viem": "^2.55.18"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
@@ -35,6 +44,7 @@
     "@types/jest": "^29.5.13",
     "@types/react": "^19.2.0",
     "@types/react-test-renderer": "^19.1.0",
+    "ed25519-hd-key": "^2.0.0",
     "eslint": "^8.19.0",
     "jest": "^29.6.3",
     "prettier": "2.8.8",

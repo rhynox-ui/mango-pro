@@ -50,6 +50,21 @@ export function chainKeyForDexScreenerChainId(dexScreenerChainId: string): Chain
 
 export type ResolvedPair = {chainId: string; pairAddress: string};
 
+// The handful of fields this app actually reads off a DexScreener API
+// pair object — not the full response shape, just enough to type-check
+// the parsing below without pretending to know every field DexScreener
+// might send.
+export type DexScreenerPair = {
+  chainId?: string;
+  pairAddress?: string;
+  liquidity?: {usd?: number};
+  baseToken?: {address?: string; symbol?: string; name?: string};
+  priceUsd?: string;
+  priceChange?: {h24?: number};
+  marketCap?: number;
+  fdv?: number;
+};
+
 /**
  * Finds the deepest real DexScreener pair for a token on one chain.
  * Resolves to null — never throws — for every "no chart here" case: an
@@ -65,7 +80,7 @@ export async function resolveDexScreenerPair({chainKey, tokenAddress}: {chainKey
   try {
     const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(tokenAddress)}`);
     if (!response.ok) return null;
-    const body = await response.json();
+    const body = (await response.json()) as {pairs?: DexScreenerPair[]};
     const pairs = Array.isArray(body?.pairs) ? body.pairs : [];
     let best: string | null = null;
     let bestLiquidity = -1;

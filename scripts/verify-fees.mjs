@@ -49,4 +49,41 @@ console.log('ok', ++checks, '- appFeeBps() falls back to the flat rate for a non
 assert.equal(fees.feeRecipientForQuote(), fees.DEV_FEE_WALLET);
 console.log('ok', ++checks, '- feeRecipientForQuote() always returns the EVM wallet, even though DEV_FEE_WALLET_SOLANA exists');
 
+// --- Chain-aware sponsorship fee floor -------------------------------
+// Pins the fix for a real gap: outright gas sponsorship on an expensive
+// chain (Ethereum mainnet) can cost more than the flat 0.5% collects on
+// a small trade, quietly losing money instead of earning margin.
+
+assert.equal(fees.sponsoredFeeFloorUsd('ethereum'), 2.55);
+console.log('ok', ++checks, '- sponsoredFeeFloorUsd(ethereum) is the mainnet gas-cost estimate plus the minimum margin');
+
+assert.equal(fees.appFeeBpsForSponsoredTrade('ethereum', 10), fees.appFeeBps(10));
+console.log('ok', ++checks, '- appFeeBpsForSponsoredTrade() with no sponsorship option is identical to appFeeBps()');
+
+assert.equal(fees.appFeeBpsForSponsoredTrade('ethereum', 10, {sponsoringGasOutright: true}), '2550');
+console.log(
+  'ok',
+  ++checks,
+  '- appFeeBpsForSponsoredTrade() raises the rate on a small Ethereum-mainnet trade so sponsoring its gas cannot lose money',
+);
+
+// Not '51': 0.001 + 0.05 isn't exactly representable in binary float
+// (0.051000000000000004), and Math.ceil() rounds that up — the correct,
+// safe direction for a cost floor to err in (charges a hair more, never
+// less), so 52 is the right answer here, not a bug to chase to 51.
+assert.equal(fees.appFeeBpsForSponsoredTrade('solana', 10, {sponsoringGasOutright: true}), '52');
+console.log('ok', ++checks, "- appFeeBpsForSponsoredTrade() barely adjusts a small Solana trade — sponsorship there is nearly free");
+
+assert.equal(fees.appFeeBpsForSponsoredTrade('ethereum', 10_000, {sponsoringGasOutright: true}), fees.appFeeBps(10_000));
+console.log('ok', ++checks, '- appFeeBpsForSponsoredTrade() never raises the rate once the flat fee already covers the sponsorship floor');
+
+assert.equal(fees.shouldPreferPayGasInToken('ethereum', 10), true);
+console.log('ok', ++checks, '- shouldPreferPayGasInToken() flags a small Ethereum-mainnet trade as too costly to sponsor outright');
+
+assert.equal(fees.shouldPreferPayGasInToken('solana', 10), false);
+console.log('ok', ++checks, '- shouldPreferPayGasInToken() does not flag Solana, where sponsorship is cheap at any real trade size');
+
+assert.equal(fees.shouldPreferPayGasInToken('ethereum', 10_000), false);
+console.log('ok', ++checks, '- shouldPreferPayGasInToken() does not flag a large Ethereum trade, where the flat fee already covers gas');
+
 console.log(`\n${checks}/${checks} checks passed`);
