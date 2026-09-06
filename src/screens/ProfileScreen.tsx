@@ -9,7 +9,7 @@
 // "Joined <month year>" is the one real data point: today's date.
 
 import {useEffect, useMemo, useState} from 'react';
-import {ActivityIndicator, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
+import {ActivityIndicator, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import Svg, {Line as SvgLine} from 'react-native-svg';
 import {
   AlertCircleIcon,
@@ -32,6 +32,7 @@ import {
 } from '../components/icons';
 import {CHAIN_LABEL, type ChainKey} from '../core/chainData';
 import {fetchUsdcPortfolio, USDC_SUPPORTED_CHAINS, type UsdcPortfolio} from '../core/usdcBalances';
+import {sendUsdc, isValidRecipientAddress} from '../wallet/sendUsdc';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {useSession} from '../wallet/SessionContext';
 
@@ -56,6 +57,12 @@ const EVM_USDC_CHAINS = USDC_SUPPORTED_CHAINS.filter(c => c !== 'solana');
 // since no fiat on/off-ramp integration exists yet.
 type DepositStep = 'methods' | 'network' | 'address';
 
+// Mirrors FOMO's own "Choose withdraw method" screen shape, same
+// real-vs-"Coming soon" split as Deposit: Crypto wallet is real (this
+// app's non-custodial sendUsdc.ts), bank/finance-app withdrawal (fiat
+// off-ramp) has no integration yet.
+type WithdrawStep = 'methods' | 'network' | 'form' | 'sending' | 'success' | 'error';
+
 const TIME_RANGES = ['24h', '7d', '30d', 'All'] as const;
 type TimeRange = (typeof TIME_RANGES)[number];
 
@@ -77,6 +84,12 @@ export function ProfileScreen({onOpenSettings}: {onOpenSettings: () => void}) {
   const [bannerOpen, setBannerOpen] = useState(false);
   const [depositStep, setDepositStep] = useState<DepositStep | null>(null);
   const [depositChain, setDepositChain] = useState<ChainKey | null>(null);
+  const [withdrawStep, setWithdrawStep] = useState<WithdrawStep | null>(null);
+  const [withdrawChain, setWithdrawChain] = useState<ChainKey | null>(null);
+  const [withdrawAddress, setWithdrawAddress] = useState('');
+  const [withdrawAmount, setWithdrawAmount] = useState('');
+  const [withdrawError, setWithdrawError] = useState<string | null>(null);
+  const [withdrawTxId, setWithdrawTxId] = useState<string | null>(null);
   const [usdcPortfolio, setUsdcPortfolio] = useState<UsdcPortfolio | null>(null);
   const [usdcLoading, setUsdcLoading] = useState(false);
   const [timeRange, setTimeRange] = useState<TimeRange>('24h');
@@ -97,6 +110,48 @@ export function ProfileScreen({onOpenSettings}: {onOpenSettings: () => void}) {
       cancelled = true;
     };
   }, [session]);
+
+  function refreshUsdcPortfolio() {
+    if (!session) return;
+    fetchUsdcPortfolio(session).then(setUsdcPortfolio);
+  }
+
+  function balanceForChain(chainKey: ChainKey | null): number {
+    if (!chainKey || !usdcPortfolio) return 0;
+    const result = usdcPortfolio.results.find(r => r.chainKey === chainKey);
+    return result?.status === 'ok' ? result.balance : 0;
+  }
+
+  function resetWithdraw() {
+    setWithdrawStep(null);
+    setWithdrawChain(null);
+    setWithdrawAddress('');
+    setWithdrawAmount('');
+    setWithdrawError(null);
+    setWithdrawTxId(null);
+  }
+
+  async function handleConfirmWithdraw() {
+    if (!session || !withdrawChain) return;
+    setWithdrawStep('sending');
+    try {
+      const {txId} = await sendUsdc(withdrawChain, session, withdrawAddress.trim(), withdrawAmount);
+      setWithdrawTxId(txId);
+      setWithdrawStep('success');
+      refreshUsdcPortfolio();
+    } catch (err) {
+      setWithdrawError(err instanceof Error ? err.message : 'The send failed. Nothing left this wallet.');
+      setWithdrawStep('error');
+    }
+  }
+
+  const withdrawAmountNumber = Number(withdrawAmount);
+  const withdrawChainBalance = balanceForChain(withdrawChain);
+  const canSubmitWithdraw =
+    withdrawChain !== null &&
+    isValidRecipientAddress(withdrawChain, withdrawAddress.trim()) &&
+    withdrawAmountNumber > 0 &&
+    withdrawAmountNumber <= withdrawChainBalance;
 
   return (
     <ScrollView style={styles.screen} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
@@ -268,12 +323,13 @@ export function ProfileScreen({onOpenSettings}: {onOpenSettings: () => void}) {
       </TouchableOpacity>
 
       <Modal
-        visible={depositStep !== null}
+        visible={depositStep !== null || withdrawStep !== null}
         animationType="slide"
         transparent
         onRequestClose={() => {
           setDepositStep(null);
           setDepositChain(null);
+          resetWithdraw();
         }}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
@@ -375,9 +431,168 @@ export function ProfileScreen({onOpenSettings}: {onOpenSettings: () => void}) {
             )}
 
             {depositStep === 'methods' && (
-              <View style={styles.withdrawRow}>
+              <TouchableOpacity style={styles.withdrawRow} activeOpacity={0.7} onPress={() => setWithdrawStep('methods')}>
                 <ArrowUpIcon color={colors.textMuted} size={16} />
-                <Text style={styles.withdrawText}>Withdrawals — coming soon</Text>
+                <Text style={styles.withdrawText}>Withdraw</Text>
+              </TouchableOpacity>
+            )}
+
+            {withdrawStep === 'methods' && (
+              <>
+                <View style={styles.modalHeaderRow}>
+                  <Text style={styles.modalTitle}>Choose withdraw method</Text>
+                  <TouchableOpacity onPress={resetWithdraw} hitSlop={8}>
+                    <Text style={styles.modalClose}>Close</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={[styles.depositMethodRow, styles.depositMethodDisabled]}>
+                  <View style={styles.depositMethodText}>
+                    <View style={styles.depositMethodTitleRow}>
+                      <Text style={styles.depositMethodTitle}>Bank account (US only)</Text>
+                      <View style={styles.comingSoonPill}>
+                        <Text style={styles.comingSoonText}>Coming soon</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.depositMethodSubtitle}>Withdraw US dollars via ACH</Text>
+                  </View>
+                  <LandmarkIcon color={colors.textMuted} size={20} />
+                </View>
+
+                <TouchableOpacity style={styles.depositMethodRow} activeOpacity={0.7} onPress={() => setWithdrawStep('network')}>
+                  <View style={styles.depositMethodText}>
+                    <Text style={styles.depositMethodTitle}>Crypto wallet</Text>
+                    <Text style={styles.depositMethodSubtitle}>Withdraw USDC to a supported network</Text>
+                  </View>
+                  <ArrowUpIcon color={colors.textPrimary} size={20} />
+                </TouchableOpacity>
+
+                <View style={[styles.depositMethodRow, styles.depositMethodDisabled]}>
+                  <View style={styles.depositMethodText}>
+                    <View style={styles.depositMethodTitleRow}>
+                      <Text style={styles.depositMethodTitle}>Finance apps</Text>
+                      <View style={styles.comingSoonPill}>
+                        <Text style={styles.comingSoonText}>Coming soon</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.depositMethodSubtitle}>PayPal, Venmo, Robinhood, Wealthsimple, etc.</Text>
+                  </View>
+                  <GridIcon color={colors.textMuted} size={20} />
+                </View>
+              </>
+            )}
+
+            {withdrawStep === 'network' && (
+              <>
+                <View style={styles.modalHeaderRow}>
+                  <TouchableOpacity onPress={() => setWithdrawStep('methods')} hitSlop={8}>
+                    <ChevronLeftIcon color={colors.textPrimary} size={20} />
+                  </TouchableOpacity>
+                  <Text style={styles.modalTitle}>Withdraw crypto</Text>
+                  <View style={styles.modalHeaderSpacer} />
+                </View>
+                <Text style={styles.modalSubtitle}>Choose a network to withdraw USDC from.</Text>
+
+                {USDC_SUPPORTED_CHAINS.map(chainKey => (
+                  <TouchableOpacity
+                    key={chainKey}
+                    style={styles.networkRow}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      setWithdrawChain(chainKey);
+                      setWithdrawStep('form');
+                    }}>
+                    <Text style={styles.networkRowText}>{CHAIN_LABEL[chainKey]}</Text>
+                    <Text style={styles.networkRowBalance}>${formatUsd(balanceForChain(chainKey))}</Text>
+                  </TouchableOpacity>
+                ))}
+              </>
+            )}
+
+            {withdrawStep === 'form' && withdrawChain && (
+              <>
+                <View style={styles.modalHeaderRow}>
+                  <TouchableOpacity onPress={() => setWithdrawStep('network')} hitSlop={8}>
+                    <ChevronLeftIcon color={colors.textPrimary} size={20} />
+                  </TouchableOpacity>
+                  <Text style={styles.modalTitle}>{CHAIN_LABEL[withdrawChain]}</Text>
+                  <View style={styles.modalHeaderSpacer} />
+                </View>
+
+                <Text style={styles.modalSectionLabel}>Recipient address</Text>
+                <TextInput
+                  style={styles.formInput}
+                  value={withdrawAddress}
+                  onChangeText={setWithdrawAddress}
+                  placeholder={withdrawChain === 'solana' ? 'Solana address' : '0x…'}
+                  placeholderTextColor={colors.textMuted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+
+                <Text style={[styles.modalSectionLabel, styles.modalSectionLabelSpaced]}>Amount (USDC)</Text>
+                <View style={styles.amountRow}>
+                  <TextInput
+                    style={[styles.formInput, styles.amountInput]}
+                    value={withdrawAmount}
+                    onChangeText={setWithdrawAmount}
+                    placeholder="0.00"
+                    placeholderTextColor={colors.textMuted}
+                    keyboardType="decimal-pad"
+                  />
+                  <TouchableOpacity style={styles.maxButton} onPress={() => setWithdrawAmount(String(withdrawChainBalance))} activeOpacity={0.7}>
+                    <Text style={styles.maxButtonText}>Max</Text>
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.modalHint}>Available on {CHAIN_LABEL[withdrawChain]}: ${formatUsd(withdrawChainBalance)}</Text>
+
+                <Text style={styles.modalWarning}>
+                  Sends are final. Double-check the network and address — sending to the wrong network or address may
+                  permanently lose funds.
+                </Text>
+
+                <TouchableOpacity
+                  style={[styles.sendButton, !canSubmitWithdraw && styles.sendButtonDisabled]}
+                  disabled={!canSubmitWithdraw}
+                  onPress={handleConfirmWithdraw}
+                  activeOpacity={0.8}>
+                  <Text style={styles.sendButtonText}>Withdraw</Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            {withdrawStep === 'sending' && (
+              <View style={styles.resultWrap}>
+                <ActivityIndicator color={colors.textPrimary} size="large" />
+                <Text style={styles.resultText}>Sending…</Text>
+              </View>
+            )}
+
+            {withdrawStep === 'success' && (
+              <View style={styles.resultWrap}>
+                <Text style={styles.resultTitle}>Withdrawal sent</Text>
+                <Text style={styles.resultText}>{withdrawAmount} USDC on {withdrawChain ? CHAIN_LABEL[withdrawChain] : ''}</Text>
+                {withdrawTxId && (
+                  <Text style={styles.modalAddress} selectable numberOfLines={1} ellipsizeMode="middle">
+                    {withdrawTxId}
+                  </Text>
+                )}
+                <TouchableOpacity style={styles.sendButton} onPress={resetWithdraw} activeOpacity={0.8}>
+                  <Text style={styles.sendButtonText}>Done</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {withdrawStep === 'error' && (
+              <View style={styles.resultWrap}>
+                <Text style={styles.resultTitle}>Withdrawal failed</Text>
+                <Text style={styles.modalWarning}>{withdrawError}</Text>
+                <TouchableOpacity style={styles.sendButton} onPress={() => setWithdrawStep('form')} activeOpacity={0.8}>
+                  <Text style={styles.sendButtonText}>Try again</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.cancelButton} onPress={resetWithdraw}>
+                  <Text style={styles.modalClose}>Cancel</Text>
+                </TouchableOpacity>
               </View>
             )}
           </View>
@@ -616,8 +831,47 @@ function makeStyles(colors: Colors) {
       marginBottom: 8,
     },
     networkRowText: {color: colors.textPrimary, fontSize: 15, fontWeight: '700'},
+    networkRowBalance: {color: colors.textMuted, fontSize: 13, fontWeight: '600'},
 
     withdrawRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 4, paddingVertical: 10},
     withdrawText: {color: colors.textMuted, fontSize: 12.5, fontWeight: '600'},
+
+    formInput: {
+      color: colors.textPrimary,
+      fontSize: 14,
+      fontWeight: '600',
+      marginTop: 8,
+      backgroundColor: colors.panel,
+      borderWidth: 1,
+      borderColor: colors.panelBorder,
+      borderRadius: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+    },
+    amountRow: {flexDirection: 'row', alignItems: 'center', gap: 8},
+    amountInput: {flex: 1},
+    maxButton: {
+      marginTop: 8,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      borderRadius: 12,
+      backgroundColor: colors.pillBg,
+    },
+    maxButtonText: {color: colors.textPrimary, fontSize: 13, fontWeight: '700'},
+
+    sendButton: {
+      marginTop: 18,
+      backgroundColor: colors.ctaBg,
+      borderRadius: 14,
+      paddingVertical: 14,
+      alignItems: 'center',
+    },
+    sendButtonDisabled: {opacity: 0.4},
+    sendButtonText: {color: colors.ctaText, fontSize: 15, fontWeight: '700'},
+    cancelButton: {marginTop: 12, alignItems: 'center'},
+
+    resultWrap: {alignItems: 'center', paddingVertical: 20, gap: 10},
+    resultTitle: {color: colors.textPrimary, fontSize: 17, fontWeight: '800'},
+    resultText: {color: colors.textSecondary, fontSize: 13.5},
   });
 }
