@@ -7,7 +7,8 @@
 // dashboard expansion. Every RPC URL here is copied from mobile's own
 // already-verified list, not re-researched or guessed.
 
-import {http, fallback, defineChain, type Chain} from 'viem';
+import {createPublicClient, createWalletClient, http, fallback, defineChain, type Chain} from 'viem';
+import {privateKeyToAccount} from 'viem/accounts';
 import {mainnet, base, bsc, arbitrum, avalanche, abstract, hyperEvm, ink, plasma, unichain, xLayer} from 'viem/chains';
 import type {ChainKey} from './chainData';
 
@@ -86,4 +87,29 @@ export function getViemChain(chainKey: ChainKey): Chain {
     throw new Error(`No EVM chain configured for "${chainKey}" — is this a Solana call using the wrong path?`);
   }
   return chain;
+}
+
+// Reverse lookup for the fallback-DEX provider files (uniswapV3.ts and
+// siblings), which are indexed by raw numeric EVM chain id — the same
+// convention Uniswap/SushiSwap/PancakeSwap's own per-chain deployment
+// tables use — rather than this app's own ChainKey.
+export function viemChainForChainId(chainId: number): Chain | undefined {
+  return Object.values(CHAIN_KEY_TO_VIEM_CHAIN).find(chain => chain?.id === chainId);
+}
+
+export function publicClientForChainId(chainId: number) {
+  const chain = viemChainForChainId(chainId);
+  if (!chain) throw new Error(`No EVM chain configured for chain id ${chainId}.`);
+  return createPublicClient({chain, transport: transportFor(chainId)});
+}
+
+export function clientsForChainId(chainId: number, privateKeyHex: string) {
+  const chain = viemChainForChainId(chainId);
+  if (!chain) throw new Error(`No EVM chain configured for chain id ${chainId}.`);
+  const account = privateKeyToAccount(privateKeyHex as `0x${string}`);
+  const transport = transportFor(chainId);
+  return {
+    walletClient: createWalletClient({account, chain, transport}),
+    publicClient: createPublicClient({chain, transport}),
+  };
 }

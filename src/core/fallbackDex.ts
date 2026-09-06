@@ -4,23 +4,36 @@
 // has no route at all. Scoped port of mango-mobile's own
 // src/bridge/fallbackDex.js: that file tries eight providers (four
 // direct on-chain DEX routers — Uniswap V3/V4, SushiSwap V2, PancakeSwap
-// V3 — plus four generic quote-proxy aggregators). This port carries
-// over only the two generic providers, 1inch and 0x, which need no new
-// on-chain router ABI/pool-key integration at all (unlike the four
-// direct-DEX providers, each its own real body of pool-key-derivation
-// and Permit2 code — genuinely separate, larger engineering, deliberately
-// deferred rather than rushed into a path that signs real transactions).
-// 1inch/0x cover Mango Pro's actual common case (a thin/new token on a
-// major EVM chain Relay's solver network hasn't indexed yet) without
-// that added surface.
+// V3 — plus four generic quote-proxy aggregators). This now carries over
+// six of those eight: all four direct on-chain routers (their own real
+// body of pool-key-derivation and Permit2 code lives in this app's own
+// uniswapV3.ts/uniswapV4.ts/sushiswapV2.ts/pancakeswapV3.ts, ported
+// faithfully rather than re-derived) plus the two generic providers that
+// need no developer-account verification, 1inch and 0x. Still not
+// ported: OKX and KyberSwap, mobile's other two generic providers — OKX
+// needs a real account this app doesn't hold, and KyberSwap's own
+// integration there was only ever verified against public docs, not a
+// live account either; both stay a real, disclosed gap rather than
+// guessed into working.
 //
-// Quoting goes through mango-bridge.jsx's own backend proxy — same
-// reason mobile's version does: 1inch/0x both require a real developer
+// Priority order matches mobile's own (uniswapV3.js's own header
+// explains the reasoning in full): uniswap-v4 and uniswap-v3 first — no
+// backend/API-key dependency at all, so neither can fail from a
+// third-party outage or a bad key, and both are Robinhood Chain's real,
+// primary liquidity. sushiswap-v2 and pancakeswap-v3 right after, same
+// no-key shape. 1inch/0x last, since they're the ones with a real
+// third-party dependency (their own API, proxied through the backend
+// below).
+//
+// Quoting for 1inch/0x goes through mango-bridge.jsx's own backend proxy
+// — same reason mobile's version does: both require a real developer
 // API key in the request header, and a key shipped inside a decompilable
 // mobile APK isn't a secret at all. This app holds none of its own; the
 // site's server does. Same endpoint, provider names, and request/response
 // shape mobile already uses in production — not a new integration to
-// stand up, a client reusing one that already exists.
+// stand up, a client reusing one that already exists. The four on-chain
+// providers need no such proxy at all — they call public, permissionless
+// contracts directly, same as any other DeFi client.
 //
 // Approve-then-swap, not Relay's own self-executed appFees model: selling
 // anything but the chain's native asset needs a real ERC-20 approve() to
@@ -61,11 +74,16 @@ import {DEV_FEE_MAX_USD, DEV_FEE_PCT, DEV_FEE_WALLET, appFeeBps} from './fees.ts
 import {fetchWalletPrices} from './walletPrices.ts';
 import {estimateEvmNativeFeeReserve, fetchWalletNativeBalance} from '../wallet/walletRpc.ts';
 import {formatAmountForInput} from '../wallet/useAvailableBalance.ts';
+import {executeUniswapV4Swap, quoteUniswapV4, uniswapV4SupportsChain} from './uniswapV4.ts';
+import {executeUniswapV3Swap, quoteUniswapV3, uniswapV3SupportsChain} from './uniswapV3.ts';
+import {executeSushiSwapV2Swap, quoteSushiSwapV2, sushiswapV2SupportsChain} from './sushiswapV2.ts';
+import {executePancakeSwapV3Swap, quotePancakeSwapV3, pancakeswapV3SupportsChain} from './pancakeswapV3.ts';
 
 const FALLBACK_QUOTE_URL = 'https://mangoprotocol.site/api/v1/bridge/fallback-quote';
 
-export const FALLBACK_PROVIDERS = ['1inch', '0x'] as const;
+export const FALLBACK_PROVIDERS = ['uniswap-v4', 'uniswap-v3', 'sushiswap-v2', 'pancakeswap-v3', '1inch', '0x'] as const;
 export type FallbackProvider = (typeof FALLBACK_PROVIDERS)[number];
+type GenericFallbackProvider = '1inch' | '0x';
 
 type RawFallbackQuote = {
   to: string;
@@ -98,7 +116,7 @@ async function fetchFallbackQuote({
   takerAddress,
   originAmountUsd,
 }: {
-  provider: FallbackProvider;
+  provider: GenericFallbackProvider;
   chainId: number;
   sellToken: string;
   buyToken: string;
@@ -132,9 +150,28 @@ function quoteRoundsToZero(amountOut: bigint, buyDecimals: number | null | undef
   }
 }
 
-type ProviderEntry = {provider: FallbackProvider; buyAmount: bigint; quote: RawFallbackQuote};
+// The on-chain providers' own quote shape carries what execution needs
+// to replay the exact same pool/fee found at quote time, never
+// re-deriving it (and possibly landing on a different pool) at execute
+// time. sushiswap-v2 needs nothing extra — it has exactly one pool per
+// pair, no fee tier or pool-key concept at all.
+type OnchainExecData =
+  | {kind: 'uniswap-v4'; poolKey: {currency0: `0x${string}`; currency1: `0x${string}`; fee: number; tickSpacing: number; hooks: `0x${string}`}; zeroForOne: boolean}
+  | {kind: 'uniswap-v3'; fee: number}
+  | {kind: 'sushiswap-v2'}
+  | {kind: 'pancakeswap-v3'; fee: number};
 
-/** Quotes every provider in parallel and ranks by real output — never the first to answer, same real bug fix mobile's own header documents (a worse-priced provider answering first used to lock in that price). */
+type ProviderEntry = {provider: FallbackProvider; buyAmount: bigint} & ({kind: 'onchain'; execData: OnchainExecData} | {kind: 'generic'; quote: RawFallbackQuote});
+
+/**
+ * Quotes every provider in parallel and ranks by real output — never
+ * the first to answer, same real bug fix mobile's own header documents
+ * (a worse-priced provider answering first used to lock in that price).
+ * The four on-chain providers (see this file's own header for their
+ * priority-order reasoning) are queried directly against their own
+ * public contracts; the two generic ones (1inch/0x) go through the
+ * backend quote proxy.
+ */
 async function quoteAllProviders({
   chainId,
   sellToken,
@@ -152,11 +189,37 @@ async function quoteAllProviders({
   originAmountUsd?: number | null;
   buyDecimals?: number | null;
 }): Promise<{entries: ProviderEntry[]; failures: string[]}> {
-  const attempts = FALLBACK_PROVIDERS.map(async provider => {
+  const sellAmountBig = BigInt(sellAmount);
+
+  const attempts = FALLBACK_PROVIDERS.map(async (provider): Promise<ProviderEntry | null> => {
+    if (provider === 'uniswap-v4') {
+      if (!uniswapV4SupportsChain(chainId)) return null;
+      const best = await quoteUniswapV4({chainId, tokenIn: sellToken, tokenOut: buyToken, amountIn: sellAmountBig});
+      if (!best || quoteRoundsToZero(best.amountOut, buyDecimals)) return null;
+      return {provider, kind: 'onchain', buyAmount: best.amountOut, execData: {kind: 'uniswap-v4', poolKey: best.poolKey, zeroForOne: best.zeroForOne}};
+    }
+    if (provider === 'uniswap-v3') {
+      if (!uniswapV3SupportsChain(chainId)) return null;
+      const best = await quoteUniswapV3({chainId, tokenIn: sellToken, tokenOut: buyToken, amountIn: sellAmountBig});
+      if (!best || quoteRoundsToZero(best.amountOut, buyDecimals)) return null;
+      return {provider, kind: 'onchain', buyAmount: best.amountOut, execData: {kind: 'uniswap-v3', fee: best.fee}};
+    }
+    if (provider === 'sushiswap-v2') {
+      if (!sushiswapV2SupportsChain(chainId)) return null;
+      const best = await quoteSushiSwapV2({chainId, tokenIn: sellToken, tokenOut: buyToken, amountIn: sellAmountBig});
+      if (!best || quoteRoundsToZero(best.amountOut, buyDecimals)) return null;
+      return {provider, kind: 'onchain', buyAmount: best.amountOut, execData: {kind: 'sushiswap-v2'}};
+    }
+    if (provider === 'pancakeswap-v3') {
+      if (!pancakeswapV3SupportsChain(chainId)) return null;
+      const best = await quotePancakeSwapV3({chainId, tokenIn: sellToken, tokenOut: buyToken, amountIn: sellAmountBig});
+      if (!best || quoteRoundsToZero(best.amountOut, buyDecimals)) return null;
+      return {provider, kind: 'onchain', buyAmount: best.amountOut, execData: {kind: 'pancakeswap-v3', fee: best.fee}};
+    }
     const quote = await fetchFallbackQuote({provider, chainId, sellToken, buyToken, sellAmount, takerAddress, originAmountUsd});
     const buyAmount = BigInt(quote.buyAmount ?? '0');
     if (quoteRoundsToZero(buyAmount, buyDecimals)) return null;
-    return {provider, buyAmount, quote};
+    return {provider, kind: 'generic', buyAmount, quote};
   });
 
   const settled = await Promise.allSettled(attempts);
@@ -276,13 +339,22 @@ async function executeFallbackQuote({
 export type FallbackExecuteParams = FallbackRouteParams & {privateKeyHex: string};
 export type FallbackExecuteResult = {provider: FallbackProvider; hash: string; buyAmount: string; feeCollectedInline: boolean};
 
+// 1% — same default tolerance applied wherever nothing more specific is
+// available (no caller here passes a user-chosen slippage preset
+// through to the on-chain fallback path). Protects the swap from
+// landing far worse than quoted between the quote call and the swap
+// call below, without being so tight a normal price move between those
+// two calls fails it.
+const UNISWAP_SLIPPAGE_BPS = 100n;
+
 /**
- * Quotes both providers, then executes against whichever gave the best
- * price, falling through to the other only if that execution itself
- * fails. Throws once both have failed, carrying every provider's own
- * failure reason — the caller's own catch already has the ORIGINAL
- * Relay error to show instead, since this only ever runs after that one
- * failed first (see TokenTradeScreen.tsx's own call site).
+ * Quotes every provider (see quoteAllProviders above), then executes
+ * against whichever gave the best price, falling through to the
+ * next-best only if that execution itself fails. Throws once all of
+ * them have failed, carrying every provider's own failure reason — the
+ * caller's own catch already has the ORIGINAL Relay error to show
+ * instead, since this only ever runs after that one failed first (see
+ * TokenTradeScreen.tsx's own call site).
  */
 export async function tryFallbackProviders(params: FallbackExecuteParams): Promise<FallbackExecuteResult> {
   if (params.chainKey === 'solana') {
@@ -290,9 +362,48 @@ export async function tryFallbackProviders(params: FallbackExecuteParams): Promi
   }
   const chainId = chainIdFor(params.chainKey);
   const {entries, failures} = await quoteAllProviders({chainId, ...params});
+  const sellAmountBig = BigInt(params.sellAmount);
+
+  // Real bug fix, ported from mobile's own header: uniswap-v4/uniswap-v3/
+  // sushiswap-v2/pancakeswap-v3 each spend their own on-chain approval
+  // before the swap itself (v4 and pancakeswap-v3 even spend two, via
+  // their own separate Permit2 deployments). If the best-priced
+  // provider's quote succeeded and execution then throws, the approval
+  // transaction very likely already landed — falling through to the
+  // NEXT on-chain provider would spend yet another approval on top of
+  // that. Once that's happened, skip the remaining on-chain providers
+  // entirely and fall straight through to the generic aggregators
+  // (1inch/0x), which aren't part of this approval cascade.
+  let onchainApprovalSpent = false;
 
   for (const entry of entries) {
+    if (entry.kind === 'onchain' && onchainApprovalSpent) continue;
     try {
+      if (entry.kind === 'onchain') {
+        const minAmountOut = entry.buyAmount - (entry.buyAmount * UNISWAP_SLIPPAGE_BPS) / 10000n;
+        onchainApprovalSpent = true;
+        // No inline fee collection on any of these four — none has a
+        // fee mechanism built in — so all of them rely on
+        // TokenTradeScreen.tsx's own post-success
+        // sweepFallbackFeeFromNativeBalance call, same as a fallback
+        // trade landing on 0x already does.
+        if (entry.execData.kind === 'uniswap-v4') {
+          const result = await executeUniswapV4Swap({chainId, privateKeyHex: params.privateKeyHex, tokenIn: params.sellToken, tokenOut: params.buyToken, amountIn: sellAmountBig, poolKey: entry.execData.poolKey, zeroForOne: entry.execData.zeroForOne, minAmountOut});
+          return {provider: entry.provider, hash: result.hash, buyAmount: entry.buyAmount.toString(), feeCollectedInline: false};
+        }
+        if (entry.execData.kind === 'uniswap-v3') {
+          const result = await executeUniswapV3Swap({chainId, privateKeyHex: params.privateKeyHex, tokenIn: params.sellToken, tokenOut: params.buyToken, amountIn: sellAmountBig, fee: entry.execData.fee, minAmountOut});
+          return {provider: entry.provider, hash: result.hash, buyAmount: entry.buyAmount.toString(), feeCollectedInline: false};
+        }
+        if (entry.execData.kind === 'sushiswap-v2') {
+          const result = await executeSushiSwapV2Swap({chainId, privateKeyHex: params.privateKeyHex, tokenIn: params.sellToken, tokenOut: params.buyToken, amountIn: sellAmountBig, minAmountOut});
+          return {provider: entry.provider, hash: result.hash, buyAmount: entry.buyAmount.toString(), feeCollectedInline: false};
+        }
+        const result = await executePancakeSwapV3Swap({chainId, privateKeyHex: params.privateKeyHex, tokenIn: params.sellToken, tokenOut: params.buyToken, amountIn: sellAmountBig, fee: entry.execData.fee, minAmountOut});
+        return {provider: entry.provider, hash: result.hash, buyAmount: entry.buyAmount.toString(), feeCollectedInline: false};
+      }
+      // Generic provider (1inch/0x) — quote was already fetched by
+      // quoteAllProviders above, re-executed against as-is.
       const result = await executeFallbackQuote({
         chainKey: params.chainKey,
         privateKeyHex: params.privateKeyHex,

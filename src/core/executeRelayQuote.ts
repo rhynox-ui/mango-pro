@@ -31,7 +31,7 @@
 
 import {createPublicClient, createWalletClient} from 'viem';
 import {privateKeyToAccount} from 'viem/accounts';
-import {CHAIN_KEY_TO_VIEM_CHAIN, transportFor} from './chainRegistry.ts';
+import {transportFor, viemChainForChainId} from './chainRegistry.ts';
 import {assertQuoteSafeToSign} from './txIntentFirewall.ts';
 import {intentForQuote, type RelayQuote, type RelayTransactionStepItem} from './relayQuote.ts';
 import type {DerivedAccounts} from '../wallet/keys';
@@ -48,11 +48,6 @@ export type ExecuteStep = 'build' | 'signing' | 'filling' | 'done';
 
 function isSolanaShaped(item: RelayTransactionStepItem): boolean {
   return Boolean(item.data?.instructions);
-}
-
-/** Relay steps carry a numeric EIP-155 chainId, not this app's own ChainKey — resolved against the same viem Chain table chainRegistry.ts already builds. */
-function viemChainForChainId(chainId: number) {
-  return Object.values(CHAIN_KEY_TO_VIEM_CHAIN).find(chain => chain?.id === chainId);
 }
 
 async function pollRelayStatus(requestId: string, {intervalMs = 2000, timeoutMs = 10 * 60 * 1000}: {intervalMs?: number; timeoutMs?: number} = {}): Promise<void> {
