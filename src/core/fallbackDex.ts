@@ -67,7 +67,7 @@
 // estimate isn't available.
 
 import {formatUnits, parseEther} from 'viem';
-import {MAINNET_CHAIN_IDS, NATIVE_SYMBOL, type ChainKey} from './chainData.ts';
+import {MAINNET_CHAIN_IDS, NATIVE_SYMBOL, currencyAddress, type ChainKey} from './chainData.ts';
 import {DEV_FEE_MAX_USD, DEV_FEE_PCT, DEV_FEE_WALLET, appFeeBps} from './fees.ts';
 import {fetchWalletPrices} from './walletPrices.ts';
 import {estimateEvmNativeFeeReserve, fetchWalletNativeBalance} from '../wallet/walletRpc.ts';
@@ -79,10 +79,25 @@ import {executeSushiSwapV2Swap, quoteSushiSwapV2, sushiswapV2SupportsChain} from
 import {executePancakeSwapV3Swap, quotePancakeSwapV3, pancakeswapV3SupportsChain} from './pancakeswapV3.ts';
 import type {DerivedAccounts} from '../wallet/keys';
 
+// pumpfun.ts/pumpswap.ts are dynamically imported at each call site below,
+// never statically — same reason particleSigning.ts already is (see that
+// file's own call sites): both pull in '@solana/web3.js' at their own top
+// level, which this app's Jest config can't parse (its React Native
+// preset resolves @solana/web3.js's own internal @solana/codecs-numbers
+// dependency to an ESM .native.mjs build). A static import here would
+// drag that into every screen that imports fallbackDex.ts, including
+// App.test.tsx's render smoke test. sendUsdc.ts/executeRelayQuote.ts's
+// own Solana functions already avoid '@solana/web3.js' at their top level
+// for this exact reason — this follows the same established rule.
+
 const FALLBACK_QUOTE_URL = 'https://mangoprotocol.site/api/v1/bridge/fallback-quote';
+// Same RPC sendUsdc.ts and executeRelayQuote.ts already use for every
+// other direct Solana call this app makes.
+const SOLANA_RPC_URL = 'https://rpc.solanatracker.io/public';
 
 export const FALLBACK_PROVIDERS = ['uniswap-v4', 'uniswap-v3', 'sushiswap-v2', 'pancakeswap-v3', '1inch', '0x'] as const;
-export type FallbackProvider = (typeof FALLBACK_PROVIDERS)[number];
+export const SOLANA_FALLBACK_PROVIDERS = ['pump-fun', 'pump-swap'] as const;
+export type FallbackProvider = (typeof FALLBACK_PROVIDERS)[number] | (typeof SOLANA_FALLBACK_PROVIDERS)[number];
 type GenericFallbackProvider = '1inch' | '0x';
 
 type RawFallbackQuote = {
@@ -148,6 +163,71 @@ function quoteRoundsToZero(amountOut: bigint, buyDecimals: number | null | undef
   } catch {
     return false;
   }
+}
+
+// Solana same-chain fallback — pump.fun (bonding curve) and PumpSwap
+// (post-graduation AMM), covering the common case for this token-first
+// app: most Solana tokens traded here are pump.fun-origin, and Relay's
+// own Solana routing goes through Jupiter under the hood, whose route
+// construction for these newer, non-standard AMMs isn't reliable (a real,
+// live "insufficient lamports" failure on mango-mobile, unrelated to
+// actual network fees). Both are always SOL-quoted — a trade is either
+// spending SOL to buy the token (sellToken is native SOL) or spending the
+// token to receive SOL (buyToken is native SOL); a token-to-token pair
+// has no pump.fun/PumpSwap route at all and falls straight through to the
+// original Relay error, same as it already does today.
+//
+// Genuinely NOT covered: an ordinary Solana token with no pump.fun
+// presence at all — that would need a real, separate direct Jupiter
+// integration (Relay's own routing already goes through Jupiter
+// internally, so there's no existing Jupiter client anywhere in this
+// app's family to port from) — a disclosed gap, not guessed into working.
+type SolanaTradeSide = 'buy' | 'sell';
+
+function solanaTradeSideAndMint(params: {sellToken: string; buyToken: string}): {side: SolanaTradeSide; mintAddress: string} | null {
+  const nativePlaceholder = currencyAddress('solana', NATIVE_SYMBOL.solana);
+  const sellIsNative = params.sellToken === nativePlaceholder;
+  const buyIsNative = params.buyToken === nativePlaceholder;
+  if (sellIsNative === buyIsNative) return null; // both native or neither (token-to-token) — no pump.fun/PumpSwap route
+  return sellIsNative ? {side: 'buy', mintAddress: params.buyToken} : {side: 'sell', mintAddress: params.sellToken};
+}
+
+type SolanaFallbackEntry = {provider: (typeof SOLANA_FALLBACK_PROVIDERS)[number]; buyAmount: bigint};
+
+/**
+ * Quotes both Solana providers in parallel (a token can only realistically
+ * have an active bonding curve OR a graduated PumpSwap pool, never both —
+ * pumpFunCurveForMint already returns null once complete, and a PumpSwap
+ * pool only exists post-graduation — but this ranks by real output rather
+ * than assuming that, same discipline quoteAllProviders above already
+ * holds for the EVM side).
+ */
+async function quoteSolanaFallbackEntries(params: {sellToken: string; buyToken: string; sellAmount: string; takerAddress: string; buyDecimals?: number | null}): Promise<{entries: SolanaFallbackEntry[]; parsed: {side: SolanaTradeSide; mintAddress: string} | null}> {
+  const parsed = solanaTradeSideAndMint(params);
+  if (!parsed) return {entries: [], parsed: null};
+
+  const [{Connection}, pumpfun, pumpswap] = await Promise.all([import('@solana/web3.js'), import('./pumpfun.ts'), import('./pumpswap.ts')]);
+  const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
+  const amount = BigInt(params.sellAmount);
+
+  const [pumpFunResult, pumpSwapResult] = await Promise.allSettled([
+    parsed.side === 'buy'
+      ? pumpfun.quotePumpFunBuy({connection, mintAddress: parsed.mintAddress, quoteBaseUnits: amount})
+      : pumpfun.quotePumpFunSell({connection, mintAddress: parsed.mintAddress, amountBaseUnits: amount}),
+    parsed.side === 'buy'
+      ? pumpswap.quotePumpSwapBuy({connection, mintAddress: parsed.mintAddress, quoteBaseUnits: amount, userAddress: params.takerAddress})
+      : pumpswap.quotePumpSwapSell({connection, mintAddress: parsed.mintAddress, amountBaseUnits: amount, userAddress: params.takerAddress}),
+  ]);
+
+  const entries: SolanaFallbackEntry[] = [];
+  if (pumpFunResult.status === 'fulfilled' && pumpFunResult.value && !quoteRoundsToZero(pumpFunResult.value.amountOut, params.buyDecimals)) {
+    entries.push({provider: 'pump-fun', buyAmount: pumpFunResult.value.amountOut});
+  }
+  if (pumpSwapResult.status === 'fulfilled' && pumpSwapResult.value && !quoteRoundsToZero(pumpSwapResult.value.amountOut, params.buyDecimals)) {
+    entries.push({provider: 'pump-swap', buyAmount: pumpSwapResult.value.amountOut});
+  }
+  entries.sort((a, b) => (b.buyAmount > a.buyAmount ? 1 : b.buyAmount < a.buyAmount ? -1 : 0));
+  return {entries, parsed};
 }
 
 // The on-chain providers' own quote shape carries what execution needs
@@ -255,7 +335,12 @@ export type FallbackRouteParams = {
  * null means neither provider can quote this pair, never a guess.
  */
 export async function checkFallbackRoute(params: FallbackRouteParams): Promise<{provider: FallbackProvider; buyAmount: string} | null> {
-  if (params.chainKey === 'solana') return null;
+  if (params.chainKey === 'solana') {
+    const {entries} = await quoteSolanaFallbackEntries(params).catch(() => ({entries: [] as SolanaFallbackEntry[], parsed: null}));
+    if (entries.length === 0) return null;
+    const winner = entries[0];
+    return {provider: winner.provider, buyAmount: winner.buyAmount.toString()};
+  }
   const {entries} = await quoteAllProviders({chainId: chainIdFor(params.chainKey), ...params});
   if (entries.length === 0) return null;
   const winner = entries[0];
@@ -346,7 +431,34 @@ const UNISWAP_SLIPPAGE_BPS = 100n;
  */
 export async function tryFallbackProviders(params: FallbackExecuteParams): Promise<FallbackExecuteResult> {
   if (params.chainKey === 'solana') {
-    throw new Error('No fallback route support for Solana — this path only covers EVM chains.');
+    const {entries, parsed} = await quoteSolanaFallbackEntries(params);
+    if (!parsed) {
+      throw new Error('No fallback route available for this Solana pair — pump.fun/PumpSwap only cover a direct SOL<->token trade.');
+    }
+    const [{Connection}, pumpfun, pumpswap] = await Promise.all([import('@solana/web3.js'), import('./pumpfun.ts'), import('./pumpswap.ts')]);
+    const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
+    const amountBaseUnits = BigInt(params.sellAmount);
+    const failures: string[] = [];
+    for (const entry of entries) {
+      try {
+        const {signature} =
+          entry.provider === 'pump-fun'
+            ? await pumpfun.executePumpFunTrade({connection, session: params.session, mintAddress: parsed.mintAddress, side: parsed.side, amountBaseUnits})
+            : await pumpswap.executePumpSwapTrade({connection, session: params.session, mintAddress: parsed.mintAddress, side: parsed.side, amountBaseUnits});
+        // Neither provider collects Mango's fee inline (no fee mechanism
+        // built into either), and unlike the EVM fallback path this has
+        // no post-success native-balance sweep yet — a real, disclosed
+        // gap (see fallbackDex.ts's own header / the README's Known Gaps)
+        // rather than a silently-attempted call that would just throw
+        // (sweepFallbackFeeFromNativeBalance below is EVM-only, via
+        // chainIdFor). TokenTradeScreen.tsx's own call site skips it for
+        // chainKey === 'solana' specifically because of this.
+        return {provider: entry.provider, hash: signature, buyAmount: entry.buyAmount.toString(), feeCollectedInline: false};
+      } catch (err) {
+        failures.push(`${entry.provider}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    throw new Error(`No fallback route available. ${failures.join(' | ')}`);
   }
   const chainId = chainIdFor(params.chainKey);
   const {entries, failures} = await quoteAllProviders({chainId, ...params});

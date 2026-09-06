@@ -16,7 +16,7 @@ This README describes the real, current state of the app — not a plan. (`ARCHI
 **Trading**
 - Token search (`src/core/tokenSearch.ts`, DexScreener-backed) across 14 chains: Ethereum, Base, BNB Chain, Arbitrum One, Avalanche, Abstract, HyperEVM, Ink, Plasma, Unichain, X Layer, Robinhood Chain, Stable, and Solana.
 - Primary routing via [Relay](https://relay.link)'s intent-based solver network (`src/core/relayQuote.ts` + `executeRelayQuote.ts`), gated behind a ported **intent-firewall** (`txIntentFirewall.ts` / `solanaTxIntent.ts`) that re-checks the router's actual response against what was quoted before anything gets signed.
-- **Same-chain fallback routing** when Relay has no route: four direct on-chain DEX integrations with no backend dependency (Uniswap V4, Uniswap V3, SushiSwap V2, PancakeSwap V3) plus two generic aggregators (1inch, 0x) proxied through the site's backend. Quotes all of them in parallel, executes against the best price. EVM-only; Solana has no fallback path yet.
+- **Same-chain fallback routing** when Relay has no route: on EVM, four direct on-chain DEX integrations with no backend dependency (Uniswap V4, Uniswap V3, SushiSwap V2, PancakeSwap V3) plus two generic aggregators (1inch, 0x) proxied through the site's backend. On Solana, direct pump.fun (bonding curve) and PumpSwap (post-graduation AMM) integrations (`src/core/pumpfun.ts` / `pumpswap.ts`) — the common case for this token-first app, since Relay's own Solana routing goes through Jupiter under the hood and Jupiter's route construction for these newer AMMs isn't reliable. Quotes all available providers in parallel per chain, executes against the best price.
 - Live price-impact warnings, configurable slippage, and a real trade-history log (`src/wallet/txHistory.ts`).
 - Google-session (Particle) trading is wired for both the primary Relay path (EVM and Solana) and the same-chain fallback-DEX path — every trade path signs correctly regardless of onboarding method (`src/core/evmSigner.ts` is the shared local-vs-Particle signer abstraction the fallback path uses).
 
@@ -66,6 +66,7 @@ scripts/                Offline verification scripts (see `npm run verify`)
 
 ## Known gaps
 
-- Solana fallback routing (when Relay can't quote a Solana token) — no fallback exists yet, unlike EVM's four-provider chain.
+- Solana fallback routing only covers pump.fun-origin tokens (bonding curve + PumpSwap) — an ordinary Solana token with no pump.fun presence at all still has no fallback if Relay can't route it. Closing that would need a real, separate direct Jupiter integration; Relay's own routing already goes through Jupiter internally, so there's no existing Jupiter client anywhere in this app's family to port from.
+- The Solana fallback path (pump.fun/PumpSwap) doesn't collect Mango's fee — unlike the EVM fallback path's post-success native-balance sweep, there's no Solana-native equivalent built yet.
 - Particle's Solana signing wire format (Base58) is confirmed from Particle's own official sources but not yet proven end-to-end on a real device — see `src/screens/SolanaDevnetTestScreen.tsx` (Settings → "Solana signing test").
 - No fiat on-ramp; crypto wallet only (seed phrase or Google/Particle MPC).

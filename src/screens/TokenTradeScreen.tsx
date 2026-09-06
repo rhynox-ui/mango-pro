@@ -383,10 +383,11 @@ export function TokenTradeScreen({
           // aggregator (fallbackDex.ts) before giving up, same real gap
           // mobile's own DexScreen.tsx closes: a thin/new token Relay's
           // solver network hasn't indexed can still have a real quote
-          // through 1inch/0x directly. Solana has no fallback coverage
-          // here (checkFallbackRoute returns null immediately for it),
-          // so this always falls straight through to the original error
-          // on that chain.
+          // through 1inch/0x directly. On Solana this checks pump.fun's
+          // bonding curve and PumpSwap's post-graduation pool instead
+          // (fallbackDex.ts's own header explains why) — still null, and
+          // still falling through to the original error, for an ordinary
+          // Solana token with no pump.fun presence at all.
           const receiveDecimalsFallback = isBuySide ? (tokenDecimals ?? 18) : (assetDecimalsForChain(token.chainKey, NATIVE_SYMBOL[token.chainKey]) ?? 18);
           const fallbackParams: FallbackRouteParams = {
             chainKey: token.chainKey,
@@ -480,8 +481,14 @@ export function TokenTradeScreen({
         // Best-effort, fire-and-forget — the trade above already
         // succeeded, so this never affects it either way. Only needed
         // when the winning provider didn't already collect Mango's fee
-        // inline (1inch's own Integrator Fee does; 0x doesn't).
-        if (!result.feeCollectedInline) {
+        // inline (1inch's own Integrator Fee does; 0x doesn't). EVM-only:
+        // sweepFallbackFeeFromNativeBalance resolves an EVM chain id
+        // internally and would just throw (into the .catch below) for a
+        // Solana pump.fun/PumpSwap fallback trade — neither collects a
+        // fee inline either, but there's no Solana-native sweep built yet
+        // (see fallbackDex.ts's own header), so this is skipped outright
+        // rather than calling something guaranteed to fail.
+        if (!result.feeCollectedInline && token.chainKey !== 'solana') {
           sweepFallbackFeeFromNativeBalance({
             chainKey: token.chainKey,
             evmAddress: session.evm.address,

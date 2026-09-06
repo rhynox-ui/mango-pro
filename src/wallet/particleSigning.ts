@@ -97,9 +97,11 @@ export async function sendEvmTransactionViaParticle(_from: `0x${string}`, req: P
  * bytes it already builds today for the local-signing path, not a
  * Particle-specific format.
  *
- * DEVNET-PROVEN ONLY as of this writing (see
- * SolanaDevnetTestScreen.tsx) — not yet called from any real trading or
- * withdrawal path.
+ * Called from real trading (executeRelayQuote.ts, fallbackDex.ts's
+ * pump.fun/PumpSwap path) and withdrawal (sendUsdc.ts) — see this file's
+ * own header for the account owner's explicit instruction to wire this
+ * in ahead of a real-device proof. SolanaDevnetTestScreen.tsx still
+ * exists as an isolated diagnostic for this exact function.
  */
 export async function signAndSendSolanaTransactionViaParticle(serializedTransaction: Uint8Array): Promise<string> {
   const base58Transaction = bs58.encode(serializedTransaction);
