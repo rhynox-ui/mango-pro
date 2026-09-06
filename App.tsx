@@ -2,9 +2,13 @@
  * Mango Pro — mobile app entry point.
  *
  * A screen-switch state machine, same pattern as mango-mobile's own
- * App.tsx, rather than a navigation library — this app has four flat
- * tabs and one drill-in screen (the token trade screen), not nested
- * stacks deep enough yet to need one.
+ * App.tsx, rather than a navigation library. Five root tabs (Home,
+ * Search, Swap, Community, Profile); Settings is a pushed screen reached
+ * from Profile's own gear icon, not a tab — matching the reference this
+ * nav was built against. No shared app-level header bar: each screen
+ * (Home's logo+balance row, Profile's banner+icons, Settings' own back
+ * chevron, the trade screen's own chain pill) owns its own top area
+ * instead of a redundant generic title bar sitting above all of them.
  *
  * @format
  */
@@ -14,62 +18,54 @@ import {SafeAreaProvider, SafeAreaView} from 'react-native-safe-area-context';
 import {StatusBar, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {ThemeProvider, useTheme, type Colors} from './src/theme/ThemeContext';
 import {TabIcon, type TabIconName} from './src/navigation/TabIcon';
+import {HomeScreen} from './src/screens/HomeScreen';
 import {SearchScreen} from './src/screens/SearchScreen';
 import {PlaceholderScreen} from './src/screens/PlaceholderScreen';
 import {TokenTradeScreen} from './src/screens/TokenTradeScreen';
+import {ProfileScreen} from './src/screens/ProfileScreen';
+import {SettingsScreen} from './src/screens/SettingsScreen';
 
-type Tab = 'search' | 'portfolio' | 'activity' | 'settings';
-type Screen = {name: 'tabs'} | {name: 'trade'};
+type Tab = 'home' | 'search' | 'swap' | 'community' | 'profile';
+type Screen = 'tabs' | 'settings';
 
 const TABS: {key: Tab; label: string; icon: TabIconName}[] = [
+  {key: 'home', label: 'Home', icon: 'home'},
   {key: 'search', label: 'Search', icon: 'search'},
-  {key: 'portfolio', label: 'Portfolio', icon: 'wallet'},
-  {key: 'activity', label: 'Activity', icon: 'activity'},
-  {key: 'settings', label: 'Settings', icon: 'settings'},
+  {key: 'swap', label: 'Swap', icon: 'swap'},
+  {key: 'community', label: 'Community', icon: 'community'},
+  {key: 'profile', label: 'Profile', icon: 'profile'},
 ];
 
 function AppInner(): React.JSX.Element {
   const {colors, mode} = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
-  const [tab, setTab] = useState<Tab>('search');
-  const [screen, setScreen] = useState<Screen>({name: 'tabs'});
+  const [tab, setTab] = useState<Tab>('home');
+  const [screen, setScreen] = useState<Screen>('tabs');
 
-  const showingTrade = screen.name === 'trade';
+  const showingSettings = screen === 'settings';
+  const openSettings = () => setScreen('settings');
 
   return (
     <SafeAreaProvider>
       <StatusBar barStyle={mode === 'dark' ? 'light-content' : 'dark-content'} backgroundColor={colors.bg} />
       <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
-        <View style={styles.header}>
-          {showingTrade ? (
-            <TouchableOpacity onPress={() => setScreen({name: 'tabs'})} hitSlop={8}>
-              <Text style={styles.backLabel}>‹ Back</Text>
-            </TouchableOpacity>
-          ) : (
-            <View style={styles.headerSpacer} />
-          )}
-          <Text style={styles.headerTitle}>{showingTrade ? 'PEPE / Ethereum' : 'Mango Pro'}</Text>
-          <View style={styles.headerSpacer} />
-        </View>
-
         <View style={styles.body}>
-          {showingTrade ? (
-            <TokenTradeScreen onOpenSearch={() => setScreen({name: 'tabs'})} />
+          {showingSettings ? (
+            <SettingsScreen onBack={() => setScreen('tabs')} />
+          ) : tab === 'home' ? (
+            <HomeScreen />
           ) : tab === 'search' ? (
-            <SearchScreen onOpenSample={() => setScreen({name: 'trade'})} />
-          ) : tab === 'portfolio' ? (
-            <PlaceholderScreen title="Portfolio" note="One balance across every chain — build plan §37/Phase 3." />
-          ) : tab === 'activity' ? (
-            <PlaceholderScreen title="Activity" note="Transaction tracking lands with the Phase 1 core loop (build plan §7)." />
+            <SearchScreen />
+          ) : tab === 'swap' ? (
+            <TokenTradeScreen onOpenSearch={() => setTab('search')} onOpenSettings={openSettings} />
+          ) : tab === 'community' ? (
+            <PlaceholderScreen title="Community" note="Following, leaderboards, and copy-trade discovery land in a later pass." />
           ) : (
-            <PlaceholderScreen
-              title="Settings"
-              note="Wallet creation, Google sign-in, and theme live here once Phase 0's account-abstraction spike picks a provider."
-            />
+            <ProfileScreen onOpenSettings={openSettings} />
           )}
         </View>
 
-        {!showingTrade && (
+        {!showingSettings && (
           <View style={styles.tabBar}>
             {TABS.map(t => {
               const active = tab === t.key;
@@ -90,18 +86,6 @@ function AppInner(): React.JSX.Element {
 function makeStyles(colors: Colors) {
   return StyleSheet.create({
     root: {flex: 1, backgroundColor: colors.bg},
-    header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: 16,
-      paddingVertical: 14,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.panelBorder,
-    },
-    headerSpacer: {width: 48},
-    headerTitle: {fontSize: 17, fontWeight: '600', color: colors.textPrimary},
-    backLabel: {fontSize: 15, fontWeight: '600', color: colors.textPrimary, width: 48},
     body: {flex: 1},
     tabBar: {
       flexDirection: 'row',
