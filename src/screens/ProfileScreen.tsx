@@ -18,13 +18,9 @@ import {
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
-  DownloadIcon,
   GearIcon,
   GiftIcon,
-  GridIcon,
   HistoryIcon,
-  LandmarkIcon,
-  MoreHorizontalIcon,
   PencilIcon,
   PlusIcon,
   RepeatIcon,
@@ -50,18 +46,20 @@ function formatUsd(n: number): string {
 // separate Solana address for the one non-EVM chain.
 const EVM_USDC_CHAINS = USDC_SUPPORTED_CHAINS.filter(c => c !== 'solana');
 
-// Mirrors FOMO's own deposit flow shape (methods -> pick a network ->
-// show the address for that one network) — adapted to what this app can
-// actually do today: Crypto is real, Debit/Bank/Exchanges are shown
-// (same as the reference) but marked "Coming soon" rather than faked,
-// since no fiat on/off-ramp integration exists yet.
-type DepositStep = 'methods' | 'network' | 'address';
+// Adapted from FOMO's own deposit flow shape (pick a network -> show
+// the address for that one network). FOMO's reference also offers a
+// debit-card/bank/exchange-app method picker ahead of this — dropped
+// entirely rather than shown as "Coming soon": there's no fiat on/off-
+// ramp on any real roadmap here, and "Coming soon" is for things this
+// app is actually going to build, not a place to park things it isn't.
+// Crypto (this list) is the one real, capable method, so it's the
+// whole flow, not a choice among several.
+type DepositStep = 'network' | 'address';
 
-// Mirrors FOMO's own "Choose withdraw method" screen shape, same
-// real-vs-"Coming soon" split as Deposit: Crypto wallet is real (this
-// app's non-custodial sendUsdc.ts), bank/finance-app withdrawal (fiat
-// off-ramp) has no integration yet.
-type WithdrawStep = 'methods' | 'network' | 'form' | 'sending' | 'success' | 'error';
+// Same reasoning as DepositStep above, applied to FOMO's own "Choose
+// withdraw method" screen — no bank-account or finance-app row, just
+// the one real method (this app's non-custodial sendUsdc.ts).
+type WithdrawStep = 'network' | 'form' | 'sending' | 'success' | 'error';
 
 const TIME_RANGES = ['24h', '7d', '30d', 'All'] as const;
 type TimeRange = (typeof TIME_RANGES)[number];
@@ -277,11 +275,11 @@ export function ProfileScreen({onOpenSettings}: {onOpenSettings: () => void}) {
           </View>
         </View>
         <View style={styles.totalCashActions}>
-          <TouchableOpacity style={styles.squareButton} hitSlop={4} onPress={() => setDepositStep('methods')}>
+          <TouchableOpacity style={styles.squareButton} hitSlop={4} onPress={() => setDepositStep('network')}>
             <PlusIcon color={colors.textPrimary} size={16} />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.squareButton} hitSlop={4}>
-            <MoreHorizontalIcon color={colors.textPrimary} size={16} />
+          <TouchableOpacity style={styles.squareButton} hitSlop={4} onPress={() => setWithdrawStep('network')}>
+            <ArrowUpIcon color={colors.textPrimary} size={16} />
           </TouchableOpacity>
         </View>
       </View>
@@ -333,59 +331,13 @@ export function ProfileScreen({onOpenSettings}: {onOpenSettings: () => void}) {
         }}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            {depositStep === 'methods' && (
-              <>
-                <View style={styles.modalHeaderRow}>
-                  <Text style={styles.modalTitle}>Deposit with</Text>
-                  <TouchableOpacity onPress={() => setDepositStep(null)} hitSlop={8}>
-                    <Text style={styles.modalClose}>Close</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <TouchableOpacity style={styles.depositMethodRow} activeOpacity={0.7} onPress={() => setDepositStep('network')}>
-                  <View style={styles.depositMethodText}>
-                    <Text style={styles.depositMethodTitle}>Crypto</Text>
-                    <Text style={styles.depositMethodSubtitle}>Receive USDC from a crypto wallet</Text>
-                  </View>
-                  <DownloadIcon color={colors.textPrimary} size={20} />
-                </TouchableOpacity>
-
-                <View style={[styles.depositMethodRow, styles.depositMethodDisabled]}>
-                  <View style={styles.depositMethodText}>
-                    <View style={styles.depositMethodTitleRow}>
-                      <Text style={styles.depositMethodTitle}>Debit or bank</Text>
-                      <View style={styles.comingSoonPill}>
-                        <Text style={styles.comingSoonText}>Coming soon</Text>
-                      </View>
-                    </View>
-                    <Text style={styles.depositMethodSubtitle}>Deposit cash with a debit card or bank transfer</Text>
-                  </View>
-                  <LandmarkIcon color={colors.textMuted} size={20} />
-                </View>
-
-                <View style={[styles.depositMethodRow, styles.depositMethodDisabled]}>
-                  <View style={styles.depositMethodText}>
-                    <View style={styles.depositMethodTitleRow}>
-                      <Text style={styles.depositMethodTitle}>Exchanges and apps</Text>
-                      <View style={styles.comingSoonPill}>
-                        <Text style={styles.comingSoonText}>Coming soon</Text>
-                      </View>
-                    </View>
-                    <Text style={styles.depositMethodSubtitle}>Cash App, Coinbase, and similar</Text>
-                  </View>
-                  <GridIcon color={colors.textMuted} size={20} />
-                </View>
-              </>
-            )}
-
             {depositStep === 'network' && (
               <>
                 <View style={styles.modalHeaderRow}>
-                  <TouchableOpacity onPress={() => setDepositStep('methods')} hitSlop={8}>
-                    <ChevronLeftIcon color={colors.textPrimary} size={20} />
+                  <Text style={styles.modalTitle}>Deposit</Text>
+                  <TouchableOpacity onPress={() => setDepositStep(null)} hitSlop={8}>
+                    <Text style={styles.modalClose}>Close</Text>
                   </TouchableOpacity>
-                  <Text style={styles.modalTitle}>Deposit crypto</Text>
-                  <View style={styles.modalHeaderSpacer} />
                 </View>
                 <Text style={styles.modalSubtitle}>Choose a network to deposit from.</Text>
 
@@ -430,66 +382,13 @@ export function ProfileScreen({onOpenSettings}: {onOpenSettings: () => void}) {
               </>
             )}
 
-            {depositStep === 'methods' && (
-              <TouchableOpacity style={styles.withdrawRow} activeOpacity={0.7} onPress={() => setWithdrawStep('methods')}>
-                <ArrowUpIcon color={colors.textMuted} size={16} />
-                <Text style={styles.withdrawText}>Withdraw</Text>
-              </TouchableOpacity>
-            )}
-
-            {withdrawStep === 'methods' && (
-              <>
-                <View style={styles.modalHeaderRow}>
-                  <Text style={styles.modalTitle}>Choose withdraw method</Text>
-                  <TouchableOpacity onPress={resetWithdraw} hitSlop={8}>
-                    <Text style={styles.modalClose}>Close</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <View style={[styles.depositMethodRow, styles.depositMethodDisabled]}>
-                  <View style={styles.depositMethodText}>
-                    <View style={styles.depositMethodTitleRow}>
-                      <Text style={styles.depositMethodTitle}>Bank account (US only)</Text>
-                      <View style={styles.comingSoonPill}>
-                        <Text style={styles.comingSoonText}>Coming soon</Text>
-                      </View>
-                    </View>
-                    <Text style={styles.depositMethodSubtitle}>Withdraw US dollars via ACH</Text>
-                  </View>
-                  <LandmarkIcon color={colors.textMuted} size={20} />
-                </View>
-
-                <TouchableOpacity style={styles.depositMethodRow} activeOpacity={0.7} onPress={() => setWithdrawStep('network')}>
-                  <View style={styles.depositMethodText}>
-                    <Text style={styles.depositMethodTitle}>Crypto wallet</Text>
-                    <Text style={styles.depositMethodSubtitle}>Withdraw USDC to a supported network</Text>
-                  </View>
-                  <ArrowUpIcon color={colors.textPrimary} size={20} />
-                </TouchableOpacity>
-
-                <View style={[styles.depositMethodRow, styles.depositMethodDisabled]}>
-                  <View style={styles.depositMethodText}>
-                    <View style={styles.depositMethodTitleRow}>
-                      <Text style={styles.depositMethodTitle}>Finance apps</Text>
-                      <View style={styles.comingSoonPill}>
-                        <Text style={styles.comingSoonText}>Coming soon</Text>
-                      </View>
-                    </View>
-                    <Text style={styles.depositMethodSubtitle}>Cash App, Coinbase, and similar</Text>
-                  </View>
-                  <GridIcon color={colors.textMuted} size={20} />
-                </View>
-              </>
-            )}
-
             {withdrawStep === 'network' && (
               <>
                 <View style={styles.modalHeaderRow}>
-                  <TouchableOpacity onPress={() => setWithdrawStep('methods')} hitSlop={8}>
-                    <ChevronLeftIcon color={colors.textPrimary} size={20} />
+                  <Text style={styles.modalTitle}>Withdraw</Text>
+                  <TouchableOpacity onPress={resetWithdraw} hitSlop={8}>
+                    <Text style={styles.modalClose}>Close</Text>
                   </TouchableOpacity>
-                  <Text style={styles.modalTitle}>Withdraw crypto</Text>
-                  <View style={styles.modalHeaderSpacer} />
                 </View>
                 <Text style={styles.modalSubtitle}>Choose a network to withdraw USDC from.</Text>
 
@@ -802,24 +701,6 @@ function makeStyles(colors: Colors) {
     modalSubtitle: {color: colors.textSecondary, fontSize: 13, marginBottom: 16},
     modalHeaderSpacer: {width: 20},
 
-    depositMethodRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      gap: 12,
-      backgroundColor: colors.panel,
-      borderRadius: 16,
-      padding: 16,
-      marginBottom: 10,
-    },
-    depositMethodDisabled: {opacity: 0.6},
-    depositMethodText: {flex: 1, gap: 4},
-    depositMethodTitleRow: {flexDirection: 'row', alignItems: 'center', gap: 8},
-    depositMethodTitle: {color: colors.textPrimary, fontSize: 15.5, fontWeight: '700'},
-    depositMethodSubtitle: {color: colors.textMuted, fontSize: 12},
-    comingSoonPill: {backgroundColor: colors.pillBg, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2},
-    comingSoonText: {color: colors.textMuted, fontSize: 9.5, fontWeight: '700'},
-
     networkRow: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -832,9 +713,6 @@ function makeStyles(colors: Colors) {
     },
     networkRowText: {color: colors.textPrimary, fontSize: 15, fontWeight: '700'},
     networkRowBalance: {color: colors.textMuted, fontSize: 13, fontWeight: '600'},
-
-    withdrawRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 4, paddingVertical: 10},
-    withdrawText: {color: colors.textMuted, fontSize: 12.5, fontWeight: '600'},
 
     formInput: {
       color: colors.textPrimary,
