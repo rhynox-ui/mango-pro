@@ -1,61 +1,71 @@
 // src/wallet/particleAuth.ts
 //
-// Real Google login via Particle Auth's own React Native SDK
-// (@particle-network/rn-auth) — confirmed directly against that
-// package's real source (npm pack + read, same verification path this
-// app's other ports already use) and Particle's own docs
-// (developers.particle.network), not guessed from memory. Particle is
-// an MPC wallet-as-a-service: the private key is sharded between this
-// device and Particle's own infrastructure and never handed to this
-// app as a raw key at all — genuinely different from the local BIP-39
-// derivation keys.ts does for the seed-phrase path, which is why
-// loginWithGoogle below only ever returns ADDRESSES, never anything
-// shaped like a privateKey.
+// Real Google login via Particle Auth's current React Native SDK family
+// (@particle-network/rn-auth-core + its required @particle-network/rn-base
+// dependency) — verified directly against those packages' own real
+// source (npm pack + read, same verification path this app's other
+// ports already use), not Particle's older, superseded standalone
+// @particle-network/rn-auth package (v1.x — this app briefly used it
+// before this file was rewritten against the current v2 family once
+// that mismatch was caught). Particle is an MPC wallet-as-a-service:
+// the private key is sharded between this device and Particle's own
+// infrastructure and never handed to this app as a raw key at all —
+// genuinely different from the local BIP-39 derivation keys.ts does
+// for the seed-phrase path, which is why loginWithGoogle below only
+// ever returns ADDRESSES, never anything shaped like a privateKey.
+//
+// Two packages, two responsibilities, confirmed from their own source:
+// rn-base's init(chainInfo, env) sets up the project-level config and a
+// default active chain; rn-auth-core's own init() sets up its own
+// native auth module on top of that. Both real, both required — this
+// isn't a guess, rn-auth-core's package.json declares rn-base as a
+// hard dependency and its own AndroidManifest.xml carries its own
+// project_id/client_key/app_id meta-data alongside a second
+// "ac${PN_APP_ID}" callback URL scheme distinct from rn-base's
+// "pn${PN_APP_ID}" one.
 //
 // Requires real per-project config only the app owner can provide —
 // none of it is a secret this code could reasonably ship a default
 // for:
 //   - Android: PN_PROJECT_ID / PN_PROJECT_CLIENT_KEY / PN_APP_ID in
 //     android/gradle.properties (wired into AndroidManifest via
-//     manifestPlaceholders in android/app/build.gradle).
+//     manifestPlaceholders in android/app/build.gradle) — confirmed
+//     unchanged from the older package: both rn-base's and
+//     rn-auth-core's own AndroidManifest.xml reference the exact same
+//     three placeholder names.
 //   - iOS: a ParticleNetwork-Info.plist (PROJECT_UUID/PROJECT_CLIENT_KEY/
 //     PROJECT_APP_UUID) added to the Xcode target, plus a
-//     "pn<PROJECT_APP_UUID>" URL scheme in Info.plist — see this repo's
+//     "pn<PROJECT_APP_UUID>" URL scheme in Info.plist for rn-base and,
+//     by the same pn/ac split confirmed on Android above, an
+//     "ac<PROJECT_APP_UUID>" scheme for rn-auth-core — see this repo's
 //     own ios/MangoPro/ParticleNetwork-Info.plist for the placeholder
 //     and its own comment for the one manual Xcode step this code can't
 //     do from here (adding a new file to a target requires Xcode's own
 //     project-file tooling, not a hand-edited .pbxproj).
-// Until real values are filled in, login() below will fail with
+// Until real values are filled in, connect() below will fail with
 // Particle's own configuration error — a real, loud failure, not a
 // silent fake success.
-//
-// Single-active-chain model: Particle's own SDK tracks one "current"
-// chain at a time and getAddress() returns whichever chain is active,
-// not both at once — unlike this app's own DerivedAccounts, which
-// always carries both an EVM and a Solana address together. loginWithGoogle
-// below does the two-step dance (read the EVM address, switch to
-// Solana, read that address, switch back to EVM as this app's default
-// active chain) so callers still get both, same shape as a seed-phrase
-// session.
 
-import {init, login, logout, getAddress, setChainInfoAsync, LoginType, SupportAuthType, Env} from '@particle-network/rn-auth';
-import {Ethereum, Solana} from '@particle-network/chains';
+import {init as initParticleBase, Env, LoginType, SupportAuthType} from '@particle-network/rn-base';
+import {init as initAuthCore, connect, disconnect, evm, solana} from '@particle-network/rn-auth-core';
+import {Ethereum} from '@particle-network/chains';
 import type {DerivedAccounts} from './keys';
 
 let initialized = false;
 
 /**
- * Sets up the SDK with this app's default chain (Ethereum — the actual
- * active chain gets switched per-call anyway, this just needs to be a
- * real EVM chain to start from). Best-effort and idempotent — safe to
- * call from App.tsx's own startup warmup alongside warmupCrypto(),
- * never throws past itself so a missing/invalid native config doesn't
- * take down onboarding for the (unaffected) seed-phrase path.
+ * Sets up both SDK layers — rn-base's project/chain config, then
+ * rn-auth-core's own native auth module on top of it. Best-effort and
+ * idempotent — safe to call from App.tsx's own startup warmup alongside
+ * warmupCrypto(), never throws past itself so a missing/invalid native
+ * config doesn't take down onboarding for the (unaffected) seed-phrase
+ * path.
  */
 export function initParticleAuth(): void {
   if (initialized) return;
   try {
-    init(Ethereum, Env.Production);
+    initParticleBase(Ethereum, Env.Production);
+    initAuthCore();
     initialized = true;
   } catch {
     // No real project config yet, or the native module isn't linked —
@@ -69,36 +79,31 @@ export type ParticleAddresses = {evmAddress: string; solanaAddress: string};
 /**
  * Runs the real Google OAuth flow through Particle's own hosted UI,
  * then reads back both chain addresses for the now-logged-in account.
- * Throws whatever real error Particle's own SDK reports (a missing
- * project config, a cancelled login, a network failure) — never
- * swallowed here, since the caller (WelcomeScreen.tsx) needs the real
- * reason to show the user.
+ * Unlike the older single-active-chain SDK, rn-auth-core's evm/solana
+ * submodules each expose their own getAddress() directly — no chain-
+ * switching dance needed to read both. Throws whatever real error
+ * Particle's own SDK reports (a missing project config, a cancelled
+ * login, a network failure) — never swallowed here, since the caller
+ * (WelcomeScreen.tsx) needs the real reason to show the user.
  */
 export async function loginWithGoogle(): Promise<ParticleAddresses> {
   initParticleAuth();
-  const result = await login(LoginType.Google, undefined, [SupportAuthType.Google]);
-  if (!result.status) {
-    throw new Error(typeof result.data === 'string' ? result.data : 'Google sign-in failed.');
+  try {
+    await connect(LoginType.Google, undefined, [SupportAuthType.Google]);
+  } catch (err) {
+    // connect() rejects with Particle's own {code, message} shape, not
+    // an Error instance — re-throw as one so callers get a normal
+    // Error.message rather than having to know that detail themselves.
+    const message = err && typeof err === 'object' && 'message' in err ? String((err as {message: unknown}).message) : 'Google sign-in failed.';
+    throw new Error(message);
   }
-  const evmAddress = await getAddress();
-
-  const switchedToSolana = await setChainInfoAsync(Solana);
-  if (!switchedToSolana) {
-    throw new Error("Couldn't resolve a Solana address for this account.");
-  }
-  const solanaAddress = await getAddress();
-
-  // Back to EVM as the default active chain — same convention every
-  // other part of this app already assumes (session.evm is the
-  // "primary" side; e.g. ProfileScreen's own handle/address display).
-  await setChainInfoAsync(Ethereum);
-
+  const [evmAddress, solanaAddress] = await Promise.all([evm.getAddress(), solana.getAddress()]);
   return {evmAddress, solanaAddress};
 }
 
 export async function logoutParticle(): Promise<void> {
   try {
-    await logout();
+    await disconnect();
   } catch {
     // Best-effort — the local session is being torn down either way
     // (App.tsx's own handleLock clears it), a failed remote logout call

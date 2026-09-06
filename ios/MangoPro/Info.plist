@@ -24,16 +24,23 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<!-- Particle Auth (Google login) callback scheme — real value is
-	     "pn<PROJECT_APP_UUID>" from this app's own Particle dashboard
-	     project (https://dashboard.particle.network), same PROJECT_APP_UUID
-	     as ParticleNetwork-Info.plist. Placeholder until that's known. -->
+	<!-- Particle Auth (Google login) callback schemes for this app's real
+	     Particle dashboard project (https://dashboard.particle.network),
+	     PROJECT_APP_UUID 38d2cc04-c635-47ea-a41e-e3942450bd2c — same value
+	     as ParticleNetwork-Info.plist's own PROJECT_APP_UUID. Two schemes,
+	     not one: confirmed from the Android SDK's own two separate
+	     AndroidManifest.xml files (rn-base declares "pn${PN_APP_ID}" on
+	     its WebActivity, rn-auth-core separately declares
+	     "ac${PN_APP_ID}" on its own AuthCoreWebActivity) — iOS's native
+	     SDK is expected to mirror that same pn/ac split for the same two
+	     underlying modules. -->
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>pnREPLACE_WITH_PROJECT_APP_UUID</string>
+				<string>pn38d2cc04-c635-47ea-a41e-e3942450bd2c</string>
+				<string>ac38d2cc04-c635-47ea-a41e-e3942450bd2c</string>
 			</array>
 		</dict>
 	</array>

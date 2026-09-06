@@ -2,10 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
   Particle Auth (Google login) iOS config — required by the native SDK
-  underlying @particle-network/rn-auth, separate from this app's own
-  Info.plist. Real values come from this app's own project at
-  https://dashboard.particle.network — placeholders below until that
-  project exists.
+  underlying @particle-network/rn-auth-core + @particle-network/rn-base,
+  separate from this app's own Info.plist. Real values below are this
+  app's own "Mango protocol" project at
+  https://dashboard.particle.network.
 
   ONE MANUAL STEP THIS FILE CAN'T DO ON ITS OWN: this file needs to be
   added to the MangoPro Xcode target's "Target Membership" (select it in
@@ -20,10 +20,10 @@
 <plist version="1.0">
 <dict>
 	<key>PROJECT_UUID</key>
-	<string>REPLACE_WITH_PROJECT_UUID</string>
+	<string>d6cefcfb-d507-4779-b3b8-ee97dc5caefc</string>
 	<key>PROJECT_CLIENT_KEY</key>
-	<string>REPLACE_WITH_PROJECT_CLIENT_KEY</string>
+	<string>c5QK0fFFlXbvAoksqsapyUWJ2YH11NIck7coE8OH</string>
 	<key>PROJECT_APP_UUID</key>
-	<string>REPLACE_WITH_PROJECT_APP_UUID</string>
+	<string>38d2cc04-c635-47ea-a41e-e3942450bd2c</string>
 </dict>
 </plist>
