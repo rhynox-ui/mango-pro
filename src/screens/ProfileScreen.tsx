@@ -475,7 +475,7 @@ export function ProfileScreen({onOpenSettings}: {onOpenSettings: () => void}) {
                         <Text style={styles.comingSoonText}>Coming soon</Text>
                       </View>
                     </View>
-                    <Text style={styles.depositMethodSubtitle}>PayPal, Venmo, Robinhood, Wealthsimple, etc.</Text>
+                    <Text style={styles.depositMethodSubtitle}>Cash App, Coinbase, and similar</Text>
                   </View>
                   <GridIcon color={colors.textMuted} size={20} />
                 </View>
