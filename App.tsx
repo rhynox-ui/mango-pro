@@ -19,13 +19,15 @@
  * @format
  */
 
-import React, {useEffect, useMemo, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {SafeAreaProvider, SafeAreaView} from 'react-native-safe-area-context';
-import {ActivityIndicator, StatusBar, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
+import {ActivityIndicator, AppState, StatusBar, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {ThemeProvider, useTheme, type Colors} from './src/theme/ThemeContext';
 import {SessionProvider, useSession} from './src/wallet/SessionContext';
 import {deriveAccounts, warmupCrypto} from './src/wallet/keys';
 import {createVault, hasVault, loadVault, unlockVaultMnemonic} from './src/wallet/vault';
+import {AutoLockContext} from './src/settings/AutoLockContext';
+import {DEFAULT_AUTO_LOCK_MS, loadAutoLockMs, setAutoLockMs as persistAutoLockMs} from './src/settings/autoLockPrefs';
 import {WelcomeScreen} from './src/onboarding/WelcomeScreen';
 import {CreateWalletFlow} from './src/onboarding/CreateWalletFlow';
 import {ImportWalletFlow} from './src/onboarding/ImportWalletFlow';
@@ -62,6 +64,56 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
     hasVault().then(exists => setAuthState(exists ? 'locked' : 'welcome'));
     return () => clearTimeout(timer);
   }, []);
+
+  // Real gap this closes: unlocking derived a live private key into
+  // session state with nothing that ever cleared it again short of a
+  // full app kill — no lock-on-background at all, unlike mango-mobile's
+  // own AppState-driven timer. autoLockMsRef mirrors autoLockMs state
+  // (kept for the Security screen's own display) so the AppState
+  // listener below always reads the current setting without needing to
+  // resubscribe every time it changes.
+  const [autoLockMs, setAutoLockMsState] = useState(DEFAULT_AUTO_LOCK_MS);
+  const autoLockMsRef = useRef(DEFAULT_AUTO_LOCK_MS);
+
+  useEffect(() => {
+    loadAutoLockMs().then(ms => {
+      autoLockMsRef.current = ms;
+      setAutoLockMsState(ms);
+    });
+  }, []);
+
+  function handleAutoLockChange(ms: number) {
+    autoLockMsRef.current = ms;
+    setAutoLockMsState(ms);
+    persistAutoLockMs(ms);
+  }
+
+  const handleLock = useCallback(() => {
+    setSession(null);
+    setAuthState('locked');
+  }, [setSession]);
+
+  // Same shape as mango-mobile's own App.tsx: record when the app left
+  // 'active', and on returning to 'active' lock only if enough time
+  // passed AND the app was actually unlocked when it backgrounded (no
+  // point locking an already-locked or still-onboarding screen).
+  const backgroundedAt = useRef<number | null>(null);
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', nextState => {
+      if (nextState === 'active') {
+        if (backgroundedAt.current !== null) {
+          const elapsed = Date.now() - backgroundedAt.current;
+          backgroundedAt.current = null;
+          if (elapsed >= autoLockMsRef.current && authState === 'unlocked') {
+            handleLock();
+          }
+        }
+      } else if (backgroundedAt.current === null) {
+        backgroundedAt.current = Date.now();
+      }
+    });
+    return () => subscription.remove();
+  }, [authState, handleLock]);
 
   async function finishOnboarding(mnemonic: string, password: string) {
     const accounts = deriveAccounts(mnemonic);
@@ -103,7 +155,7 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
   if (authState === 'locked') {
     return <LockedScreen onUnlock={unlock} />;
   }
-  return <>{children}</>;
+  return <AutoLockContext.Provider value={{autoLockMs, setAutoLockMs: handleAutoLockChange}}>{children}</AutoLockContext.Provider>;
 }
 
 function AppInner(): React.JSX.Element {

@@ -9,6 +9,7 @@
 // actual channels are X and Telegram, not Discord), so they open for
 // real rather than sitting as a placeholder for no reason.
 
+import {useState} from 'react';
 import {Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {
   BellIcon,
@@ -28,6 +29,7 @@ import {
   type IconComponent,
 } from '../components/icons';
 import {useTheme, type Colors} from '../theme/ThemeContext';
+import {SecurityScreen} from './SecurityScreen';
 
 // Same real URLs as mango-mobile's own src/settings/AboutModal.tsx —
 // one Mango, same channels, not a separate app's accounts.
@@ -42,24 +44,34 @@ type Row = {
   onPress?: () => void;
 };
 
-const ROWS: Row[] = [
-  {key: 'profile', label: 'Profile and Account', Icon: UserIcon},
-  {key: 'appearance', label: 'Appearance and Haptics', Icon: ContrastIcon},
-  {key: 'language', label: 'Language', Icon: GlobeIcon, value: 'System'},
-  {key: 'notifications', label: 'Notifications', Icon: BellIcon},
-  {key: 'security', label: 'Security', Icon: ShieldCheckIcon},
-  {key: 'deposit', label: 'Deposit and Withdraw', Icon: LandmarkIcon},
-  {key: 'legal', label: 'Legal and Privacy', Icon: ScaleIcon},
-  {key: 'taxes', label: 'Taxes', Icon: FileTextIcon},
-  {key: 'help', label: 'Help and Support', Icon: HelpCircleIcon},
-  {key: 'docs', label: 'Documentation', Icon: BookOpenIcon},
-  {key: 'x', label: 'X', Icon: XIcon, onPress: () => Linking.openURL(X_URL)},
-  {key: 'telegram', label: 'Telegram', Icon: TelegramIcon, onPress: () => Linking.openURL(TELEGRAM_URL)},
-];
-
 export function SettingsScreen({onBack}: {onBack: () => void}) {
   const {colors} = useTheme();
   const styles = makeStyles(colors);
+  const [showSecurity, setShowSecurity] = useState(false);
+
+  // Security is the one row with a real destination today — see
+  // SecurityScreen.tsx's own header for what it opens onto (the
+  // auto-lock preference, the one real setting to expose so far).
+  // Every other row stays the honest no-op placeholder this file's own
+  // header already explains.
+  const ROWS: Row[] = [
+    {key: 'profile', label: 'Profile and Account', Icon: UserIcon},
+    {key: 'appearance', label: 'Appearance and Haptics', Icon: ContrastIcon},
+    {key: 'language', label: 'Language', Icon: GlobeIcon, value: 'System'},
+    {key: 'notifications', label: 'Notifications', Icon: BellIcon},
+    {key: 'security', label: 'Security', Icon: ShieldCheckIcon, onPress: () => setShowSecurity(true)},
+    {key: 'deposit', label: 'Deposit and Withdraw', Icon: LandmarkIcon},
+    {key: 'legal', label: 'Legal and Privacy', Icon: ScaleIcon},
+    {key: 'taxes', label: 'Taxes', Icon: FileTextIcon},
+    {key: 'help', label: 'Help and Support', Icon: HelpCircleIcon},
+    {key: 'docs', label: 'Documentation', Icon: BookOpenIcon},
+    {key: 'x', label: 'X', Icon: XIcon, onPress: () => Linking.openURL(X_URL)},
+    {key: 'telegram', label: 'Telegram', Icon: TelegramIcon, onPress: () => Linking.openURL(TELEGRAM_URL)},
+  ];
+
+  if (showSecurity) {
+    return <SecurityScreen onBack={() => setShowSecurity(false)} />;
+  }
 
   return (
     <View style={styles.screen}>
