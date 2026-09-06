@@ -66,18 +66,18 @@
 // it, and silently does nothing if the price, balance, or gas-reserve
 // estimate isn't available.
 
-import {createPublicClient, createWalletClient, formatUnits, parseEther} from 'viem';
-import {privateKeyToAccount} from 'viem/accounts';
-import {getViemChain, transportFor} from './chainRegistry.ts';
+import {formatUnits, parseEther} from 'viem';
 import {MAINNET_CHAIN_IDS, NATIVE_SYMBOL, type ChainKey} from './chainData.ts';
 import {DEV_FEE_MAX_USD, DEV_FEE_PCT, DEV_FEE_WALLET, appFeeBps} from './fees.ts';
 import {fetchWalletPrices} from './walletPrices.ts';
 import {estimateEvmNativeFeeReserve, fetchWalletNativeBalance} from '../wallet/walletRpc.ts';
 import {formatAmountForInput} from '../wallet/useAvailableBalance.ts';
+import {signerAndPublicClientForChain, writeContractAs, sendTransactionAs} from './evmSigner.ts';
 import {executeUniswapV4Swap, quoteUniswapV4, uniswapV4SupportsChain} from './uniswapV4.ts';
 import {executeUniswapV3Swap, quoteUniswapV3, uniswapV3SupportsChain} from './uniswapV3.ts';
 import {executeSushiSwapV2Swap, quoteSushiSwapV2, sushiswapV2SupportsChain} from './sushiswapV2.ts';
 import {executePancakeSwapV3Swap, quotePancakeSwapV3, pancakeswapV3SupportsChain} from './pancakeswapV3.ts';
+import type {DerivedAccounts} from '../wallet/keys';
 
 const FALLBACK_QUOTE_URL = 'https://mangoprotocol.site/api/v1/bridge/fallback-quote';
 
@@ -262,43 +262,31 @@ export async function checkFallbackRoute(params: FallbackRouteParams): Promise<{
   return {provider: winner.provider, buyAmount: winner.buyAmount.toString()};
 }
 
-function clientsForChain(chainKey: ChainKey, privateKeyHex: string) {
-  const chain = getViemChain(chainKey);
-  const transport = transportFor(chain.id);
-  const account = privateKeyToAccount(privateKeyHex as `0x${string}`);
-  return {
-    walletClient: createWalletClient({account, chain, transport}),
-    publicClient: createPublicClient({chain, transport}),
-  };
-}
-
 async function executeFallbackQuote({
   chainKey,
-  privateKeyHex,
+  session,
   sellTokenAddress,
   sellAmount,
   quote,
 }: {
   chainKey: ChainKey;
-  privateKeyHex: string;
+  session: DerivedAccounts;
   sellTokenAddress: string;
   sellAmount: string;
   quote: RawFallbackQuote;
 }): Promise<{hash: string}> {
-  const {walletClient, publicClient} = clientsForChain(chainKey, privateKeyHex);
-  const account = walletClient.account;
-  if (!account) throw new Error('No signer account on this wallet client.');
+  const {signer, publicClient} = signerAndPublicClientForChain(chainIdFor(chainKey), session);
 
   if (quote.allowanceTarget) {
     const currentAllowance = (await publicClient.readContract({
       address: sellTokenAddress as `0x${string}`,
       abi: ERC20_ALLOWANCE_ABI,
       functionName: 'allowance',
-      args: [account.address, quote.allowanceTarget as `0x${string}`],
+      args: [signer.address, quote.allowanceTarget as `0x${string}`],
     })) as bigint;
     const requiredAmount = BigInt(quote.sellAmount ?? sellAmount ?? '0');
     if (currentAllowance < requiredAmount) {
-      const approveHash = await walletClient.writeContract({
+      const approveHash = await writeContractAs(signer, {
         address: sellTokenAddress as `0x${string}`,
         abi: ERC20_ALLOWANCE_ABI,
         functionName: 'approve',
@@ -321,9 +309,9 @@ async function executeFallbackQuote({
     }
   }
 
-  const tx = {account, to: quote.to as `0x${string}`, data: quote.data as `0x${string}`, value};
+  const tx = {to: quote.to as `0x${string}`, data: quote.data as `0x${string}`, value};
   try {
-    await publicClient.call(tx);
+    await publicClient.call({...tx, account: signer.address});
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message && !/timeout|network|fetch|429|403/i.test(message)) {
@@ -331,12 +319,12 @@ async function executeFallbackQuote({
     }
   }
 
-  const swapHash = await walletClient.sendTransaction({...tx, ...(quote.gas ? {gas: BigInt(quote.gas)} : {})});
+  const swapHash = await sendTransactionAs(signer, {...tx, ...(quote.gas ? {gas: BigInt(quote.gas)} : {})});
   await publicClient.waitForTransactionReceipt({hash: swapHash});
   return {hash: swapHash};
 }
 
-export type FallbackExecuteParams = FallbackRouteParams & {privateKeyHex: string};
+export type FallbackExecuteParams = FallbackRouteParams & {session: DerivedAccounts};
 export type FallbackExecuteResult = {provider: FallbackProvider; hash: string; buyAmount: string; feeCollectedInline: boolean};
 
 // 1% — same default tolerance applied wherever nothing more specific is
@@ -388,25 +376,25 @@ export async function tryFallbackProviders(params: FallbackExecuteParams): Promi
         // sweepFallbackFeeFromNativeBalance call, same as a fallback
         // trade landing on 0x already does.
         if (entry.execData.kind === 'uniswap-v4') {
-          const result = await executeUniswapV4Swap({chainId, privateKeyHex: params.privateKeyHex, tokenIn: params.sellToken, tokenOut: params.buyToken, amountIn: sellAmountBig, poolKey: entry.execData.poolKey, zeroForOne: entry.execData.zeroForOne, minAmountOut});
+          const result = await executeUniswapV4Swap({chainId, session: params.session, tokenIn: params.sellToken, tokenOut: params.buyToken, amountIn: sellAmountBig, poolKey: entry.execData.poolKey, zeroForOne: entry.execData.zeroForOne, minAmountOut});
           return {provider: entry.provider, hash: result.hash, buyAmount: entry.buyAmount.toString(), feeCollectedInline: false};
         }
         if (entry.execData.kind === 'uniswap-v3') {
-          const result = await executeUniswapV3Swap({chainId, privateKeyHex: params.privateKeyHex, tokenIn: params.sellToken, tokenOut: params.buyToken, amountIn: sellAmountBig, fee: entry.execData.fee, minAmountOut});
+          const result = await executeUniswapV3Swap({chainId, session: params.session, tokenIn: params.sellToken, tokenOut: params.buyToken, amountIn: sellAmountBig, fee: entry.execData.fee, minAmountOut});
           return {provider: entry.provider, hash: result.hash, buyAmount: entry.buyAmount.toString(), feeCollectedInline: false};
         }
         if (entry.execData.kind === 'sushiswap-v2') {
-          const result = await executeSushiSwapV2Swap({chainId, privateKeyHex: params.privateKeyHex, tokenIn: params.sellToken, tokenOut: params.buyToken, amountIn: sellAmountBig, minAmountOut});
+          const result = await executeSushiSwapV2Swap({chainId, session: params.session, tokenIn: params.sellToken, tokenOut: params.buyToken, amountIn: sellAmountBig, minAmountOut});
           return {provider: entry.provider, hash: result.hash, buyAmount: entry.buyAmount.toString(), feeCollectedInline: false};
         }
-        const result = await executePancakeSwapV3Swap({chainId, privateKeyHex: params.privateKeyHex, tokenIn: params.sellToken, tokenOut: params.buyToken, amountIn: sellAmountBig, fee: entry.execData.fee, minAmountOut});
+        const result = await executePancakeSwapV3Swap({chainId, session: params.session, tokenIn: params.sellToken, tokenOut: params.buyToken, amountIn: sellAmountBig, fee: entry.execData.fee, minAmountOut});
         return {provider: entry.provider, hash: result.hash, buyAmount: entry.buyAmount.toString(), feeCollectedInline: false};
       }
       // Generic provider (1inch/0x) — quote was already fetched by
       // quoteAllProviders above, re-executed against as-is.
       const result = await executeFallbackQuote({
         chainKey: params.chainKey,
-        privateKeyHex: params.privateKeyHex,
+        session: params.session,
         sellTokenAddress: params.sellToken,
         sellAmount: params.sellAmount,
         quote: {...entry.quote, sellAmount: params.sellAmount},
@@ -440,12 +428,12 @@ const MIN_FALLBACK_FEE_USD = 0.05;
 export async function sweepFallbackFeeFromNativeBalance({
   chainKey,
   evmAddress,
-  privateKeyHex,
+  session,
   originAmountUsd,
 }: {
   chainKey: ChainKey;
   evmAddress: string;
-  privateKeyHex: string;
+  session: DerivedAccounts;
   originAmountUsd: number | undefined | null;
 }): Promise<void> {
   if (!(originAmountUsd && originAmountUsd > 0)) return;
@@ -469,9 +457,7 @@ export async function sweepFallbackFeeFromNativeBalance({
   const feeToSend = Math.min(targetFeeNative, spareNative);
   if (!(feeToSend > 0)) return;
 
-  const {walletClient, publicClient} = clientsForChain(chainKey, privateKeyHex);
-  const account = walletClient.account;
-  if (!account) return;
-  const hash = await walletClient.sendTransaction({account, to: DEV_FEE_WALLET as `0x${string}`, value: parseEther(formatAmountForInput(feeToSend))});
+  const {signer, publicClient} = signerAndPublicClientForChain(chainIdFor(chainKey), session);
+  const hash = await sendTransactionAs(signer, {to: DEV_FEE_WALLET as `0x${string}`, value: parseEther(formatAmountForInput(feeToSend))});
   await publicClient.waitForTransactionReceipt({hash});
 }

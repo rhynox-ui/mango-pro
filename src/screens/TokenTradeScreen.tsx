@@ -449,19 +449,6 @@ export function TokenTradeScreen({
     const quoteToExecute = rawQuoteRef.current;
     const fallbackParams = fallbackParamsRef.current;
     if ((!quoteToExecute && !fallbackParams) || !session) return;
-    // Google-login sessions sign real Relay-quoted trades (both EVM and
-    // Solana) through Particle's own MPC path (executeRelayQuote.ts).
-    // The one path still not covered: the same-chain fallback-DEX route
-    // (fallbackDex.ts's own execute functions still take a raw
-    // privateKeyHex directly, not yet wired to Particle) — refused here
-    // rather than letting that call fail confusingly. canTrade/pillHint
-    // already keep the pill disabled for this case; this is the same
-    // guarantee for anyone who reaches handleTrade another way.
-    if (session.authMethod === 'google' && !quoteToExecute) {
-      setExecuteError("This route needs a fallback path that isn't available yet for Google sign-in accounts — this is coming in a future update.");
-      setExecuteState('error');
-      return;
-    }
     setExecuteError(null);
     setExecuteWarnings([]);
     setExecuteTxHashes([]);
@@ -481,7 +468,7 @@ export function TokenTradeScreen({
         // preview amount — same as the Relay path only ever executes the
         // exact quote it already locked in, never a display value.
         setExecuteState('signing');
-        const result = await tryFallbackProviders({...fallbackParams!, privateKeyHex: session.evm.privateKey});
+        const result = await tryFallbackProviders({...fallbackParams!, session});
         setExecuteState('done');
         txHashes = [result.hash];
         warnings = [];
@@ -498,7 +485,7 @@ export function TokenTradeScreen({
           sweepFallbackFeeFromNativeBalance({
             chainKey: token.chainKey,
             evmAddress: session.evm.address,
-            privateKeyHex: session.evm.privateKey,
+            session,
             originAmountUsd: fallbackParams!.originAmountUsd,
           }).catch(() => {});
         }
@@ -543,12 +530,7 @@ export function TokenTradeScreen({
     }
   }
 
-  // A Google session can trade for real now on any chain — but only a
-  // Relay-quoted route (rawQuoteRef), not the same-chain fallback-only
-  // case; see handleTrade's own header comment for why that one stays
-  // refused.
-  const googleSessionCanTrade = session?.authMethod !== 'google' || Boolean(rawQuoteRef.current);
-  const canTrade = (Boolean(rawQuoteRef.current) || Boolean(fallbackParamsRef.current)) && Boolean(session) && googleSessionCanTrade && !insufficientBalance && (executeState === 'idle' || executeState === 'error');
+  const canTrade = (Boolean(rawQuoteRef.current) || Boolean(fallbackParamsRef.current)) && Boolean(session) && !insufficientBalance && (executeState === 'idle' || executeState === 'error');
   const isExecuting = executeState !== 'idle' && executeState !== 'error' && executeState !== 'success';
 
   // Same real bug both DexScreen.tsx's own pillHint and the site's own
@@ -566,8 +548,6 @@ export function TokenTradeScreen({
   // never duplicates it.
   const pillHint = !session
     ? 'Unlock your wallet to trade'
-    : session.authMethod === 'google' && !googleSessionCanTrade
-    ? "This route isn't available yet for Google sign-in accounts"
     : insufficientBalance
       ? null
       : amtNum <= 0

@@ -31,8 +31,10 @@
 // the swap itself, so it's worth getting right rather than guessing.
 
 import {getAddress, encodeAbiParameters, encodePacked} from 'viem';
-import {clientsForChainId, publicClientForChainId} from './chainRegistry.ts';
+import {publicClientForChainId} from './chainRegistry.ts';
+import {signerAndPublicClientForChain, writeContractAs} from './evmSigner.ts';
 import {NATIVE_PLACEHOLDER, isNative, UNISWAP_V3_ADDRESSES} from './uniswapV3.ts';
+import type {DerivedAccounts} from '../wallet/keys';
 
 // Universal Router (V2.1.1) per chain — verified source in this file's
 // own header. Reuses uniswapV3.ts's own chain table for
@@ -246,7 +248,7 @@ function encodeV4SwapActions({poolKey, zeroForOne, amountIn, minAmountOut, curre
  */
 export async function executeUniswapV4Swap({
   chainId,
-  privateKeyHex,
+  session,
   tokenIn,
   amountIn,
   poolKey,
@@ -254,7 +256,7 @@ export async function executeUniswapV4Swap({
   minAmountOut,
 }: {
   chainId: number;
-  privateKeyHex: string;
+  session: DerivedAccounts;
   tokenIn: string;
   tokenOut: string;
   amountIn: bigint;
@@ -264,29 +266,26 @@ export async function executeUniswapV4Swap({
 }): Promise<{hash: string}> {
   const routerAddress = UNIVERSAL_ROUTER_ADDRESSES[chainId];
   if (!routerAddress) throw new Error(`Uniswap V4 isn't configured for chain ${chainId}.`);
-  const {walletClient, publicClient} = clientsForChainId(chainId, privateKeyHex);
-  const account = walletClient.account;
-  if (!account) throw new Error('No signer account on this wallet client.');
+  const {signer, publicClient} = signerAndPublicClientForChain(chainId, session);
   const tokenInIsNative = isNative(tokenIn);
   const currencyIn = zeroForOne ? poolKey.currency0 : poolKey.currency1;
   const currencyOut = zeroForOne ? poolKey.currency1 : poolKey.currency0;
 
   if (!tokenInIsNative) {
-    const erc20Allowance = (await publicClient.readContract({address: currencyIn, abi: ERC20_ALLOWANCE_ABI, functionName: 'allowance', args: [account.address, PERMIT2_ADDRESS]})) as bigint;
+    const erc20Allowance = (await publicClient.readContract({address: currencyIn, abi: ERC20_ALLOWANCE_ABI, functionName: 'allowance', args: [signer.address, PERMIT2_ADDRESS]})) as bigint;
     if (erc20Allowance < amountIn) {
-      const approveHash = await walletClient.writeContract({account, address: currencyIn, abi: ERC20_ALLOWANCE_ABI, functionName: 'approve', args: [PERMIT2_ADDRESS, MAX_UINT160]});
+      const approveHash = await writeContractAs(signer, {address: currencyIn, abi: ERC20_ALLOWANCE_ABI, functionName: 'approve', args: [PERMIT2_ADDRESS, MAX_UINT160]});
       await publicClient.waitForTransactionReceipt({hash: approveHash});
     }
 
-    const [permit2Amount, permit2Expiration] = (await publicClient.readContract({address: PERMIT2_ADDRESS, abi: PERMIT2_ALLOWANCE_ABI, functionName: 'allowance', args: [account.address, currencyIn, routerAddress]})) as [
+    const [permit2Amount, permit2Expiration] = (await publicClient.readContract({address: PERMIT2_ADDRESS, abi: PERMIT2_ALLOWANCE_ABI, functionName: 'allowance', args: [signer.address, currencyIn, routerAddress]})) as [
       bigint,
       number,
       number,
     ];
     const nowSeconds = Math.floor(Date.now() / 1000);
     if (permit2Amount < amountIn || permit2Expiration <= nowSeconds) {
-      const permit2ApproveHash = await walletClient.writeContract({
-        account,
+      const permit2ApproveHash = await writeContractAs(signer, {
         address: PERMIT2_ADDRESS,
         abi: PERMIT2_ALLOWANCE_ABI,
         functionName: 'approve',
@@ -303,8 +302,7 @@ export async function executeUniswapV4Swap({
   const commands = encodePacked(['uint8'], [16]);
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 20 * 60);
 
-  const swapHash = await walletClient.writeContract({
-    account,
+  const swapHash = await writeContractAs(signer, {
     address: routerAddress,
     abi: UNIVERSAL_ROUTER_ABI,
     functionName: 'execute',

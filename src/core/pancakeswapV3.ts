@@ -19,8 +19,10 @@
 // the canonical address applies.
 
 import {encodeAbiParameters, encodePacked} from 'viem';
-import {clientsForChainId, publicClientForChainId} from './chainRegistry.ts';
+import {publicClientForChainId} from './chainRegistry.ts';
+import {signerAndPublicClientForChain, writeContractAs} from './evmSigner.ts';
 import {isNative} from './uniswapV3.ts';
+import type {DerivedAccounts} from '../wallet/keys';
 
 export const PANCAKESWAP_V3_ADDRESSES: Record<number, {factory: string; quoter: `0x${string}`; universalRouter: `0x${string}`; permit2: `0x${string}`; wrappedNative: `0x${string}`}> = {
   4663: {
@@ -134,7 +136,7 @@ export async function quotePancakeSwapV3({chainId, tokenIn, tokenOut, amountIn}:
  */
 export async function executePancakeSwapV3Swap({
   chainId,
-  privateKeyHex,
+  session,
   tokenIn,
   tokenOut,
   amountIn,
@@ -142,7 +144,7 @@ export async function executePancakeSwapV3Swap({
   minAmountOut,
 }: {
   chainId: number;
-  privateKeyHex: string;
+  session: DerivedAccounts;
   tokenIn: string;
   tokenOut: string;
   amountIn: bigint;
@@ -151,17 +153,15 @@ export async function executePancakeSwapV3Swap({
 }): Promise<{hash: string}> {
   const addresses = PANCAKESWAP_V3_ADDRESSES[chainId];
   if (!addresses) throw new Error(`PancakeSwap V3 isn't configured for chain ${chainId}.`);
-  const {walletClient, publicClient} = clientsForChainId(chainId, privateKeyHex);
-  const account = walletClient.account;
-  if (!account) throw new Error('No signer account on this wallet client.');
+  const {signer, publicClient} = signerAndPublicClientForChain(chainId, session);
   const tokenInIsNative = isNative(tokenIn);
   const poolTokenIn = resolvedPoolAddress(chainId, tokenIn);
   const poolTokenOut = resolvedPoolAddress(chainId, tokenOut);
 
   if (!tokenInIsNative) {
-    const erc20Allowance = (await publicClient.readContract({address: poolTokenIn, abi: ERC20_ALLOWANCE_ABI, functionName: 'allowance', args: [account.address, addresses.permit2]})) as bigint;
+    const erc20Allowance = (await publicClient.readContract({address: poolTokenIn, abi: ERC20_ALLOWANCE_ABI, functionName: 'allowance', args: [signer.address, addresses.permit2]})) as bigint;
     if (erc20Allowance < amountIn) {
-      const approveHash = await walletClient.writeContract({account, address: poolTokenIn, abi: ERC20_ALLOWANCE_ABI, functionName: 'approve', args: [addresses.permit2, MAX_UINT160]});
+      const approveHash = await writeContractAs(signer, {address: poolTokenIn, abi: ERC20_ALLOWANCE_ABI, functionName: 'approve', args: [addresses.permit2, MAX_UINT160]});
       await publicClient.waitForTransactionReceipt({hash: approveHash});
     }
 
@@ -169,12 +169,11 @@ export async function executePancakeSwapV3Swap({
       address: addresses.permit2,
       abi: PERMIT2_ALLOWANCE_ABI,
       functionName: 'allowance',
-      args: [account.address, poolTokenIn, addresses.universalRouter],
+      args: [signer.address, poolTokenIn, addresses.universalRouter],
     })) as [bigint, number, number];
     const nowSeconds = Math.floor(Date.now() / 1000);
     if (permit2Amount < amountIn || permit2Expiration <= nowSeconds) {
-      const permit2ApproveHash = await walletClient.writeContract({
-        account,
+      const permit2ApproveHash = await writeContractAs(signer, {
         address: addresses.permit2,
         abi: PERMIT2_ALLOWANCE_ABI,
         functionName: 'approve',
@@ -193,7 +192,7 @@ export async function executePancakeSwapV3Swap({
   // against the V4 case.
   const swapInput = encodeAbiParameters(
     [{name: 'recipient', type: 'address'}, {name: 'amountIn', type: 'uint256'}, {name: 'amountOutMin', type: 'uint256'}, {name: 'path', type: 'bytes'}, {name: 'payerIsUser', type: 'bool'}],
-    [account.address, amountIn, minAmountOut, path, !tokenInIsNative],
+    [signer.address, amountIn, minAmountOut, path, !tokenInIsNative],
   );
 
   let commands: `0x${string}`;
@@ -216,8 +215,7 @@ export async function executePancakeSwapV3Swap({
   }
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 20 * 60);
 
-  const swapHash = await walletClient.writeContract({
-    account,
+  const swapHash = await writeContractAs(signer, {
     address: addresses.universalRouter,
     abi: UNIVERSAL_ROUTER_ABI,
     functionName: 'execute',

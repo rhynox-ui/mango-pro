@@ -29,8 +29,10 @@
 // silently assumed to cover every pair.
 
 import {getAddress} from 'viem';
-import {clientsForChainId, publicClientForChainId} from './chainRegistry.ts';
+import {publicClientForChainId} from './chainRegistry.ts';
+import {signerAndPublicClientForChain, writeContractAs} from './evmSigner.ts';
 import {isNative, UNISWAP_V3_ADDRESSES} from './uniswapV3.ts';
+import type {DerivedAccounts} from '../wallet/keys';
 
 // chainId -> real, verified SushiSwap V2 addresses. wrappedNative is NOT
 // duplicated here — it's the same contract regardless of which DEX
@@ -119,14 +121,14 @@ export async function quoteSushiSwapV2({chainId, tokenIn, tokenOut, amountIn}: {
  */
 export async function executeSushiSwapV2Swap({
   chainId,
-  privateKeyHex,
+  session,
   tokenIn,
   tokenOut,
   amountIn,
   minAmountOut,
 }: {
   chainId: number;
-  privateKeyHex: string;
+  session: DerivedAccounts;
   tokenIn: string;
   tokenOut: string;
   amountIn: bigint;
@@ -134,9 +136,7 @@ export async function executeSushiSwapV2Swap({
 }): Promise<{hash: string}> {
   const addresses = SUSHISWAP_V2_ADDRESSES[chainId];
   if (!addresses) throw new Error(`SushiSwap V2 isn't configured for chain ${chainId}.`);
-  const {walletClient, publicClient} = clientsForChainId(chainId, privateKeyHex);
-  const account = walletClient.account;
-  if (!account) throw new Error('No signer account on this wallet client.');
+  const {signer, publicClient} = signerAndPublicClientForChain(chainId, session);
   const tokenInIsNative = isNative(tokenIn);
   const tokenOutIsNative = isNative(tokenOut);
   const path: [`0x${string}`, `0x${string}`] = [poolAddress(chainId, tokenIn), poolAddress(chainId, tokenOut)];
@@ -144,27 +144,25 @@ export async function executeSushiSwapV2Swap({
 
   let swapHash: string;
   if (tokenInIsNative) {
-    swapHash = await walletClient.writeContract({
-      account,
+    swapHash = await writeContractAs(signer, {
       address: addresses.router,
       abi: ROUTER_ABI,
       functionName: 'swapExactETHForTokensSupportingFeeOnTransferTokens',
-      args: [minAmountOut, path, account.address, deadline],
+      args: [minAmountOut, path, signer.address, deadline],
       value: amountIn,
     });
   } else {
     const tokenInAddress = getAddress(tokenIn) as `0x${string}`;
-    const currentAllowance = (await publicClient.readContract({address: tokenInAddress, abi: ERC20_ALLOWANCE_ABI, functionName: 'allowance', args: [account.address, addresses.router]})) as bigint;
+    const currentAllowance = (await publicClient.readContract({address: tokenInAddress, abi: ERC20_ALLOWANCE_ABI, functionName: 'allowance', args: [signer.address, addresses.router]})) as bigint;
     if (currentAllowance < amountIn) {
-      const approveHash = await walletClient.writeContract({account, address: tokenInAddress, abi: ERC20_ALLOWANCE_ABI, functionName: 'approve', args: [addresses.router, amountIn]});
+      const approveHash = await writeContractAs(signer, {address: tokenInAddress, abi: ERC20_ALLOWANCE_ABI, functionName: 'approve', args: [addresses.router, amountIn]});
       await publicClient.waitForTransactionReceipt({hash: approveHash});
     }
-    swapHash = await walletClient.writeContract({
-      account,
+    swapHash = await writeContractAs(signer, {
       address: addresses.router,
       abi: ROUTER_ABI,
       functionName: tokenOutIsNative ? 'swapExactTokensForETHSupportingFeeOnTransferTokens' : 'swapExactTokensForTokensSupportingFeeOnTransferTokens',
-      args: [amountIn, minAmountOut, path, account.address, deadline],
+      args: [amountIn, minAmountOut, path, signer.address, deadline],
     });
   }
   await publicClient.waitForTransactionReceipt({hash: swapHash as `0x${string}`});

@@ -18,7 +18,9 @@
 // uniswapV4.ts for that materially different integration.
 
 import {getAddress} from 'viem';
-import {clientsForChainId, publicClientForChainId} from './chainRegistry.ts';
+import {publicClientForChainId} from './chainRegistry.ts';
+import {signerAndPublicClientForChain, writeContractAs} from './evmSigner.ts';
+import type {DerivedAccounts} from '../wallet/keys';
 
 export const NATIVE_PLACEHOLDER = '0x0000000000000000000000000000000000000000';
 
@@ -238,7 +240,7 @@ export async function quoteUniswapV3({chainId, tokenIn, tokenOut, amountIn}: {ch
  */
 export async function executeUniswapV3Swap({
   chainId,
-  privateKeyHex,
+  session,
   tokenIn,
   tokenOut,
   amountIn,
@@ -246,7 +248,7 @@ export async function executeUniswapV3Swap({
   minAmountOut,
 }: {
   chainId: number;
-  privateKeyHex: string;
+  session: DerivedAccounts;
   tokenIn: string;
   tokenOut: string;
   amountIn: bigint;
@@ -255,14 +257,12 @@ export async function executeUniswapV3Swap({
 }): Promise<{hash: string}> {
   const addresses = UNISWAP_V3_ADDRESSES[chainId];
   if (!addresses) throw new Error(`Uniswap V3 isn't configured for chain ${chainId}.`);
-  const {walletClient, publicClient} = clientsForChainId(chainId, privateKeyHex);
-  const account = walletClient.account;
-  if (!account) throw new Error('No signer account on this wallet client.');
+  const {signer, publicClient} = signerAndPublicClientForChain(chainId, session);
   const poolTokenIn = resolvedPoolAddress(chainId, tokenIn);
   const poolTokenOut = resolvedPoolAddress(chainId, tokenOut);
 
   if (isNative(tokenIn)) {
-    const wrapHash = await walletClient.writeContract({account, address: addresses.wrappedNative, abi: WRAPPED_NATIVE_ABI, functionName: 'deposit', value: amountIn});
+    const wrapHash = await writeContractAs(signer, {address: addresses.wrappedNative, abi: WRAPPED_NATIVE_ABI, functionName: 'deposit', value: amountIn});
     await publicClient.waitForTransactionReceipt({hash: wrapHash});
   }
 
@@ -270,19 +270,18 @@ export async function executeUniswapV3Swap({
     address: poolTokenIn,
     abi: ERC20_ALLOWANCE_ABI,
     functionName: 'allowance',
-    args: [account.address, addresses.swapRouter02],
+    args: [signer.address, addresses.swapRouter02],
   })) as bigint;
   if (currentAllowance < amountIn) {
-    const approveHash = await walletClient.writeContract({account, address: poolTokenIn, abi: ERC20_ALLOWANCE_ABI, functionName: 'approve', args: [addresses.swapRouter02, amountIn]});
+    const approveHash = await writeContractAs(signer, {address: poolTokenIn, abi: ERC20_ALLOWANCE_ABI, functionName: 'approve', args: [addresses.swapRouter02, amountIn]});
     await publicClient.waitForTransactionReceipt({hash: approveHash});
   }
 
-  const swapHash = await walletClient.writeContract({
-    account,
+  const swapHash = await writeContractAs(signer, {
     address: addresses.swapRouter02,
     abi: SWAP_ROUTER_02_ABI,
     functionName: 'exactInputSingle',
-    args: [{tokenIn: poolTokenIn, tokenOut: poolTokenOut, fee, recipient: account.address, amountIn, amountOutMinimum: minAmountOut, sqrtPriceLimitX96: 0n}],
+    args: [{tokenIn: poolTokenIn, tokenOut: poolTokenOut, fee, recipient: signer.address, amountIn, amountOutMinimum: minAmountOut, sqrtPriceLimitX96: 0n}],
   });
   await publicClient.waitForTransactionReceipt({hash: swapHash});
   return {hash: swapHash};
