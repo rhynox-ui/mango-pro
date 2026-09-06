@@ -41,6 +41,7 @@ import {TransactionIntentError} from '../core/txIntentFirewall';
 import {fetchErc20TokenMetadata, fetchSplMintDecimals} from '../wallet/walletRpc';
 import {useSession} from '../wallet/SessionContext';
 import {useTheme, type Colors} from '../theme/ThemeContext';
+import {TradeSettingsSheet} from '../components/TradeSettingsSheet';
 
 export type DemoToken = {
   chainKey: ChainKey;
@@ -93,11 +94,9 @@ function SettingsGlyph({color}: {color: string}) {
 export function TokenTradeScreen({
   token = DEFAULT_DEMO_TOKEN,
   onOpenSearch,
-  onOpenSettings,
 }: {
   token?: DemoToken;
   onOpenSearch?: () => void;
-  onOpenSettings?: () => void;
 }) {
   const {colors} = useTheme();
   const {session} = useSession();
@@ -122,6 +121,13 @@ export function TokenTradeScreen({
   const [executeError, setExecuteError] = useState<string | null>(null);
   const [executeWarnings, setExecuteWarnings] = useState<string[]>([]);
   const [executeTxHashes, setExecuteTxHashes] = useState<string[]>([]);
+
+  // null = Auto, Relay's own front-running-aware default (no
+  // slippageTolerance sent at all — see relayQuote.ts's own header).
+  // Edited only inside TradeSettingsSheet; this is the single source of
+  // truth passed straight into getRelayQuote() below.
+  const [slippageBps, setSlippageBps] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const paySymbol = isBuySide ? NATIVE_SYMBOL[token.chainKey] : token.symbol;
   const receiveSymbol = isBuySide ? token.symbol : NATIVE_SYMBOL[token.chainKey];
@@ -205,6 +211,7 @@ export function TokenTradeScreen({
         destinationCurrency: isBuySide ? token.address : nativeCurrency,
         amountBaseUnits,
         userAddress,
+        slippageTolerance: slippageBps ?? undefined,
       })
         .then(q => {
           // Stale-response guard — a slower earlier request landing
@@ -229,7 +236,7 @@ export function TokenTradeScreen({
         });
     }, QUOTE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [isBuySide, amount, amtNum, session, token, tokenDecimals]);
+  }, [isBuySide, amount, amtNum, session, token, tokenDecimals, slippageBps]);
 
   async function handleTrade() {
     const quoteToExecute = rawQuoteRef.current;
@@ -267,7 +274,7 @@ export function TokenTradeScreen({
           <SearchGlyph color={colors.textSecondary} />
           <Text style={styles.iconPillLabel}>Search</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.iconSquarePill} onPress={onOpenSettings} activeOpacity={0.7} accessibilityLabel="Trade settings">
+        <TouchableOpacity style={styles.iconSquarePill} onPress={() => setSettingsOpen(true)} activeOpacity={0.7} accessibilityLabel="Trade settings">
           <SettingsGlyph color={colors.textMuted} />
         </TouchableOpacity>
       </View>
@@ -385,6 +392,8 @@ export function TokenTradeScreen({
         </TouchableOpacity>
       )}
       {executeError && <Text style={styles.errorText}>{executeError}</Text>}
+
+      <TradeSettingsSheet visible={settingsOpen} onClose={() => setSettingsOpen(false)} slippageBps={slippageBps} onSave={setSlippageBps} />
     </View>
   );
 }

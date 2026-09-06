@@ -73,6 +73,8 @@ export type GetRelayQuoteParams = {
   recipientAddress?: string;
   originAmountUsd?: number | null;
   sponsoringGasOutright?: boolean;
+  /** Basis-points string ("50" = 0.5%), or omit entirely for Auto — Relay's own front-running-aware default. Never a client-side guess: when set, this is the literal bound Relay quotes against and the number shown back in details.slippageTolerance.total. */
+  slippageTolerance?: string;
 };
 
 /** One transaction Relay needs signed — EVM-shaped (to/data/value/chainId) or Solana-shaped (instructions), per executeRelayQuote.ts's own dispatch. */
@@ -136,7 +138,7 @@ export function intentForQuote(quote: RelayQuote): {intent: TransactionIntent; q
 }
 
 export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQuote> {
-  const {fromChainKey, toChainKey, fromAsset, toAsset, originCurrency, destinationCurrency, amountBaseUnits, userAddress, recipientAddress, originAmountUsd, sponsoringGasOutright} = params;
+  const {fromChainKey, toChainKey, fromAsset, toAsset, originCurrency, destinationCurrency, amountBaseUnits, userAddress, recipientAddress, originAmountUsd, sponsoringGasOutright, slippageTolerance} = params;
 
   const resolvedOriginCurrency = originCurrency ?? (fromAsset ? currencyAddress(fromChainKey, fromAsset) : undefined);
   const resolvedDestinationCurrency = destinationCurrency ?? (toAsset ? currencyAddress(toChainKey, toAsset) : undefined);
@@ -154,6 +156,10 @@ export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQ
     amount: amountBaseUnits,
     tradeType: 'EXACT_INPUT',
     appFees: [{recipient: feeRecipientForQuote(), fee: appFeeBpsForSponsoredTrade(fromChainKey, originAmountUsd, {sponsoringGasOutright})}],
+    // Additive only — omitted entirely on Auto, same as
+    // mango-mobile's own relayBridge.js, so leaving slippage on Auto
+    // is a real "field not sent" rather than a client-guessed default.
+    ...(slippageTolerance ? {slippageTolerance} : {}),
   };
 
   const res = await postRelayQuote(body);

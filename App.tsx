@@ -138,7 +138,7 @@ function AppInner(): React.JSX.Element {
             ) : tab === 'search' ? (
               <SearchScreen onSelectToken={selectSearchResult} />
             ) : tab === 'swap' ? (
-              <TokenTradeScreen token={selectedToken} onOpenSearch={() => setTab('search')} onOpenSettings={openSettings} />
+              <TokenTradeScreen token={selectedToken} onOpenSearch={() => setTab('search')} />
             ) : (
               <ProfileScreen onOpenSettings={openSettings} />
             )}
