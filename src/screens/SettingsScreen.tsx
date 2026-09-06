@@ -30,6 +30,7 @@ import {
 } from '../components/icons';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {SecurityScreen} from './SecurityScreen';
+import {AppearanceScreen} from './AppearanceScreen';
 
 // Same real URLs as mango-mobile's own src/settings/AboutModal.tsx —
 // one Mango, same channels, not a separate app's accounts.
@@ -48,15 +49,15 @@ export function SettingsScreen({onBack}: {onBack: () => void}) {
   const {colors} = useTheme();
   const styles = makeStyles(colors);
   const [showSecurity, setShowSecurity] = useState(false);
+  const [showAppearance, setShowAppearance] = useState(false);
 
-  // Security is the one row with a real destination today — see
-  // SecurityScreen.tsx's own header for what it opens onto (the
-  // auto-lock preference, the one real setting to expose so far).
+  // Security and Appearance are the two rows with a real destination
+  // today — see each screen's own header for what it opens onto.
   // Every other row stays the honest no-op placeholder this file's own
   // header already explains.
   const ROWS: Row[] = [
     {key: 'profile', label: 'Profile and Account', Icon: UserIcon},
-    {key: 'appearance', label: 'Appearance and Haptics', Icon: ContrastIcon},
+    {key: 'appearance', label: 'Appearance and Haptics', Icon: ContrastIcon, onPress: () => setShowAppearance(true)},
     {key: 'language', label: 'Language', Icon: GlobeIcon, value: 'System'},
     {key: 'notifications', label: 'Notifications', Icon: BellIcon},
     {key: 'security', label: 'Security', Icon: ShieldCheckIcon, onPress: () => setShowSecurity(true)},
@@ -71,6 +72,9 @@ export function SettingsScreen({onBack}: {onBack: () => void}) {
 
   if (showSecurity) {
     return <SecurityScreen onBack={() => setShowSecurity(false)} />;
+  }
+  if (showAppearance) {
+    return <AppearanceScreen onBack={() => setShowAppearance(false)} />;
   }
 
   return (
