@@ -120,6 +120,20 @@ android {
     }
 }
 
+// Particle's own compiled Android SDK (a transitive dependency of
+// @particle-network/rn-auth-core/rn-base) pulls in a BouncyCastle
+// artifact under its current "bcprov-jdk15to18" Maven coordinates,
+// which collides with another dependency in this project's tree still
+// on the older "bcprov-jdk15on" coordinates — same library, same
+// classes, two different artifact names Gradle can't tell apart on the
+// classpath. This is Android's own documented resolution for exactly
+// this error class (see the classpath-sync-errors doc CI's own build
+// log linked): exclude the older one everywhere so only one copy of
+// BouncyCastle's classes ever reaches the classpath.
+configurations.all {
+    exclude group: 'org.bouncycastle', module: 'bcprov-jdk15on'
+}
+
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
