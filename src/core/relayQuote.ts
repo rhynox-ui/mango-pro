@@ -7,11 +7,12 @@
 // through the way the website does, and Mango Pro is in exactly the
 // same position, so this follows mobile's pattern, not the site's.
 //
-// Quote-only for now — no executeRelayQuote here yet. Signing/
-// broadcasting needs the intent-firewall + calldata-decode confirm
-// screen (build plan §5), which hasn't been ported into this app yet;
-// wiring a "You receive" estimate doesn't require any of that, so it's
-// a safe, real increment on its own.
+// Every quote is tagged with the intent it was requested under (see
+// quoteIntents below) — src/core/executeRelayQuote.ts reads this to run
+// the pre-sign firewall before signing anything. This is the same
+// pattern mango-bridge.jsx's own relaybridge.js uses: intent is built
+// from the REQUEST body, never read back out of the response, or the
+// check would be circular and worthless.
 //
 // Fee: every request attaches appFeeBpsForSponsoredTrade() with
 // sponsoringGasOutright left false — Mango Pro's wallet today is a
@@ -25,6 +26,7 @@
 import {formatUnits} from 'viem';
 import {currencyAddress, MAINNET_CHAIN_IDS, type ChainKey} from './chainData.ts';
 import {appFeeBpsForSponsoredTrade, feeRecipientForQuote} from './fees.ts';
+import {buildTransactionIntent, type TransactionIntent} from './txIntentFirewall.ts';
 
 const RELAY_QUOTE_URL = 'https://api.relay.link/quote/v2';
 
@@ -73,7 +75,21 @@ export type GetRelayQuoteParams = {
   sponsoringGasOutright?: boolean;
 };
 
-/** Raw Relay quote response — typed only for the fields summarizeQuote() actually reads, not the full schema. */
+/** One transaction Relay needs signed — EVM-shaped (to/data/value/chainId) or Solana-shaped (instructions), per executeRelayQuote.ts's own dispatch. */
+export type RelayTransactionStepItem = {
+  status?: string;
+  data?: {
+    chainId?: number;
+    to?: string;
+    data?: string;
+    value?: string;
+    instructions?: {keys: {pubkey: string; isSigner: boolean; isWritable: boolean}[]; programId: string; data: string}[];
+    addressLookupTableAddresses?: string[];
+  };
+};
+export type RelayStep = {kind: string; requestId?: string; items: RelayTransactionStepItem[]};
+
+/** Raw Relay quote response — typed only for the fields this app actually reads, not the full schema. */
 export type RelayQuote = {
   fees?: {
     gas?: {amountUsd?: string | number};
@@ -83,18 +99,41 @@ export type RelayQuote = {
   };
   details?: {
     timeEstimate?: string | number;
-    currencyIn?: {amountUsd?: string | number};
+    // Both currencyIn/currencyOut also carry `currency.chainId`/
+    // `currency.address` and (currencyIn) `amount` — real fields on
+    // Relay's own response, read by txIntentFirewall.ts's pre-sign
+    // checks rather than by summarizeQuote() below, but typed here too
+    // so this one type stays the single source of truth for what a
+    // quote object actually looks like, instead of two independently
+    // hand-typed subsets of the same response drifting apart.
+    currencyIn?: {amount?: string; amountUsd?: string | number; currency?: {chainId?: number; address?: string}};
     currencyOut?: {
       amount?: string;
       amountFormatted?: string;
       amountUsd?: string | number;
-      currency?: {decimals?: number};
+      currency?: {chainId?: number; address?: string; decimals?: number};
     };
+    recipient?: string;
     swapImpact?: {percent?: string | number};
     totalImpact?: {percent?: string | number};
     slippageTolerance?: {total?: string | number};
   };
+  steps?: RelayStep[];
 };
+
+/**
+ * Keyed on the quote object's own identity, not a property written onto
+ * it — nothing that serializes, logs, or clones the quote carries the
+ * intent with it, and a quote object that didn't come from
+ * getRelayQuote() has no entry here at all, which executeRelayQuote.ts
+ * treats as a refusal to sign rather than as permission.
+ */
+const quoteIntents = new WeakMap<object, {intent: TransactionIntent; quotedAt: number}>();
+
+/** Reads back the intent+timestamp getRelayQuote() tagged this exact quote object with — undefined for any quote not obtained from getRelayQuote(). */
+export function intentForQuote(quote: RelayQuote): {intent: TransactionIntent; quotedAt: number} | undefined {
+  return quoteIntents.get(quote);
+}
 
 export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQuote> {
   const {fromChainKey, toChainKey, fromAsset, toAsset, originCurrency, destinationCurrency, amountBaseUnits, userAddress, recipientAddress, originAmountUsd, sponsoringGasOutright} = params;
@@ -122,7 +161,29 @@ export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQ
     const text = await res.text().catch(() => '');
     throw new Error(`Relay quote failed (${res.status}): ${text || res.statusText}`);
   }
-  return (await res.json()) as RelayQuote;
+  const quote = (await res.json()) as RelayQuote;
+
+  // Built from `body` — what was actually asked for — never from the
+  // response; reading intent back out of the answer would make the
+  // firewall check circular. quotedAt rides in the same entry so
+  // executeRelayQuote.ts can refuse a stale quote's gas/rate numbers
+  // without a second, separate tagging mechanism.
+  if (quote && typeof quote === 'object') {
+    quoteIntents.set(quote, {
+      intent: buildTransactionIntent({
+        originChainId: body.originChainId,
+        destinationChainId: body.destinationChainId,
+        originCurrency: body.originCurrency,
+        destinationCurrency: body.destinationCurrency,
+        amountBaseUnits: body.amount,
+        userAddress: body.user,
+        recipientAddress: body.recipient,
+      }),
+      quotedAt: Date.now(),
+    });
+  }
+
+  return quote;
 }
 
 export type QuoteSummary = {

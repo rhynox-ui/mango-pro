@@ -23,9 +23,11 @@
 //   needed and isn't built yet. Shown as an honest note, not faked.
 // - Balances are still null (no balance-fetching wired yet), so the
 //   percent-quick-fill row stays correctly disabled.
-// - No execute/sign step yet — this only gets as far as a quote. Signing
-//   needs the intent-firewall + calldata-decode confirm screen (build
-//   plan §5), not built here yet.
+// - Buy-side execution is real: tapping Buy runs the quote through
+//   src/core/txIntentFirewall.ts (via executeRelayQuote.ts) before
+//   signing anything, then signs and broadcasts directly with the
+//   session's own key — same non-custodial, direct-broadcast model as
+//   every other send in this app. Sell stays quote-only (see above).
 
 import {useEffect, useMemo, useRef, useState} from 'react';
 import {ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
@@ -34,7 +36,9 @@ import {parseUnits} from 'viem';
 import {TokenChartPanel} from '../components/TokenChartPanel';
 import {CHAIN_LABEL, NATIVE_SYMBOL, assetDecimalsForChain, currencyAddress, type ChainKey} from '../core/chainData';
 import {DEV_FEE_PCT} from '../core/fees';
-import {getRelayQuote, summarizeQuote, type QuoteSummary} from '../core/relayQuote';
+import {getRelayQuote, summarizeQuote, type QuoteSummary, type RelayQuote} from '../core/relayQuote';
+import {executeRelayQuote, type ExecuteStep} from '../core/executeRelayQuote';
+import {TransactionIntentError} from '../core/txIntentFirewall';
 import {useSession} from '../wallet/SessionContext';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 
@@ -108,6 +112,16 @@ export function TokenTradeScreen({
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const quoteRequestIdRef = useRef(0);
+  // The raw quote object, kept alongside its summary — executeRelayQuote
+  // needs the actual RelayQuote (steps + the intent relayQuote.ts tagged
+  // it with), not the display-only numbers summarizeQuote() derives.
+  const rawQuoteRef = useRef<RelayQuote | null>(null);
+
+  type ExecuteState = 'idle' | ExecuteStep | 'success' | 'error';
+  const [executeState, setExecuteState] = useState<ExecuteState>('idle');
+  const [executeError, setExecuteError] = useState<string | null>(null);
+  const [executeWarnings, setExecuteWarnings] = useState<string[]>([]);
+  const [executeTxHashes, setExecuteTxHashes] = useState<string[]>([]);
 
   const paySymbol = isBuySide ? NATIVE_SYMBOL[token.chainKey] : token.symbol;
   const receiveSymbol = isBuySide ? token.symbol : NATIVE_SYMBOL[token.chainKey];
@@ -115,19 +129,29 @@ export function TokenTradeScreen({
 
   useEffect(() => {
     setQuoteError(null);
+    // A changed amount/side invalidates any in-flight execution result —
+    // signing a stale confirmation against a freshly-typed amount would
+    // be exactly the mismatch the intent firewall exists to catch.
+    setExecuteState('idle');
+    setExecuteError(null);
+    setExecuteWarnings([]);
+    setExecuteTxHashes([]);
     if (!isBuySide || amtNum <= 0) {
       setQuote(null);
+      rawQuoteRef.current = null;
       setQuoteLoading(false);
       return;
     }
     if (!session) {
       setQuote(null);
+      rawQuoteRef.current = null;
       setQuoteLoading(false);
       return;
     }
     const nativeDecimals = assetDecimalsForChain(token.chainKey, NATIVE_SYMBOL[token.chainKey]);
     if (nativeDecimals === undefined) {
       setQuote(null);
+      rawQuoteRef.current = null;
       setQuoteLoading(false);
       return;
     }
@@ -155,18 +179,45 @@ export function TokenTradeScreen({
           // Stale-response guard — a slower earlier request landing
           // after a faster later one would otherwise flash outdated numbers.
           if (requestId !== quoteRequestIdRef.current) return;
+          rawQuoteRef.current = q;
           setQuote(summarizeQuote(q, 18));
           setQuoteLoading(false);
         })
         .catch(err => {
           if (requestId !== quoteRequestIdRef.current) return;
           setQuote(null);
+          rawQuoteRef.current = null;
           setQuoteLoading(false);
           setQuoteError(err instanceof Error ? err.message : 'Could not get a quote — try again.');
         });
     }, QUOTE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [isBuySide, amount, amtNum, session, token]);
+
+  async function handleBuy() {
+    const quoteToExecute = rawQuoteRef.current;
+    if (!quoteToExecute || !session) return;
+    setExecuteError(null);
+    setExecuteWarnings([]);
+    setExecuteTxHashes([]);
+    try {
+      const result = await executeRelayQuote(quoteToExecute, session, step => setExecuteState(step));
+      setExecuteWarnings(result.warnings);
+      setExecuteTxHashes(result.txHashes);
+      setExecuteState('success');
+    } catch (err) {
+      // TransactionIntentError carries its own complete, user-facing
+      // explanation (txIntentFirewall.ts's own fail() message) — shown
+      // exactly as thrown, not re-wrapped, since re-wrapping it would
+      // just be a worse paraphrase of a message already written for
+      // this exact screen.
+      const message = err instanceof TransactionIntentError ? err.message : err instanceof Error ? err.message : 'The trade failed. Nothing left this wallet unless a status above says otherwise.';
+      setExecuteError(message);
+      setExecuteState('error');
+    }
+  }
+
+  const canBuy = isBuySide && Boolean(rawQuoteRef.current) && Boolean(session) && (executeState === 'idle' || executeState === 'error');
 
   return (
     <View style={styles.screen}>
@@ -268,8 +319,53 @@ export function TokenTradeScreen({
         </View>
         <Text style={styles.etaText}>{quote?.etaSeconds != null ? `ETA: ${formatEta(quote.etaSeconds)}` : 'ETA: ~1 min'}</Text>
       </View>
+
+      {isBuySide && (
+        <>
+          {executeState === 'success' ? (
+            <View style={styles.executeResult}>
+              <Text style={styles.executeSuccessText}>Trade sent</Text>
+              {executeTxHashes.map(hash => (
+                <Text key={hash} style={styles.executeHashText} selectable numberOfLines={1} ellipsizeMode="middle">
+                  {hash}
+                </Text>
+              ))}
+              {executeWarnings.map(warning => (
+                <Text key={warning} style={styles.executeWarningText}>
+                  {warning}
+                </Text>
+              ))}
+            </View>
+          ) : (
+            <TouchableOpacity style={[styles.buyButton, !canBuy && styles.buyButtonDisabled]} disabled={!canBuy} onPress={handleBuy} activeOpacity={0.8}>
+              {executeState === 'idle' || executeState === 'error' ? (
+                <Text style={styles.buyButtonText}>Buy</Text>
+              ) : (
+                <View style={styles.buyButtonPendingRow}>
+                  <ActivityIndicator color={colors.ctaText} size="small" />
+                  <Text style={styles.buyButtonText}>{executeStatusLabel(executeState)}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          )}
+          {executeError && <Text style={styles.errorText}>{executeError}</Text>}
+        </>
+      )}
     </View>
   );
+}
+
+function executeStatusLabel(state: 'build' | 'signing' | 'filling' | 'done'): string {
+  switch (state) {
+    case 'build':
+      return 'Preparing…';
+    case 'signing':
+      return 'Signing…';
+    case 'filling':
+      return 'Confirming…';
+    case 'done':
+      return 'Done';
+  }
 }
 
 function makeStyles(colors: Colors) {
@@ -378,5 +474,20 @@ function makeStyles(colors: Colors) {
     feeDot: {width: 6, height: 6, borderRadius: 3, backgroundColor: colors.accent},
     feeText: {color: colors.accentDeep, fontSize: 11, fontWeight: '500'},
     etaText: {color: colors.textSecondary, fontSize: 11},
+
+    buyButton: {
+      marginTop: 12,
+      backgroundColor: colors.ctaBg,
+      borderRadius: 14,
+      paddingVertical: 14,
+      alignItems: 'center',
+    },
+    buyButtonDisabled: {opacity: 0.4},
+    buyButtonText: {color: colors.ctaText, fontSize: 15, fontWeight: '700'},
+    buyButtonPendingRow: {flexDirection: 'row', alignItems: 'center', gap: 8},
+    executeResult: {marginTop: 12, alignItems: 'center', gap: 4, paddingVertical: 10},
+    executeSuccessText: {color: colors.gain, fontSize: 15, fontWeight: '700'},
+    executeHashText: {color: colors.textMuted, fontSize: 11, fontFamily: 'monospace'},
+    executeWarningText: {color: colors.warning, fontSize: 10.5, textAlign: 'center', marginTop: 2},
   });
 }
