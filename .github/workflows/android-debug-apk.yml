@@ -1,0 +1,49 @@
+name: Android debug APK
+
+# Builds a real, installable debug APK on every push to main (and on
+# demand) and uploads it as a workflow artifact — the practical way to
+# get a sideloadable build onto a real device for testing (Google login
+# in particular needs a real device/emulator with Play Services; there's
+# no way to produce or run that from this repo's own dev sandbox).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # GitHub's ubuntu-latest runner ships an Android SDK with sdkmanager
+      # on PATH already — just fetch the exact platform/build-tools/NDK
+      # versions this app's own android/build.gradle pins, so CI builds
+      # against the same toolchain a local build would.
+      - name: Install Android SDK components
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-37" "build-tools;37.0.0" "ndk;27.1.12297006"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: mango-pro-debug
+          path: android/app/build/outputs/apk/debug/*.apk
+          retention-days: 30
