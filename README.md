@@ -18,7 +18,7 @@ This README describes the real, current state of the app — not a plan. (`ARCHI
 - Primary routing via [Relay](https://relay.link)'s intent-based solver network (`src/core/relayQuote.ts` + `executeRelayQuote.ts`), gated behind a ported **intent-firewall** (`txIntentFirewall.ts` / `solanaTxIntent.ts`) that re-checks the router's actual response against what was quoted before anything gets signed.
 - **Same-chain fallback routing** when Relay has no route: four direct on-chain DEX integrations with no backend dependency (Uniswap V4, Uniswap V3, SushiSwap V2, PancakeSwap V3) plus two generic aggregators (1inch, 0x) proxied through the site's backend. Quotes all of them in parallel, executes against the best price. EVM-only; Solana has no fallback path yet.
 - Live price-impact warnings, configurable slippage, and a real trade-history log (`src/wallet/txHistory.ts`).
-- Google-session (Particle) trading is wired for the primary Relay path on both EVM and Solana; the fallback-DEX path still requires a local private key and stays unavailable for Google sessions.
+- Google-session (Particle) trading is wired for both the primary Relay path (EVM and Solana) and the same-chain fallback-DEX path — every trade path signs correctly regardless of onboarding method (`src/core/evmSigner.ts` is the shared local-vs-Particle signer abstraction the fallback path uses).
 
 **Wallet dashboard**
 - Real USDC balance aggregation across the 9 EVM chains with a verified USDC address plus Solana (`src/core/usdcBalances.ts`), receive addresses, and non-custodial USDC withdrawal (`src/wallet/sendUsdc.ts`) — direct broadcast from the device, no backend in the signing path.
@@ -67,5 +67,5 @@ scripts/                Offline verification scripts (see `npm run verify`)
 ## Known gaps
 
 - Solana fallback routing (when Relay can't quote a Solana token) — no fallback exists yet, unlike EVM's four-provider chain.
-- Particle (Google-session) signing for the same-chain fallback-DEX path — still local-key-only.
+- Particle's Solana signing wire format (Base58) is confirmed from Particle's own official sources but not yet proven end-to-end on a real device — see `src/screens/SolanaDevnetTestScreen.tsx` (Settings → "Solana signing test").
 - No fiat on-ramp; crypto wallet only (seed phrase or Google/Particle MPC).
