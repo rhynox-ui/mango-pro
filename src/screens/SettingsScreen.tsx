@@ -1,35 +1,45 @@
 // src/screens/SettingsScreen.tsx
 //
 // Reached from Profile's own gear icon (pushed screen with a back
-// chevron), not a bottom tab — matching the reference. Every row is a
-// real navigation target once its own screen exists; for now each is an
-// honest no-op placeholder rather than a dead-looking static list, per
-// this app's "real shell, not a mock" discipline.
+// chevron), not a bottom tab — matching the reference. Most rows are a
+// real navigation target once their own screen exists; for now each of
+// those is an honest no-op placeholder rather than a dead-looking
+// static list, per this app's "real shell, not a mock" discipline. The
+// two social rows are the exception — real links exist today (Mango's
+// actual channels are X and Telegram, not Discord), so they open for
+// real rather than sitting as a placeholder for no reason.
 
-import {ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
+import {Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {
   BellIcon,
   BookOpenIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   ContrastIcon,
-  DiscordIcon,
   FileTextIcon,
   GlobeIcon,
   HelpCircleIcon,
   LandmarkIcon,
   ScaleIcon,
   ShieldCheckIcon,
+  TelegramIcon,
   UserIcon,
+  XIcon,
   type IconComponent,
 } from '../components/icons';
 import {useTheme, type Colors} from '../theme/ThemeContext';
+
+// Same real URLs as mango-mobile's own src/settings/AboutModal.tsx —
+// one Mango, same channels, not a separate app's accounts.
+const X_URL = 'https://x.com/Mango_protocol';
+const TELEGRAM_URL = 'https://t.me/mango_protocol';
 
 type Row = {
   key: string;
   label: string;
   Icon: IconComponent;
   value?: string;
+  onPress?: () => void;
 };
 
 const ROWS: Row[] = [
@@ -43,7 +53,8 @@ const ROWS: Row[] = [
   {key: 'taxes', label: 'Taxes', Icon: FileTextIcon},
   {key: 'help', label: 'Help and Support', Icon: HelpCircleIcon},
   {key: 'docs', label: 'Documentation', Icon: BookOpenIcon},
-  {key: 'discord', label: 'Discord', Icon: DiscordIcon},
+  {key: 'x', label: 'X', Icon: XIcon, onPress: () => Linking.openURL(X_URL)},
+  {key: 'telegram', label: 'Telegram', Icon: TelegramIcon, onPress: () => Linking.openURL(TELEGRAM_URL)},
 ];
 
 export function SettingsScreen({onBack}: {onBack: () => void}) {
@@ -58,7 +69,7 @@ export function SettingsScreen({onBack}: {onBack: () => void}) {
       <Text style={styles.title}>Settings</Text>
       <ScrollView contentContainerStyle={styles.rows} showsVerticalScrollIndicator={false}>
         {ROWS.map((row, i) => (
-          <TouchableOpacity key={row.key} style={styles.row} activeOpacity={0.6}>
+          <TouchableOpacity key={row.key} style={styles.row} activeOpacity={0.6} onPress={row.onPress}>
             <View style={styles.rowIcon}>
               <row.Icon color={colors.textPrimary} />
             </View>

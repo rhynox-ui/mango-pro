@@ -2,12 +2,15 @@
 //
 // Shared one-off glyphs for Settings/Profile — same "real lucide path
 // data through react-native-svg" pattern as src/navigation/TabIcon.tsx,
-// just not tab icons. Deliberately monochrome (stroke=currentColor via
-// the `color` prop): per the product's own hard-won rule (see palette.ts's
-// own header), UI chrome never gets a flat brand color — DiscordIcon
-// below is the one deliberate exception, since a brand logo has to stay
-// recognizable, and even that renders in the theme's own text color
-// rather than Discord's actual brand purple.
+// just not tab icons. Deliberately monochrome (stroke/fill=currentColor
+// via the `color` prop): per the product's own hard-won rule (see
+// palette.ts's own header), UI chrome never gets a flat brand color —
+// XIcon and TelegramIcon below are brand marks, but even those render
+// in the theme's own text color rather than a brand color.
+//
+// XIcon/TelegramIcon are ported verbatim (same path data) from
+// mango-mobile's own src/settings/AboutModal.tsx — real social links
+// for the same Mango product family, not a separate app's assets.
 
 import type {ReactElement} from 'react';
 import Svg, {Circle, Path, Polygon, Rect} from 'react-native-svg';
@@ -141,13 +144,24 @@ export function HelpCircleIcon({color, size = 22}: IconProps) {
   );
 }
 
-// Simplified brand mark — recognizable, but rendered in the theme's own
-// text color rather than Discord's actual brand purple, per this file's
-// header.
-export function DiscordIcon({color, size = 22}: IconProps) {
+// Real brand mark path data (not redrawn), same as mango-mobile's own
+// AboutModal.tsx — rendered in the theme's own text color, never X's
+// black/white brand treatment.
+export function XIcon({color, size = 22}: IconProps) {
   return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
-      <Path d="M20.317 4.37a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.445.865-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.6 12.6 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.028C.533 9.046-.319 13.58.099 18.058a.082.082 0 0 0 .031.056 20.03 20.03 0 0 0 5.993 3.03.077.077 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.042-.106 13.2 13.2 0 0 1-1.872-.892.077.077 0 0 1-.008-.128c.126-.094.252-.192.372-.291a.074.074 0 0 1 .078-.01 14.2 14.2 0 0 0 12.061 0 .074.074 0 0 1 .079.009c.12.1.246.198.373.292a.077.077 0 0 1-.007.128 12.4 12.4 0 0 1-1.873.891.076.076 0 0 0-.041.107 15.8 15.8 0 0 0 1.225 1.993.076.076 0 0 0 .084.029 19.96 19.96 0 0 0 6.002-3.03.077.077 0 0 0 .031-.055c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.029ZM8.02 15.33c-1.183 0-2.157-1.086-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.095 2.157 2.419 0 1.333-.956 2.419-2.157 2.419Zm7.975 0c-1.183 0-2.157-1.086-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.095 2.157 2.419 0 1.333-.946 2.419-2.157 2.419Z" />
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M18.9 2H22l-7.6 8.7L23.3 22h-6.8l-5.3-6.9L5 22H1.9l8.1-9.3L1 2h7l4.8 6.3L18.9 2Zm-1.2 18h1.9L7.4 4H5.4l12.3 16Z" fill={color} />
+    </Svg>
+  );
+}
+
+// Same paper-plane stand-in mango-mobile's own AboutModal.tsx uses for
+// Telegram (lucide's "send" glyph, not a redrawn Telegram logo).
+export function TelegramIcon({color, size = 22}: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" stroke={color} {...STROKE}>
+      <Path d="m22 2-7 20-4-9-9-4Z" />
+      <Path d="M22 2 11 13" />
     </Svg>
   );
 }
