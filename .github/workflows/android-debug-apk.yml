@@ -27,15 +27,20 @@ jobs:
 
       # First run revealed ubuntu-latest does NOT ship sdkmanager on PATH
       # (that assumption was wrong) — this action installs the cmdline-
-      # tools and sets ANDROID_HOME/ANDROID_SDK_ROOT properly first, then
-      # sdkmanager fetches the exact platform/build-tools/NDK versions
-      # this app's own android/build.gradle pins.
+      # tools and sets ANDROID_HOME/ANDROID_SDK_ROOT.
       - uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK components
-        run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platforms;android-37" "build-tools;37.0.0" "ndk;27.1.12297006"
+      # Second run revealed hand-picking "platforms;android-37" here was
+      # also wrong — that exact platform isn't in the SDK repository this
+      # cmdline-tools version can see, and hardcoding a package string
+      # here just drifts out of sync with android/build.gradle's own
+      # compileSdkVersion/buildToolsVersion/ndkVersion the moment either
+      # changes. Accept licenses up front and let the Android Gradle
+      # Plugin auto-download exactly what IT asks for (on by default —
+      # android.builder.sdkDownload) once ANDROID_HOME is set — the
+      # standard, drift-proof way to do this in CI.
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses > /dev/null || true
 
       - name: Install dependencies
         run: npm ci
