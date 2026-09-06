@@ -42,6 +42,7 @@ import {fetchErc20TokenMetadata, fetchSplMintDecimals} from '../wallet/walletRpc
 import {useSession} from '../wallet/SessionContext';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {TradeSettingsSheet} from '../components/TradeSettingsSheet';
+import {fetchUsdcPortfolio, type UsdcPortfolio} from '../core/usdcBalances';
 
 export type DemoToken = {
   chainKey: ChainKey;
@@ -71,6 +72,13 @@ function formatFeePct(rate: number): string {
 function formatEta(seconds: number): string {
   if (seconds < 60) return `~${Math.round(seconds)}s`;
   return `~${Math.round(seconds / 60)}m`;
+}
+
+// Same formatting ProfileScreen's own "Total Cash" row already uses —
+// kept as its own small local copy rather than importing across screens
+// for one two-line function, same as this file's other format* helpers.
+function formatUsd(n: number): string {
+  return n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 }
 
 function SearchGlyph({color}: {color: string}) {
@@ -128,6 +136,24 @@ export function TokenTradeScreen({
   // truth passed straight into getRelayQuote() below.
   const [slippageBps, setSlippageBps] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // Same real, live aggregator ProfileScreen's own "Total Cash" already
+  // uses — reused here rather than re-derived, so this screen's own
+  // portfolio figure can never quietly drift from the one on Profile.
+  const [usdcPortfolio, setUsdcPortfolio] = useState<UsdcPortfolio | null>(null);
+  useEffect(() => {
+    if (!session) {
+      setUsdcPortfolio(null);
+      return;
+    }
+    let cancelled = false;
+    fetchUsdcPortfolio(session).then(portfolio => {
+      if (!cancelled) setUsdcPortfolio(portfolio);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
 
   const paySymbol = isBuySide ? NATIVE_SYMBOL[token.chainKey] : token.symbol;
   const receiveSymbol = isBuySide ? token.symbol : NATIVE_SYMBOL[token.chainKey];
@@ -288,6 +314,11 @@ export function TokenTradeScreen({
 
   return (
     <View style={styles.screen}>
+      <View style={styles.portfolioRow}>
+        <Text style={styles.portfolioLabel}>Portfolio</Text>
+        <Text style={styles.portfolioValue}>{usdcPortfolio ? `$${formatUsd(usdcPortfolio.totalUsd)}` : '—'}</Text>
+      </View>
+
       <View style={styles.chainRow}>
         <View style={styles.chainPill}>
           <Text style={styles.chainPillLabel}>Trading on </Text>
@@ -451,6 +482,9 @@ function executeStatusLabel(state: 'build' | 'signing' | 'filling' | 'done'): st
 function makeStyles(colors: Colors) {
   return StyleSheet.create({
     screen: {flex: 1, padding: 16},
+    portfolioRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10},
+    portfolioLabel: {color: colors.textMuted, fontSize: 11, fontWeight: '600'},
+    portfolioValue: {color: colors.textPrimary, fontSize: 15, fontWeight: '800'},
     chainRow: {flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8},
     chainPill: {
       flex: 1,
