@@ -1,21 +1,44 @@
 // src/wallet/walletRpc.ts
 //
-// Scoped port of mango-mobile's own src/wallet/walletRpc.js — cut down
-// to exactly what's needed for a USDC balance read per chain (build plan
-// deposit-currency decision): an EVM ERC-20 balanceOf and a Solana SPL
-// token balance. Not ported: mobile's native-balance reads, custom-token
-// metadata discovery, and the same-chain multicall batching (that
+// Scoped port of mango-mobile's own src/wallet/walletRpc.js — started
+// as exactly what a USDC balance read per chain needed (an EVM ERC-20
+// balanceOf and a Solana SPL token balance), now also carrying the
+// on-chain token-metadata lookup TokenTradeScreen.tsx's Sell side needs
+// (a searched token's real decimals — DexScreener's search response
+// doesn't carry them, so converting a typed "sell N tokens" amount into
+// base units needs a live decimals() read). Not ported: mobile's
+// native-balance reads and the same-chain multicall batching (that
 // optimization pays off when several DIFFERENT tokens on the SAME chain
-// are read together — this app only ever reads one token, USDC, per
-// chain, so batching would have nothing to batch).
+// are read together — this app never reads more than one token per
+// chain in a single screen, so batching would have nothing to batch).
 //
 // A 45s balance cache mirrors mobile's own — a USDC balance doesn't move
 // minute-to-minute for most users, and re-fetching on every render would
-// just be redundant RPC load for the same answer.
+// just be redundant RPC load for the same answer. Token metadata
+// (symbol/decimals) gets its own cache-forever policy below instead —
+// those are fixed the moment a contract/mint is created and can never
+// change afterward, so there's no TTL to expire.
 
 import {createPublicClient} from 'viem';
 import {getViemChain, transportFor} from '../core/chainRegistry.ts';
 import type {ChainKey} from '../core/chainData';
+
+// Lazy, not a top-level import — same reason mango-mobile's own
+// walletRpc.js's getAsyncStorage() helper exists: a static import of a
+// native module at module-load time breaks anything that imports this
+// file (this app's own verify-*.mjs offline scripts included) outside a
+// real RN runtime. Resolved once, cached, and never thrown past —
+// storage simply being unavailable should never break a balance/
+// decimals read that doesn't otherwise need it.
+let asyncStoragePromise: Promise<typeof import('@react-native-async-storage/async-storage').default | null> | null = null;
+function getAsyncStorage() {
+  if (!asyncStoragePromise) {
+    asyncStoragePromise = import('@react-native-async-storage/async-storage')
+      .then(mod => mod.default)
+      .catch(() => null);
+  }
+  return asyncStoragePromise;
+}
 
 const SOLANA_RPC_ENDPOINTS = ['https://rpc.solanatracker.io/public', 'https://api.mainnet-beta.solana.com'];
 
@@ -112,4 +135,123 @@ export async function fetchWalletSplTokenBalance(mintAddress: string, decimals: 
     }
   }
   throw lastError ?? new Error('Could not reach any Solana RPC endpoint.');
+}
+
+const ERC20_METADATA_ABI = [
+  {type: 'function', name: 'symbol', inputs: [], outputs: [{type: 'string'}], stateMutability: 'view'},
+  {type: 'function', name: 'decimals', inputs: [], outputs: [{type: 'uint8'}], stateMutability: 'view'},
+] as const;
+
+export type TokenMetadata = {symbol: string; decimals: number};
+
+// Cache-forever, not TTL'd like balanceCache above — a token's symbol/
+// decimals are fixed the moment its contract/mint is created and can
+// never change afterward. Persisted to AsyncStorage (same "survives a
+// full app restart" behavior mobile's own PersistentTokenMetadataCache
+// has) so re-opening the same token doesn't re-hit RPC for an answer
+// that was already known. EVM keys are lowercased (case-insensitive
+// addresses); Solana keys are NOT — a base58 mint address is
+// case-sensitive, and lowercasing it would silently look up a
+// different, wrong address.
+const TOKEN_METADATA_STORAGE_KEY = 'mango_pro_token_metadata_cache';
+const tokenMetadataCache = new Map<string, TokenMetadata | number>();
+
+getAsyncStorage()
+  .then(storage => storage?.getItem(TOKEN_METADATA_STORAGE_KEY))
+  .then(raw => {
+    const parsed = raw ? (JSON.parse(raw) as Record<string, TokenMetadata | number>) : null;
+    if (parsed && typeof parsed === 'object') {
+      for (const [key, value] of Object.entries(parsed)) {
+        tokenMetadataCache.set(key, value);
+      }
+    }
+  })
+  .catch(() => {
+    // Storage unavailable or corrupt — the cache just starts empty, nothing else breaks.
+  });
+
+function persistTokenMetadataCache(): void {
+  const snapshot = JSON.stringify(Object.fromEntries(tokenMetadataCache));
+  getAsyncStorage()
+    .then(storage => storage?.setItem(TOKEN_METADATA_STORAGE_KEY, snapshot))
+    .catch(() => {
+      // Best-effort — this lookup just won't survive a restart, nothing else breaks.
+    });
+}
+
+/** Real on-chain symbol()/decimals() for an arbitrary ERC-20 contract address — the same live verification mobile's own custom-token flow relies on (a real part of the ERC-20 standard, not project-specific). */
+export async function fetchErc20TokenMetadata(chainKey: ChainKey, tokenAddress: string): Promise<TokenMetadata> {
+  const cacheKey = `evm:${chainKey}:${tokenAddress.toLowerCase()}`;
+  const cached = tokenMetadataCache.get(cacheKey);
+  if (cached && typeof cached === 'object') return cached;
+
+  const client = getWalletPublicClient(chainKey);
+  let symbol: string;
+  let decimals: number;
+  try {
+    const [symbolResult, decimalsResult] = await Promise.all([
+      client.readContract({address: tokenAddress as `0x${string}`, abi: ERC20_METADATA_ABI, functionName: 'symbol'}),
+      client.readContract({address: tokenAddress as `0x${string}`, abi: ERC20_METADATA_ABI, functionName: 'decimals'}),
+    ]);
+    symbol = symbolResult;
+    decimals = Number(decimalsResult);
+  } catch (err) {
+    console.error(`[fetchErc20TokenMetadata] ${chainKey}:${tokenAddress}`, err);
+    throw new Error("Couldn't verify this token — check the address, or try again in a moment.");
+  }
+  const result: TokenMetadata = {symbol, decimals};
+  tokenMetadataCache.set(cacheKey, result);
+  persistTokenMetadataCache();
+  return result;
+}
+
+/**
+ * Real on-chain decimals for an SPL mint address. SPL mints carry no
+ * on-chain symbol/name (that lives in an optional, separate Metaplex
+ * metadata account this app doesn't parse) — callers already have the
+ * symbol from wherever the token was found (search results), so this
+ * only ever needs to answer the decimals question.
+ *
+ * Tries the legacy TOKEN_PROGRAM_ID first, then TOKEN_2022_PROGRAM_ID
+ * on a TokenInvalidAccountOwnerError — same real bug fix mobile's own
+ * walletRpc.js documents: a mint created under Token-2022 decodes its
+ * account data under a completely different owner program, so guessing
+ * only the legacy program fails verification for every real Token-2022
+ * mint, indistinguishable from a genuinely invalid address. The base
+ * MintLayout (where decimals lives) is identical between the two
+ * programs, only the owner and any TLV extension data after it differ.
+ */
+export async function fetchSplMintDecimals(mintAddress: string): Promise<number> {
+  const cacheKey = `solana:${mintAddress}`;
+  const cached = tokenMetadataCache.get(cacheKey);
+  if (typeof cached === 'number') return cached;
+
+  const [{getMint, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID}, {PublicKey}] = await Promise.all([import('@solana/spl-token'), import('@solana/web3.js')]);
+  const mintPubkey = new PublicKey(mintAddress);
+
+  for (const url of SOLANA_RPC_ENDPOINTS) {
+    const {Connection} = await import('@solana/web3.js');
+    const connection = new Connection(url, 'confirmed');
+    try {
+      const mint = await getMint(connection, mintPubkey, 'confirmed', TOKEN_PROGRAM_ID);
+      tokenMetadataCache.set(cacheKey, mint.decimals);
+      persistTokenMetadataCache();
+      return mint.decimals;
+    } catch (err) {
+      if (err instanceof Error && err.name === 'TokenInvalidAccountOwnerError') {
+        try {
+          const mint = await getMint(connection, mintPubkey, 'confirmed', TOKEN_2022_PROGRAM_ID);
+          tokenMetadataCache.set(cacheKey, mint.decimals);
+          persistTokenMetadataCache();
+          return mint.decimals;
+        } catch (err2) {
+          console.error(`[fetchSplMintDecimals] ${mintAddress}`, err2);
+          throw new Error("Couldn't verify this mint — check the address, or try again in a moment.");
+        }
+      }
+      // Not an ownership mismatch — likely a network/RPC-level failure
+      // on this endpoint specifically; try the next one before giving up.
+    }
+  }
+  throw new Error("Couldn't verify this mint — check the address, or try again in a moment.");
 }

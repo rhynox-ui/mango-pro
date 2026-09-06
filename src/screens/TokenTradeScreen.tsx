@@ -12,22 +12,21 @@
 //
 // What's real here versus what's a placeholder, stated plainly:
 // - The chart (TokenChartPanel) is real, live DexScreener data.
-// - Buy-side quotes are real, live Relay quotes (src/core/relayQuote.ts)
-//   once a wallet is unlocked — typing an amount debounces into an
-//   actual quote request, and "You receive"/fee/ETA reflect Relay's own
-//   numbers when one comes back.
-// - Sell-side quotes are NOT wired yet: converting a typed token amount
-//   into base units needs that token's on-chain decimals, which an
-//   arbitrary searched token doesn't carry (DexScreener's search
-//   response doesn't include it) — a real on-chain decimals() read is
-//   needed and isn't built yet. Shown as an honest note, not faked.
+// - Both Buy- and Sell-side quotes are real, live Relay quotes
+//   (src/core/relayQuote.ts) once a wallet is unlocked. Sell needs one
+//   extra step Buy doesn't: converting a typed token amount into base
+//   units needs that token's on-chain decimals, which an arbitrary
+//   searched token doesn't carry in DexScreener's own search response —
+//   fetched live (src/wallet/walletRpc.ts's fetchErc20TokenMetadata /
+//   fetchSplMintDecimals) the moment a token is selected, cached
+//   forever after (a token's decimals can never change once deployed).
 // - Balances are still null (no balance-fetching wired yet), so the
 //   percent-quick-fill row stays correctly disabled.
-// - Buy-side execution is real: tapping Buy runs the quote through
-//   src/core/txIntentFirewall.ts (via executeRelayQuote.ts) before
-//   signing anything, then signs and broadcasts directly with the
-//   session's own key — same non-custodial, direct-broadcast model as
-//   every other send in this app. Sell stays quote-only (see above).
+// - Execution is real on both sides: tapping Buy/Sell runs the quote
+//   through src/core/txIntentFirewall.ts (via executeRelayQuote.ts)
+//   before signing anything, then signs and broadcasts directly with
+//   the session's own key — same non-custodial, direct-broadcast model
+//   as every other send in this app.
 
 import {useEffect, useMemo, useRef, useState} from 'react';
 import {ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
@@ -39,6 +38,7 @@ import {DEV_FEE_PCT} from '../core/fees';
 import {getRelayQuote, summarizeQuote, type QuoteSummary, type RelayQuote} from '../core/relayQuote';
 import {executeRelayQuote, type ExecuteStep} from '../core/executeRelayQuote';
 import {TransactionIntentError} from '../core/txIntentFirewall';
+import {fetchErc20TokenMetadata, fetchSplMintDecimals} from '../wallet/walletRpc';
 import {useSession} from '../wallet/SessionContext';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 
@@ -127,6 +127,33 @@ export function TokenTradeScreen({
   const receiveSymbol = isBuySide ? token.symbol : NATIVE_SYMBOL[token.chainKey];
   const amtNum = Number(amount) || 0;
 
+  // The searched token's own decimals — not carried by DexScreener's
+  // search response, so Sell (which spends this token) needs a live
+  // on-chain read before it can convert a typed amount into base units.
+  // Buy never needs this: it always spends the chain's native asset,
+  // whose decimals chainData.ts already knows statically.
+  const [tokenDecimals, setTokenDecimals] = useState<number | null>(null);
+  const [tokenDecimalsError, setTokenDecimalsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setTokenDecimals(null);
+    setTokenDecimalsError(null);
+    const lookup = token.chainKey === 'solana' ? fetchSplMintDecimals(token.address) : fetchErc20TokenMetadata(token.chainKey, token.address).then(meta => meta.decimals);
+    lookup
+      .then(decimals => {
+        if (cancelled) return;
+        setTokenDecimals(decimals);
+      })
+      .catch(err => {
+        if (cancelled) return;
+        setTokenDecimalsError(err instanceof Error ? err.message : "Couldn't verify this token.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
   useEffect(() => {
     setQuoteError(null);
     // A changed amount/side invalidates any in-flight execution result —
@@ -136,7 +163,7 @@ export function TokenTradeScreen({
     setExecuteError(null);
     setExecuteWarnings([]);
     setExecuteTxHashes([]);
-    if (!isBuySide || amtNum <= 0) {
+    if (amtNum <= 0) {
       setQuote(null);
       rawQuoteRef.current = null;
       setQuoteLoading(false);
@@ -148,8 +175,11 @@ export function TokenTradeScreen({
       setQuoteLoading(false);
       return;
     }
-    const nativeDecimals = assetDecimalsForChain(token.chainKey, NATIVE_SYMBOL[token.chainKey]);
-    if (nativeDecimals === undefined) {
+    // Buy spends native (decimals known statically); Sell spends the
+    // searched token (decimals only known once the live lookup above
+    // resolves) — either way, this is the "You pay" side's decimals.
+    const payDecimals = isBuySide ? assetDecimalsForChain(token.chainKey, NATIVE_SYMBOL[token.chainKey]) : tokenDecimals;
+    if (payDecimals === undefined || payDecimals === null) {
       setQuote(null);
       rawQuoteRef.current = null;
       setQuoteLoading(false);
@@ -161,17 +191,18 @@ export function TokenTradeScreen({
     const timer = setTimeout(() => {
       let amountBaseUnits: string;
       try {
-        amountBaseUnits = parseUnits(amount, nativeDecimals).toString();
+        amountBaseUnits = parseUnits(amount, payDecimals).toString();
       } catch {
         setQuoteLoading(false);
         return;
       }
       const userAddress = token.chainKey === 'solana' ? session.solana.address : session.evm.address;
+      const nativeCurrency = currencyAddress(token.chainKey, NATIVE_SYMBOL[token.chainKey]);
       getRelayQuote({
         fromChainKey: token.chainKey,
         toChainKey: token.chainKey,
-        originCurrency: currencyAddress(token.chainKey, NATIVE_SYMBOL[token.chainKey]),
-        destinationCurrency: token.address,
+        originCurrency: isBuySide ? nativeCurrency : token.address,
+        destinationCurrency: isBuySide ? token.address : nativeCurrency,
         amountBaseUnits,
         userAddress,
       })
@@ -180,7 +211,13 @@ export function TokenTradeScreen({
           // after a faster later one would otherwise flash outdated numbers.
           if (requestId !== quoteRequestIdRef.current) return;
           rawQuoteRef.current = q;
-          setQuote(summarizeQuote(q, 18));
+          // Only used if Relay's own response omits currency.decimals on
+          // the receiving side (summarizeQuote's own doc comment) — the
+          // receiving side is the token on Buy (tokenDecimals, already
+          // fetched above) or the chain's native asset on Sell (known
+          // statically), so this fallback is real either way, not a guess.
+          const receiveDecimalsFallback = isBuySide ? (tokenDecimals ?? 18) : (assetDecimalsForChain(token.chainKey, NATIVE_SYMBOL[token.chainKey]) ?? 18);
+          setQuote(summarizeQuote(q, receiveDecimalsFallback));
           setQuoteLoading(false);
         })
         .catch(err => {
@@ -192,9 +229,9 @@ export function TokenTradeScreen({
         });
     }, QUOTE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [isBuySide, amount, amtNum, session, token]);
+  }, [isBuySide, amount, amtNum, session, token, tokenDecimals]);
 
-  async function handleBuy() {
+  async function handleTrade() {
     const quoteToExecute = rawQuoteRef.current;
     if (!quoteToExecute || !session) return;
     setExecuteError(null);
@@ -217,7 +254,7 @@ export function TokenTradeScreen({
     }
   }
 
-  const canBuy = isBuySide && Boolean(rawQuoteRef.current) && Boolean(session) && (executeState === 'idle' || executeState === 'error');
+  const canTrade = Boolean(rawQuoteRef.current) && Boolean(session) && (executeState === 'idle' || executeState === 'error');
 
   return (
     <View style={styles.screen}>
@@ -308,9 +345,10 @@ export function TokenTradeScreen({
         </View>
       </View>
 
-      {!isBuySide && <Text style={styles.noteText}>Sell quotes need the token's on-chain decimals, not wired up yet — Buy quotes are live.</Text>}
+      {!isBuySide && tokenDecimalsError && <Text style={styles.errorText}>{tokenDecimalsError}</Text>}
+      {!isBuySide && !tokenDecimalsError && tokenDecimals === null && amtNum > 0 && <Text style={styles.noteText}>Verifying this token…</Text>}
       {quoteError && <Text style={styles.errorText}>{quoteError}</Text>}
-      {isBuySide && amtNum > 0 && !session && !quoteError && <Text style={styles.noteText}>Unlock your wallet to get a live quote.</Text>}
+      {amtNum > 0 && !session && !quoteError && <Text style={styles.noteText}>Unlock your wallet to get a live quote.</Text>}
 
       <View style={styles.feeRow}>
         <View style={styles.feeRowLeft}>
@@ -320,37 +358,33 @@ export function TokenTradeScreen({
         <Text style={styles.etaText}>{quote?.etaSeconds != null ? `ETA: ${formatEta(quote.etaSeconds)}` : 'ETA: ~1 min'}</Text>
       </View>
 
-      {isBuySide && (
-        <>
-          {executeState === 'success' ? (
-            <View style={styles.executeResult}>
-              <Text style={styles.executeSuccessText}>Trade sent</Text>
-              {executeTxHashes.map(hash => (
-                <Text key={hash} style={styles.executeHashText} selectable numberOfLines={1} ellipsizeMode="middle">
-                  {hash}
-                </Text>
-              ))}
-              {executeWarnings.map(warning => (
-                <Text key={warning} style={styles.executeWarningText}>
-                  {warning}
-                </Text>
-              ))}
-            </View>
+      {executeState === 'success' ? (
+        <View style={styles.executeResult}>
+          <Text style={styles.executeSuccessText}>Trade sent</Text>
+          {executeTxHashes.map(hash => (
+            <Text key={hash} style={styles.executeHashText} selectable numberOfLines={1} ellipsizeMode="middle">
+              {hash}
+            </Text>
+          ))}
+          {executeWarnings.map(warning => (
+            <Text key={warning} style={styles.executeWarningText}>
+              {warning}
+            </Text>
+          ))}
+        </View>
+      ) : (
+        <TouchableOpacity style={[styles.buyButton, !canTrade && styles.buyButtonDisabled]} disabled={!canTrade} onPress={handleTrade} activeOpacity={0.8}>
+          {executeState === 'idle' || executeState === 'error' ? (
+            <Text style={styles.buyButtonText}>{isBuySide ? 'Buy' : 'Sell'}</Text>
           ) : (
-            <TouchableOpacity style={[styles.buyButton, !canBuy && styles.buyButtonDisabled]} disabled={!canBuy} onPress={handleBuy} activeOpacity={0.8}>
-              {executeState === 'idle' || executeState === 'error' ? (
-                <Text style={styles.buyButtonText}>Buy</Text>
-              ) : (
-                <View style={styles.buyButtonPendingRow}>
-                  <ActivityIndicator color={colors.ctaText} size="small" />
-                  <Text style={styles.buyButtonText}>{executeStatusLabel(executeState)}</Text>
-                </View>
-              )}
-            </TouchableOpacity>
+            <View style={styles.buyButtonPendingRow}>
+              <ActivityIndicator color={colors.ctaText} size="small" />
+              <Text style={styles.buyButtonText}>{executeStatusLabel(executeState)}</Text>
+            </View>
           )}
-          {executeError && <Text style={styles.errorText}>{executeError}</Text>}
-        </>
+        </TouchableOpacity>
       )}
+      {executeError && <Text style={styles.errorText}>{executeError}</Text>}
     </View>
   );
 }
