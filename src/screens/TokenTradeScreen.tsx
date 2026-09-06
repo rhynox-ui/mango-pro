@@ -41,7 +41,8 @@ import {CHAIN_LABEL, NATIVE_SYMBOL, assetDecimalsForChain, currencyAddress, type
 import {DEV_FEE_PCT} from '../core/fees';
 import {getRelayQuote, summarizeQuote, type QuoteSummary, type RelayQuote} from '../core/relayQuote';
 import {executeRelayQuote, type ExecuteStep} from '../core/executeRelayQuote';
-import {checkFallbackRoute, tryFallbackProviders, type FallbackRouteParams} from '../core/fallbackDex';
+import {checkFallbackRoute, sweepFallbackFeeFromNativeBalance, tryFallbackProviders, type FallbackRouteParams} from '../core/fallbackDex';
+import {fetchWalletPrices} from '../core/walletPrices';
 import {TransactionIntentError} from '../core/txIntentFirewall';
 import {
   estimateEvmNativeFeeReserve,
@@ -181,6 +182,31 @@ export function TokenTradeScreen({
   const paySymbol = isBuySide ? NATIVE_SYMBOL[token.chainKey] : token.symbol;
   const receiveSymbol = isBuySide ? token.symbol : NATIVE_SYMBOL[token.chainKey];
   const amtNum = Number(amount) || 0;
+
+  // Real USD value of the native asset being paid on Buy — the searched
+  // token itself has no reliable price source on Sell (walletPrices.ts
+  // only covers a small, conservative set of established assets), so
+  // this stays null there, same "nothing to cap without a real number"
+  // rule appFeeBps's own doc comment states. Feeds getRelayQuote's own
+  // originAmountUsd below (activating the large-trade fee cap that was
+  // otherwise dormant with nothing to compute it against) and the
+  // fallback-DEX path's fee cap/sweep.
+  const [nativeUsdPrice, setNativeUsdPrice] = useState<number | null>(null);
+  useEffect(() => {
+    const nativeSymbol = NATIVE_SYMBOL[token.chainKey];
+    let cancelled = false;
+    fetchWalletPrices('usd')
+      .then(prices => {
+        if (!cancelled) setNativeUsdPrice(prices?.[nativeSymbol] ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setNativeUsdPrice(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token.chainKey]);
+  const originAmountUsd = isBuySide && nativeUsdPrice != null ? amtNum * nativeUsdPrice : undefined;
 
   // The searched token's own decimals — not carried by DexScreener's
   // search response, so Sell (which spends this token) needs a live
@@ -332,6 +358,7 @@ export function TokenTradeScreen({
         destinationCurrency: isBuySide ? token.address : nativeCurrency,
         amountBaseUnits,
         userAddress,
+        originAmountUsd,
         slippageTolerance: slippageBps ?? undefined,
       })
         .then(q => {
@@ -367,6 +394,7 @@ export function TokenTradeScreen({
             buyToken: isBuySide ? token.address : nativeCurrency,
             sellAmount: amountBaseUnits,
             takerAddress: userAddress,
+            originAmountUsd,
             buyDecimals: receiveDecimalsFallback,
           };
           checkFallbackRoute(fallbackParams)
@@ -402,7 +430,7 @@ export function TokenTradeScreen({
         });
     }, QUOTE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [isBuySide, amount, amtNum, session, token, tokenDecimals, slippageBps]);
+  }, [isBuySide, amount, amtNum, session, token, tokenDecimals, slippageBps, originAmountUsd]);
 
   // Flipping side changes which balance the pay card is even reading
   // (native vs. the searched token) — any preset percentage of the OLD
@@ -448,6 +476,18 @@ export function TokenTradeScreen({
           receivedAmountFormatted = formatUnits(BigInt(result.buyAmount), fallbackParams!.buyDecimals ?? 18);
         } catch {
           receivedAmountFormatted = null;
+        }
+        // Best-effort, fire-and-forget — the trade above already
+        // succeeded, so this never affects it either way. Only needed
+        // when the winning provider didn't already collect Mango's fee
+        // inline (1inch's own Integrator Fee does; 0x doesn't).
+        if (!result.feeCollectedInline) {
+          sweepFallbackFeeFromNativeBalance({
+            chainKey: token.chainKey,
+            evmAddress: session.evm.address,
+            privateKeyHex: session.evm.privateKey,
+            originAmountUsd: fallbackParams!.originAmountUsd,
+          }).catch(() => {});
         }
       }
       setExecuteWarnings(warnings);

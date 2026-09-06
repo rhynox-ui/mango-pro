@@ -41,21 +41,26 @@
 // the wallet — cheap, real protection against a malformed or hostile
 // quote, not present in the source this was ported from.
 //
-// Known, disclosed gap versus the mobile source: mobile's own
+// sweepFallbackFeeFromNativeBalance below closes the one gap flagged
+// when this file was first written: mobile's own
 // settleFallbackFeeFromNativeBalance sweeps Mango's fee separately when
 // the winning provider didn't collect it inline (0x doesn't; 1inch's own
-// Integrator Fee does). That sweep depends on a live native-asset USD
-// price feed mobile already has (walletPrices.js) that this app doesn't
-// build yet — so a fallback trade that lands on 0x completes for the
-// user but doesn't collect Mango's fee. Real, but not a fund-safety gap
-// (nothing is lost or at risk — this app's own revenue on that one path
-// is), and not invented-away here rather than actually built.
+// Integrator Fee does) — that depended on a live native-asset USD price
+// feed this app didn't have yet. walletPrices.ts now exists (same
+// CoinGecko source mobile's own walletPrices.js uses), so this is ported
+// too, same best-effort/fire-and-forget contract as the source: called
+// AFTER a fallback trade has already succeeded, never blocks or affects
+// it, and silently does nothing if the price, balance, or gas-reserve
+// estimate isn't available.
 
-import {createPublicClient, createWalletClient, formatUnits} from 'viem';
+import {createPublicClient, createWalletClient, formatUnits, parseEther} from 'viem';
 import {privateKeyToAccount} from 'viem/accounts';
 import {getViemChain, transportFor} from './chainRegistry.ts';
-import {MAINNET_CHAIN_IDS, type ChainKey} from './chainData.ts';
-import {DEV_FEE_WALLET, appFeeBps} from './fees.ts';
+import {MAINNET_CHAIN_IDS, NATIVE_SYMBOL, type ChainKey} from './chainData.ts';
+import {DEV_FEE_MAX_USD, DEV_FEE_PCT, DEV_FEE_WALLET, appFeeBps} from './fees.ts';
+import {fetchWalletPrices} from './walletPrices.ts';
+import {estimateEvmNativeFeeReserve, fetchWalletNativeBalance} from '../wallet/walletRpc.ts';
+import {formatAmountForInput} from '../wallet/useAvailableBalance.ts';
 
 const FALLBACK_QUOTE_URL = 'https://mangoprotocol.site/api/v1/bridge/fallback-quote';
 
@@ -301,4 +306,61 @@ export async function tryFallbackProviders(params: FallbackExecuteParams): Promi
     }
   }
   throw new Error(`No fallback route available. ${failures.join(' | ')}`);
+}
+
+// Dust floor — under this, the gas cost of a second, separate
+// transaction would rival or exceed the fee itself, not worth sending.
+// Same value mobile's own MIN_FALLBACK_FEE_USD uses.
+const MIN_FALLBACK_FEE_USD = 0.05;
+
+/**
+ * Best-effort, fire-and-forget: collects Mango's fee separately when a
+ * fallback trade landed on a provider that didn't collect it inline (0x
+ * doesn't; 1inch's own Integrator Fee does — see TokenTradeScreen.tsx's
+ * own call site, which only calls this when feeCollectedInline is
+ * false). The swap has ALREADY succeeded by the time this ever runs, so
+ * a failure or a deliberate skip here never affects it or gets shown to
+ * the user. Sized off the same appFeeBps math every other quote path
+ * uses, converted into the chain's own native currency via a live
+ * price — skipped entirely, never billed at a guessed number, if that
+ * price or a large-enough spare native balance (beyond a real gas
+ * reserve for transacting again) isn't actually known.
+ */
+export async function sweepFallbackFeeFromNativeBalance({
+  chainKey,
+  evmAddress,
+  privateKeyHex,
+  originAmountUsd,
+}: {
+  chainKey: ChainKey;
+  evmAddress: string;
+  privateKeyHex: string;
+  originAmountUsd: number | undefined | null;
+}): Promise<void> {
+  if (!(originAmountUsd && originAmountUsd > 0)) return;
+  const targetFeeUsd = Math.min(originAmountUsd * DEV_FEE_PCT, DEV_FEE_MAX_USD);
+  if (!(targetFeeUsd >= MIN_FALLBACK_FEE_USD)) return;
+
+  const nativeSymbol = NATIVE_SYMBOL[chainKey];
+  const prices = await fetchWalletPrices('usd').catch(() => null);
+  const nativePriceUsd = prices?.[nativeSymbol];
+  if (!(nativePriceUsd && nativePriceUsd > 0)) return;
+  const targetFeeNative = targetFeeUsd / nativePriceUsd;
+
+  const freshBalance = await fetchWalletNativeBalance(chainKey, evmAddress).catch(() => null);
+  if (freshBalance === null) return;
+  const gasReserve = await estimateEvmNativeFeeReserve(chainKey).catch(() => 0);
+  // Doubled for the same reason DexScreen.tsx's own handleMax doubles
+  // it: this transfer is itself a second transaction after the swap, so
+  // it needs its own gas headroom kept aside too, never eating into what
+  // the user needs to transact again.
+  const spareNative = freshBalance - gasReserve * 2;
+  const feeToSend = Math.min(targetFeeNative, spareNative);
+  if (!(feeToSend > 0)) return;
+
+  const {walletClient, publicClient} = clientsForChain(chainKey, privateKeyHex);
+  const account = walletClient.account;
+  if (!account) return;
+  const hash = await walletClient.sendTransaction({account, to: DEV_FEE_WALLET as `0x${string}`, value: parseEther(formatAmountForInput(feeToSend))});
+  await publicClient.waitForTransactionReceipt({hash});
 }
