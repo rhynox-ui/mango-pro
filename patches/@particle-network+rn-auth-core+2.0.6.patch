@@ -1,0 +1,13 @@
+diff --git a/node_modules/@particle-network/rn-auth-core/android/src/main/java/com/particleauthcore/ParticleAuthCoreModule.kt b/node_modules/@particle-network/rn-auth-core/android/src/main/java/com/particleauthcore/ParticleAuthCoreModule.kt
+index 5aa2bcf..c3f6036 100644
+--- a/node_modules/@particle-network/rn-auth-core/android/src/main/java/com/particleauthcore/ParticleAuthCoreModule.kt
++++ b/node_modules/@particle-network/rn-auth-core/android/src/main/java/com/particleauthcore/ParticleAuthCoreModule.kt
+@@ -238,7 +238,7 @@ class ParticleAuthCoreModule(reactContext: ReactApplicationContext) :
+ 
+     @ReactMethod
+     fun openAccountAndSecurity(callback: Callback) {
+-        currentActivity?.apply {
++        reactApplicationContext.currentActivity?.apply {
+             runOnUiThread(Runnable {
+                 AuthCore.openAccountAndSecurity(this)
+             })
