@@ -9,6 +9,7 @@
 import {ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {
   BellIcon,
+  BookOpenIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   ContrastIcon,
@@ -41,6 +42,7 @@ const ROWS: Row[] = [
   {key: 'legal', label: 'Legal and Privacy', Icon: ScaleIcon},
   {key: 'taxes', label: 'Taxes', Icon: FileTextIcon},
   {key: 'help', label: 'Help and Support', Icon: HelpCircleIcon},
+  {key: 'docs', label: 'Documentation', Icon: BookOpenIcon},
   {key: 'discord', label: 'Discord', Icon: DiscordIcon},
 ];
 
