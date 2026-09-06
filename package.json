@@ -14,7 +14,9 @@
     "verify-relay-quote": "node --experimental-strip-types scripts/verify-relay-quote.mjs",
     "verify-usdc-balances": "node --experimental-strip-types scripts/verify-usdc-balances.mjs",
     "verify-send-usdc": "node --experimental-strip-types scripts/verify-send-usdc.mjs",
-    "verify": "npm run verify-fees && npm run verify-wallet-crypto && npm run verify-relay-quote && npm run verify-usdc-balances && npm run verify-send-usdc"
+    "verify-tx-intent-firewall": "node --experimental-strip-types scripts/verify-tx-intent-firewall.mjs",
+    "verify-solana-tx-intent": "node --experimental-strip-types scripts/verify-solana-tx-intent.mjs",
+    "verify": "npm run verify-fees && npm run verify-wallet-crypto && npm run verify-relay-quote && npm run verify-usdc-balances && npm run verify-send-usdc && npm run verify-tx-intent-firewall && npm run verify-solana-tx-intent"
   },
   "dependencies": {
     "@noble/ciphers": "^2.3.0",
