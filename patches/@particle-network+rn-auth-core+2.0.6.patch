@@ -1,3 +1,21 @@
+diff --git a/node_modules/@particle-network/rn-auth-core/android/build.gradle b/node_modules/@particle-network/rn-auth-core/android/build.gradle
+index 6cf5445..d816706 100644
+--- a/node_modules/@particle-network/rn-auth-core/android/build.gradle
++++ b/node_modules/@particle-network/rn-auth-core/android/build.gradle
+@@ -51,11 +51,11 @@ def supportsNamespace() {
+ 
+ android {
+   namespace "com.particleauthcore"
+-  compileSdkVersion 33
++  compileSdkVersion getExtOrIntegerDefault("compileSdkVersion")
+ 
+   defaultConfig {
+     minSdkVersion 23
+-    targetSdkVersion 33
++    targetSdkVersion getExtOrIntegerDefault("targetSdkVersion")
+     buildConfigField "boolean", "IS_NEW_ARCHITECTURE_ENABLED", isNewArchitectureEnabled().toString()
+   }
+   buildTypes {
 diff --git a/node_modules/@particle-network/rn-auth-core/android/src/main/java/com/particleauthcore/ParticleAuthCoreModule.kt b/node_modules/@particle-network/rn-auth-core/android/src/main/java/com/particleauthcore/ParticleAuthCoreModule.kt
 index 5aa2bcf..c3f6036 100644
 --- a/node_modules/@particle-network/rn-auth-core/android/src/main/java/com/particleauthcore/ParticleAuthCoreModule.kt
