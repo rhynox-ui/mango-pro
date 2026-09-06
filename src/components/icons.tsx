@@ -266,6 +266,36 @@ export function AlertCircleIcon({color, size = 18}: IconProps) {
   );
 }
 
+export function DownloadIcon({color, size = 18}: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" stroke={color} {...STROKE}>
+      <Path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <Path d="m7 10 5 5 5-5" />
+      <Path d="M12 15V3" />
+    </Svg>
+  );
+}
+
+export function ArrowUpIcon({color, size = 18}: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" stroke={color} {...STROKE}>
+      <Path d="M12 19V5" />
+      <Path d="m5 12 7-7 7 7" />
+    </Svg>
+  );
+}
+
+// A simple 6-dot grid — stands in for "other apps," same idea as the
+// reference's own app-launcher glyph, without pulling in a brand set of
+// third-party logos this app has no license to reproduce.
+export function GridIcon({color, size = 18}: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      {[5, 12, 19].flatMap(cx => [5, 19].map(cy => <Circle key={`${cx}-${cy}`} cx={cx} cy={cy} r="1.8" fill={color} />))}
+    </Svg>
+  );
+}
+
 // The Home discovery filter row's own leading button — three
 // descending-width horizontal lines, the standard "filter" glyph (lucide
 // "list-filter"), not a hamburger menu.

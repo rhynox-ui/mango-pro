@@ -8,29 +8,53 @@
 // lying about what's actually built, not demonstrating the product.
 // "Joined <month year>" is the one real data point: today's date.
 
-import {useMemo, useState} from 'react';
-import {ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
+import {useEffect, useMemo, useState} from 'react';
+import {ActivityIndicator, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import Svg, {Line as SvgLine} from 'react-native-svg';
 import {
   AlertCircleIcon,
+  ArrowUpIcon,
   CalendarIcon,
   ChevronDownIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  DownloadIcon,
   GearIcon,
   GiftIcon,
+  GridIcon,
   HistoryIcon,
+  LandmarkIcon,
   MoreHorizontalIcon,
   PencilIcon,
   PlusIcon,
   RepeatIcon,
   UploadIcon,
 } from '../components/icons';
-import {CHAIN_LABEL} from '../core/chainData';
+import {CHAIN_LABEL, type ChainKey} from '../core/chainData';
+import {fetchUsdcPortfolio, USDC_SUPPORTED_CHAINS, type UsdcPortfolio} from '../core/usdcBalances';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {useSession} from '../wallet/SessionContext';
 
 function truncateAddress(address: string): string {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
 }
+
+function formatUsd(n: number): string {
+  return n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
+// Every USDC chain except Solana shares the SAME EVM address — this is
+// what "deposit on whichever chain works for you" actually reduces to
+// for a user: one address, valid everywhere in this list, plus a
+// separate Solana address for the one non-EVM chain.
+const EVM_USDC_CHAINS = USDC_SUPPORTED_CHAINS.filter(c => c !== 'solana');
+
+// Mirrors FOMO's own deposit flow shape (methods -> pick a network ->
+// show the address for that one network) — adapted to what this app can
+// actually do today: Crypto is real, Debit/Bank/Exchanges are shown
+// (same as the reference) but marked "Coming soon" rather than faked,
+// since no fiat on/off-ramp integration exists yet.
+type DepositStep = 'methods' | 'network' | 'address';
 
 const TIME_RANGES = ['24h', '7d', '30d', 'All'] as const;
 type TimeRange = (typeof TIME_RANGES)[number];
@@ -51,10 +75,28 @@ export function ProfileScreen({onOpenSettings}: {onOpenSettings: () => void}) {
   const {session} = useSession();
   const styles = makeStyles(colors);
   const [bannerOpen, setBannerOpen] = useState(false);
+  const [depositStep, setDepositStep] = useState<DepositStep | null>(null);
+  const [depositChain, setDepositChain] = useState<ChainKey | null>(null);
+  const [usdcPortfolio, setUsdcPortfolio] = useState<UsdcPortfolio | null>(null);
+  const [usdcLoading, setUsdcLoading] = useState(false);
   const [timeRange, setTimeRange] = useState<TimeRange>('24h');
   const [positionTab, setPositionTab] = useState<PositionTab>('Open');
   const [assetFilter, setAssetFilter] = useState<AssetFilterKey>('All');
   const joined = useMemo(joinedLabel, []);
+
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    setUsdcLoading(true);
+    fetchUsdcPortfolio(session).then(portfolio => {
+      if (cancelled) return;
+      setUsdcPortfolio(portfolio);
+      setUsdcLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
 
   return (
     <ScrollView style={styles.screen} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
@@ -169,11 +211,18 @@ export function ProfileScreen({onOpenSettings}: {onOpenSettings: () => void}) {
           </View>
           <View>
             <Text style={styles.totalCashLabel}>Total cash</Text>
-            <Text style={styles.totalCashValue}>$0</Text>
+            {usdcLoading ? (
+              <ActivityIndicator color={colors.textMuted} size="small" style={styles.totalCashSpinner} />
+            ) : (
+              <Text style={styles.totalCashValue}>${usdcPortfolio ? formatUsd(usdcPortfolio.totalUsd) : '0.00'}</Text>
+            )}
+            {usdcPortfolio && !usdcPortfolio.complete && (
+              <Text style={styles.totalCashNote}>Some chains didn't respond — this may be incomplete.</Text>
+            )}
           </View>
         </View>
         <View style={styles.totalCashActions}>
-          <TouchableOpacity style={styles.squareButton} hitSlop={4}>
+          <TouchableOpacity style={styles.squareButton} hitSlop={4} onPress={() => setDepositStep('methods')}>
             <PlusIcon color={colors.textPrimary} size={16} />
           </TouchableOpacity>
           <TouchableOpacity style={styles.squareButton} hitSlop={4}>
@@ -217,6 +266,123 @@ export function ProfileScreen({onOpenSettings}: {onOpenSettings: () => void}) {
       <TouchableOpacity style={styles.showHiddenPill} activeOpacity={0.7}>
         <Text style={styles.showHiddenText}>Show hidden</Text>
       </TouchableOpacity>
+
+      <Modal
+        visible={depositStep !== null}
+        animationType="slide"
+        transparent
+        onRequestClose={() => {
+          setDepositStep(null);
+          setDepositChain(null);
+        }}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            {depositStep === 'methods' && (
+              <>
+                <View style={styles.modalHeaderRow}>
+                  <Text style={styles.modalTitle}>Deposit with</Text>
+                  <TouchableOpacity onPress={() => setDepositStep(null)} hitSlop={8}>
+                    <Text style={styles.modalClose}>Close</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <TouchableOpacity style={styles.depositMethodRow} activeOpacity={0.7} onPress={() => setDepositStep('network')}>
+                  <View style={styles.depositMethodText}>
+                    <Text style={styles.depositMethodTitle}>Crypto</Text>
+                    <Text style={styles.depositMethodSubtitle}>Receive USDC from a crypto wallet</Text>
+                  </View>
+                  <DownloadIcon color={colors.textPrimary} size={20} />
+                </TouchableOpacity>
+
+                <View style={[styles.depositMethodRow, styles.depositMethodDisabled]}>
+                  <View style={styles.depositMethodText}>
+                    <View style={styles.depositMethodTitleRow}>
+                      <Text style={styles.depositMethodTitle}>Debit or bank</Text>
+                      <View style={styles.comingSoonPill}>
+                        <Text style={styles.comingSoonText}>Coming soon</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.depositMethodSubtitle}>Deposit cash with a debit card or bank transfer</Text>
+                  </View>
+                  <LandmarkIcon color={colors.textMuted} size={20} />
+                </View>
+
+                <View style={[styles.depositMethodRow, styles.depositMethodDisabled]}>
+                  <View style={styles.depositMethodText}>
+                    <View style={styles.depositMethodTitleRow}>
+                      <Text style={styles.depositMethodTitle}>Exchanges and apps</Text>
+                      <View style={styles.comingSoonPill}>
+                        <Text style={styles.comingSoonText}>Coming soon</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.depositMethodSubtitle}>Cash App, Coinbase, and similar</Text>
+                  </View>
+                  <GridIcon color={colors.textMuted} size={20} />
+                </View>
+              </>
+            )}
+
+            {depositStep === 'network' && (
+              <>
+                <View style={styles.modalHeaderRow}>
+                  <TouchableOpacity onPress={() => setDepositStep('methods')} hitSlop={8}>
+                    <ChevronLeftIcon color={colors.textPrimary} size={20} />
+                  </TouchableOpacity>
+                  <Text style={styles.modalTitle}>Deposit crypto</Text>
+                  <View style={styles.modalHeaderSpacer} />
+                </View>
+                <Text style={styles.modalSubtitle}>Choose a network to deposit from.</Text>
+
+                {USDC_SUPPORTED_CHAINS.map(chainKey => (
+                  <TouchableOpacity
+                    key={chainKey}
+                    style={styles.networkRow}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      setDepositChain(chainKey);
+                      setDepositStep('address');
+                    }}>
+                    <Text style={styles.networkRowText}>{CHAIN_LABEL[chainKey]}</Text>
+                    <ChevronRightIcon color={colors.textMuted} size={16} />
+                  </TouchableOpacity>
+                ))}
+              </>
+            )}
+
+            {depositStep === 'address' && depositChain && (
+              <>
+                <View style={styles.modalHeaderRow}>
+                  <TouchableOpacity onPress={() => setDepositStep('network')} hitSlop={8}>
+                    <ChevronLeftIcon color={colors.textPrimary} size={20} />
+                  </TouchableOpacity>
+                  <Text style={styles.modalTitle}>{CHAIN_LABEL[depositChain]}</Text>
+                  <View style={styles.modalHeaderSpacer} />
+                </View>
+
+                <Text style={styles.modalSectionLabel}>Your {CHAIN_LABEL[depositChain]} address</Text>
+                <Text style={styles.modalAddress} selectable numberOfLines={1} ellipsizeMode="middle">
+                  {depositChain === 'solana' ? (session?.solana.address ?? '—') : (session?.evm.address ?? '—')}
+                </Text>
+                <Text style={styles.modalHint}>
+                  {depositChain === 'solana'
+                    ? "A separate address — Solana isn't an EVM chain, so it can't share the address other networks use."
+                    : `The same address also works on: ${EVM_USDC_CHAINS.filter(c => c !== depositChain)
+                        .map(c => CHAIN_LABEL[c])
+                        .join(', ')}.`}
+                </Text>
+                <Text style={styles.modalWarning}>Only send USDC on {CHAIN_LABEL[depositChain]} to this address — anything else may be lost.</Text>
+              </>
+            )}
+
+            {depositStep === 'methods' && (
+              <View style={styles.withdrawRow}>
+                <ArrowUpIcon color={colors.textMuted} size={16} />
+                <Text style={styles.withdrawText}>Withdrawals — coming soon</Text>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -340,6 +506,8 @@ function makeStyles(colors: Colors) {
     totalCashIconText: {color: colors.textPrimary, fontSize: 16, fontWeight: '700'},
     totalCashLabel: {color: colors.textMuted, fontSize: 12.5},
     totalCashValue: {color: colors.textPrimary, fontSize: 17, fontWeight: '700', marginTop: 2},
+    totalCashSpinner: {alignSelf: 'flex-start', marginTop: 4},
+    totalCashNote: {color: colors.warning, fontSize: 10, marginTop: 2},
     totalCashActions: {flexDirection: 'row', gap: 8},
     squareButton: {
       width: 36,
@@ -394,5 +562,62 @@ function makeStyles(colors: Colors) {
       borderColor: colors.panelBorder,
     },
     showHiddenText: {color: colors.textSecondary, fontSize: 12.5, fontWeight: '600'},
+
+    modalBackdrop: {flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)'},
+    modalCard: {backgroundColor: colors.bg, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: 36},
+    modalHeaderRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18},
+    modalTitle: {color: colors.textPrimary, fontSize: 18, fontWeight: '800'},
+    modalClose: {color: colors.textMuted, fontSize: 13, fontWeight: '600'},
+    modalSectionLabel: {color: colors.textMuted, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5},
+    modalSectionLabelSpaced: {marginTop: 22},
+    modalAddress: {
+      color: colors.textPrimary,
+      fontSize: 14,
+      fontWeight: '600',
+      marginTop: 8,
+      backgroundColor: colors.panel,
+      borderWidth: 1,
+      borderColor: colors.panelBorder,
+      borderRadius: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+    },
+    modalHint: {color: colors.textMuted, fontSize: 11.5, lineHeight: 16, marginTop: 8},
+    modalWarning: {color: colors.danger, fontSize: 11.5, lineHeight: 16, marginTop: 10, fontWeight: '600'},
+    modalSubtitle: {color: colors.textSecondary, fontSize: 13, marginBottom: 16},
+    modalHeaderSpacer: {width: 20},
+
+    depositMethodRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12,
+      backgroundColor: colors.panel,
+      borderRadius: 16,
+      padding: 16,
+      marginBottom: 10,
+    },
+    depositMethodDisabled: {opacity: 0.6},
+    depositMethodText: {flex: 1, gap: 4},
+    depositMethodTitleRow: {flexDirection: 'row', alignItems: 'center', gap: 8},
+    depositMethodTitle: {color: colors.textPrimary, fontSize: 15.5, fontWeight: '700'},
+    depositMethodSubtitle: {color: colors.textMuted, fontSize: 12},
+    comingSoonPill: {backgroundColor: colors.pillBg, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2},
+    comingSoonText: {color: colors.textMuted, fontSize: 9.5, fontWeight: '700'},
+
+    networkRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      backgroundColor: colors.panel,
+      borderRadius: 16,
+      paddingHorizontal: 16,
+      paddingVertical: 15,
+      marginBottom: 8,
+    },
+    networkRowText: {color: colors.textPrimary, fontSize: 15, fontWeight: '700'},
+
+    withdrawRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 4, paddingVertical: 10},
+    withdrawText: {color: colors.textMuted, fontSize: 12.5, fontWeight: '600'},
   });
 }

@@ -12,12 +12,14 @@
     "verify-fees": "node --experimental-strip-types scripts/verify-fees.mjs",
     "verify-wallet-crypto": "node --experimental-strip-types scripts/verify-wallet-crypto.mjs",
     "verify-relay-quote": "node --experimental-strip-types scripts/verify-relay-quote.mjs",
-    "verify": "npm run verify-fees && npm run verify-wallet-crypto && npm run verify-relay-quote"
+    "verify-usdc-balances": "node --experimental-strip-types scripts/verify-usdc-balances.mjs",
+    "verify": "npm run verify-fees && npm run verify-wallet-crypto && npm run verify-relay-quote && npm run verify-usdc-balances"
   },
   "dependencies": {
     "@noble/ciphers": "^2.3.0",
     "@noble/hashes": "^2.3.0",
     "@react-native-async-storage/async-storage": "^3.1.1",
+    "@solana/spl-token": "^0.4.15",
     "@solana/web3.js": "^1.98.4",
     "bip39": "^3.1.0",
     "bs58": "^6.0.0",
