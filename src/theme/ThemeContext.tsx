@@ -1,18 +1,15 @@
 // src/theme/ThemeContext.tsx
 //
-// Same shape as mango-mobile's own ThemeContext.tsx on purpose (useTheme()
-// -> {mode, colors, setMode, toggleMode}) so a developer moving between
-// the two codebases finds the identical pattern. Persistence uses
-// localStorage (mobile uses AsyncStorage for the same reason — Hermes has
-// none) under the same key concept the site/mobile already use
-// ("mango:theme" / "mango_theme_mode"), and additionally calls
-// applyPaletteToDocument() on every change so Tailwind's CSS-variable-
-// backed color classes (bg-panel, text-textPrimary, etc.) stay in sync
-// with whichever palette object components read via useTheme().colors —
-// one state change updates both the React tree and the raw CSS.
+// Ported directly from mango-mobile's own src/theme/ThemeContext.tsx —
+// same shape (AsyncStorage-persisted mode, colors re-render everything
+// live on toggle, defaults to light on a device with no stored
+// preference yet). Own storage key so switching themes in Mango Pro
+// never reads/writes mobile's separate AsyncStorage entry, even though
+// both apps could theoretically end up installed side by side one day.
 
 import React, {createContext, useContext, useEffect, useMemo, useState} from 'react';
-import {applyPaletteToDocument, DARK, LIGHT} from './palette';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import {DARK, LIGHT} from './palette';
 
 export type ThemeMode = 'light' | 'dark';
 export type Colors = typeof LIGHT;
@@ -32,24 +29,20 @@ export function ThemeProvider({children}: {children: React.ReactNode}) {
   const [mode, setModeState] = useState<ThemeMode>('light');
 
   useEffect(() => {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    if (stored === 'light' || stored === 'dark') {
-      setModeState(stored);
-    }
+    AsyncStorage.getItem(STORAGE_KEY).then(stored => {
+      if (stored === 'light' || stored === 'dark') {
+        setModeState(stored);
+      }
+    });
   }, []);
-
-  useEffect(() => {
-    applyPaletteToDocument(mode);
-  }, [mode]);
 
   function setMode(next: ThemeMode) {
     setModeState(next);
-    try {
-      window.localStorage.setItem(STORAGE_KEY, next);
-    } catch {
-      // Storage unavailable (private browsing, quota) — the choice just
-      // won't persist across sessions, nothing else breaks.
-    }
+    AsyncStorage.setItem(STORAGE_KEY, next).catch(() => {
+      // Storage unavailable — the choice just won't persist across
+      // launches, nothing else breaks, same pattern as mobile's own
+      // AsyncStorage writers.
+    });
   }
 
   function toggleMode() {

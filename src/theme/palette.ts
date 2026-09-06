@@ -1,19 +1,11 @@
 // src/theme/palette.ts
 //
-// Ported directly from mango-mobile's src/theme/palette.js, itself a
-// byte-matched port of mango-bridge.jsx's own PALETTE.light/PALETTE.dark
-// (src/theme.js there). Not re-derived — copied verbatim — so Mango Pro
-// starts as a third correct copy of this design system, not a fourth
-// place its hard-won rules (monochrome CTA that flips per theme, never a
-// flat brand color; danger/warning/gain kept theme-independent) need to
-// be re-litigated or drift from.
-//
-// applyPaletteToDocument() is this file's one real addition: it writes
-// these values onto :root as CSS custom properties (see tailwind.config.js,
-// which points its color tokens at exactly these variable names) so the
-// same TypeScript objects below are both the source of truth AND what
-// Tailwind classes like `bg-panel`/`text-textPrimary` actually resolve to
-// — one place to edit a color, not two.
+// Ported directly from mango-mobile's own src/theme/palette.js (itself a
+// byte-matched port of mango-bridge.jsx's PALETTE.light/PALETTE.dark) —
+// not re-derived, copied verbatim, so this stays a correct third copy of
+// the design system rather than a fourth place its hard-won rules
+// (monochrome CTA that flips per theme, never a flat brand color;
+// danger/warning/gain kept theme-independent) can quietly drift from.
 
 export const DANGER = '#D92D20';
 export const WARNING = '#EAB308';
@@ -91,36 +83,3 @@ export const DARK: Palette = {
   gain: GAIN,
   gainDeep: GAIN_DEEP,
 };
-
-const CSS_VAR_NAME: Record<keyof Palette, string> = {
-  bg: '--color-bg',
-  panel: '--color-panel',
-  panelBorder: '--color-panel-border',
-  input: '--color-input',
-  pillBg: '--color-pill-bg',
-  textPrimary: '--color-text-primary',
-  textSecondary: '--color-text-secondary',
-  textMuted: '--color-text-muted',
-  divider: '--color-divider',
-  ctaBg: '--color-cta-bg',
-  ctaText: '--color-cta-text',
-  ctaDisabledBg: '--color-cta-disabled-bg',
-  ctaDisabledText: '--color-cta-disabled-text',
-  navActive: '--color-nav-active',
-  navActiveText: '--color-nav-active-text',
-  accent: '--color-accent',
-  accentDeep: '--color-accent-deep',
-  danger: '--color-danger',
-  warning: '--color-warning',
-  gain: '--color-gain',
-  gainDeep: '--color-gain-deep',
-};
-
-export function applyPaletteToDocument(mode: 'light' | 'dark'): void {
-  const palette = mode === 'dark' ? DARK : LIGHT;
-  const root = document.documentElement;
-  (Object.keys(palette) as (keyof Palette)[]).forEach(key => {
-    root.style.setProperty(CSS_VAR_NAME[key], palette[key]);
-  });
-  root.classList.toggle('dark', mode === 'dark');
-}

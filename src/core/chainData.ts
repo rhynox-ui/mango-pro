@@ -48,6 +48,26 @@ export const NATIVE_SYMBOL: Record<ChainKey, string> = {
   ink: 'ETH', plasma: 'XPL', unichain: 'ETH', xlayer: 'OKB',
 };
 
+// Copied verbatim from mango-mobile's src/wallet/walletAssets.js
+// CHAIN_LABEL — same display strings, so a chain reads identically in
+// this app's UI as it does on mobile.
+export const CHAIN_LABEL: Record<ChainKey, string> = {
+  solana: 'Solana',
+  ethereum: 'Ethereum',
+  base: 'Base',
+  bnb: 'BNB Chain',
+  robinhood: 'Robinhood Chain',
+  stable: 'Stable',
+  arbitrum: 'Arbitrum One',
+  avalanche: 'Avalanche',
+  abstract: 'Abstract',
+  hyperevm: 'HyperEVM',
+  ink: 'Ink',
+  plasma: 'Plasma',
+  unichain: 'Unichain',
+  xlayer: 'X Layer',
+};
+
 export const TOKEN_ADDRESSES: Record<string, Partial<Record<ChainKey, string>>> = {
   USDC: {
     ethereum: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',

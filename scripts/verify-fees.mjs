@@ -15,23 +15,11 @@ import path from 'node:path';
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(dir, '..');
 
-// fees.ts is TypeScript; transpile-and-run it in isolation via esbuild
-// (already a transitive devDependency of vite) rather than requiring a
-// full project build just to check these constants.
-const esbuild = await import('esbuild');
-const out = await esbuild.build({
-  entryPoints: [path.join(repoRoot, 'src/core/fees.ts')],
-  bundle: false,
-  write: false,
-  format: 'esm',
-  platform: 'node',
-});
-const code = out.outputFiles[0].text;
-const tmpPath = path.join(repoRoot, 'node_modules/.verify-fees.mjs');
-const fs = await import('node:fs');
-fs.writeFileSync(tmpPath, code);
-const fees = await import(`file://${tmpPath}?t=${Date.now()}`);
-fs.rmSync(tmpPath, {force: true});
+// fees.ts is plain TypeScript with no RN-specific imports, so Node's own
+// native type-stripping (--experimental-strip-types, run via `node`'s
+// shebang-free invocation below) reads it directly — no bundler needed
+// now that this is a bare React Native app rather than a Vite project.
+const fees = await import(`file://${path.join(repoRoot, 'src/core/fees.ts')}?t=${Date.now()}`);
 
 let checks = 0;
 
