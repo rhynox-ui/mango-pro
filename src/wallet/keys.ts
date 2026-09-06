@@ -29,7 +29,18 @@ export const SOLANA_DERIVATION_PATH = "m/44'/501'/0'/0'";
 export const BIP39_WORDLIST = bip39.wordlists.english;
 
 export type ChainAccount = {address: string; privateKey: string};
-export type DerivedAccounts = {evm: ChainAccount; solana: ChainAccount};
+// authMethod distinguishes a real local seed-phrase session (undefined,
+// or explicitly 'seed') from a Google-login session (particleAuth.ts) —
+// the latter has real addresses but privateKey deliberately left ''
+// (Particle's MPC model never hands this app a raw key at all, so there
+// is no real value to put there). Every read-only feature (balances,
+// portfolio, receive, history) only ever touches .address and works
+// identically either way; every signing call site (trade, withdraw)
+// checks authMethod first and refuses cleanly for 'google' rather than
+// attempting to sign with an empty key — see TokenTradeScreen.tsx's and
+// ProfileScreen.tsx's own gates.
+export type AuthMethod = 'seed' | 'google';
+export type DerivedAccounts = {evm: ChainAccount; solana: ChainAccount; authMethod?: AuthMethod};
 
 /** Up to `limit` real BIP-39 words starting with `prefix` (case-insensitive). */
 export function suggestBip39Words(prefix: string, limit = 5): string[] {

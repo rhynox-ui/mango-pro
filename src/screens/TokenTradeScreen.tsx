@@ -449,6 +449,18 @@ export function TokenTradeScreen({
     const quoteToExecute = rawQuoteRef.current;
     const fallbackParams = fallbackParamsRef.current;
     if ((!quoteToExecute && !fallbackParams) || !session) return;
+    // Google-login sessions carry real addresses but a deliberately empty
+    // privateKey (see keys.ts/particleAuth.ts) — Particle's MPC model
+    // never hands this app a raw key to sign with at all. Refuse cleanly
+    // here rather than letting privateKeyToAccount('') below throw a
+    // confusing low-level error; canTrade/pillHint already keep the pill
+    // itself disabled for this case, this is the same guarantee for
+    // anyone who reaches handleTrade some other way.
+    if (session.authMethod === 'google') {
+      setExecuteError("Trading isn't available yet for Google sign-in accounts — this is coming in a future update.");
+      setExecuteState('error');
+      return;
+    }
     setExecuteError(null);
     setExecuteWarnings([]);
     setExecuteTxHashes([]);
@@ -530,7 +542,12 @@ export function TokenTradeScreen({
     }
   }
 
-  const canTrade = (Boolean(rawQuoteRef.current) || Boolean(fallbackParamsRef.current)) && Boolean(session) && !insufficientBalance && (executeState === 'idle' || executeState === 'error');
+  const canTrade =
+    (Boolean(rawQuoteRef.current) || Boolean(fallbackParamsRef.current)) &&
+    Boolean(session) &&
+    session?.authMethod !== 'google' &&
+    !insufficientBalance &&
+    (executeState === 'idle' || executeState === 'error');
   const isExecuting = executeState !== 'idle' && executeState !== 'error' && executeState !== 'success';
 
   // Same real bug both DexScreen.tsx's own pillHint and the site's own
@@ -548,6 +565,8 @@ export function TokenTradeScreen({
   // never duplicates it.
   const pillHint = !session
     ? 'Unlock your wallet to trade'
+    : session.authMethod === 'google'
+    ? "Trading isn't available yet for Google sign-in accounts"
     : insufficientBalance
       ? null
       : amtNum <= 0

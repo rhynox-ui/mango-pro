@@ -84,6 +84,19 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+
+        // Particle Auth (Google login) — read from android/gradle.properties
+        // (blank by default; fill in real values from
+        // https://dashboard.particle.network locally or via CI secrets).
+        // @particle-network/rn-auth's own AndroidManifest.xml references
+        // these placeholders directly (a pn${PN_APP_ID} URL scheme plus
+        // three particle.network.* meta-data entries), auto-merged into
+        // this app's manifest by Android's manifest merger.
+        manifestPlaceholders = [
+            PN_PROJECT_ID: project.findProperty('PN_PROJECT_ID') ?: '',
+            PN_PROJECT_CLIENT_KEY: project.findProperty('PN_PROJECT_CLIENT_KEY') ?: '',
+            PN_APP_ID: project.findProperty('PN_APP_ID') ?: ''
+        ]
     }
     signingConfigs {
         debug {

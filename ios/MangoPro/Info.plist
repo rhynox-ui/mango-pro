@@ -24,6 +24,19 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<!-- Particle Auth (Google login) callback scheme — real value is
+	     "pn<PROJECT_APP_UUID>" from this app's own Particle dashboard
+	     project (https://dashboard.particle.network), same PROJECT_APP_UUID
+	     as ParticleNetwork-Info.plist. Placeholder until that's known. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>pnREPLACE_WITH_PROJECT_APP_UUID</string>
+			</array>
+		</dict>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Particle Auth (Google login) iOS config — required by the native SDK
+  underlying @particle-network/rn-auth, separate from this app's own
+  Info.plist. Real values come from this app's own project at
+  https://dashboard.particle.network — placeholders below until that
+  project exists.
+
+  ONE MANUAL STEP THIS FILE CAN'T DO ON ITS OWN: this file needs to be
+  added to the MangoPro Xcode target's "Target Membership" (select it in
+  Xcode's file navigator -> File Inspector -> check the MangoPro target)
+  so it actually ships inside the app bundle. Adding a new file to an
+  Xcode target means writing a new PBXBuildFile/PBXFileReference into
+  MangoPro.xcodeproj/project.pbxproj, which needs Xcode's own project
+  tooling to do safely — a hand-edited .pbxproj can't be verified without
+  Xcode itself, so this is intentionally left as a one-time step for
+  whoever opens this project in Xcode next, rather than guessed at here.
+-->
+<plist version="1.0">
+<dict>
+	<key>PROJECT_UUID</key>
+	<string>REPLACE_WITH_PROJECT_UUID</string>
+	<key>PROJECT_CLIENT_KEY</key>
+	<string>REPLACE_WITH_PROJECT_CLIENT_KEY</string>
+	<key>PROJECT_APP_UUID</key>
+	<string>REPLACE_WITH_PROJECT_APP_UUID</string>
+</dict>
+</plist>

@@ -167,6 +167,16 @@ export function ProfileScreen({onOpenSettings, onOpenHistory}: {onOpenSettings: 
 
   async function handleConfirmWithdraw() {
     if (!session || !withdrawChain) return;
+    // Google-login sessions have no privateKey to sign with at all (see
+    // keys.ts/particleAuth.ts) — refuse cleanly rather than letting
+    // sendUsdc below throw from an empty key. canSubmitWithdraw already
+    // keeps the button disabled for this case; this is the same
+    // guarantee if handleConfirmWithdraw is ever reached another way.
+    if (session.authMethod === 'google') {
+      setWithdrawError("Withdrawing isn't available yet for Google sign-in accounts — this is coming in a future update.");
+      setWithdrawStep('error');
+      return;
+    }
     setWithdrawStep('sending');
     try {
       const {txId} = await sendUsdc(withdrawChain, session, withdrawAddress.trim(), withdrawAmount);
@@ -182,6 +192,7 @@ export function ProfileScreen({onOpenSettings, onOpenHistory}: {onOpenSettings: 
   const withdrawAmountNumber = Number(withdrawAmount);
   const withdrawChainBalance = balanceForChain(withdrawChain);
   const canSubmitWithdraw =
+    session?.authMethod !== 'google' &&
     withdrawChain !== null &&
     isValidRecipientAddress(withdrawChain, withdrawAddress.trim()) &&
     withdrawAmountNumber > 0 &&
@@ -500,6 +511,10 @@ export function ProfileScreen({onOpenSettings, onOpenHistory}: {onOpenSettings: 
                   </TouchableOpacity>
                 </View>
                 <Text style={styles.modalHint}>Available on {CHAIN_LABEL[withdrawChain]}: ${formatUsd(withdrawChainBalance)}</Text>
+
+                {session?.authMethod === 'google' && (
+                  <Text style={styles.modalWarning}>Withdrawing isn't available yet for Google sign-in accounts — this is coming in a future update.</Text>
+                )}
 
                 <Text style={styles.modalWarning}>
                   Sends are final. Double-check the network and address — sending to the wrong network or address may

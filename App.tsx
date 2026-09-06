@@ -26,6 +26,7 @@ import {ThemeProvider, useTheme, type Colors} from './src/theme/ThemeContext';
 import {SessionProvider, useSession} from './src/wallet/SessionContext';
 import {deriveAccounts, warmupCrypto} from './src/wallet/keys';
 import {createVault, hasVault, loadVault, unlockVaultMnemonic} from './src/wallet/vault';
+import {initParticleAuth, loginWithGoogle, logoutParticle, particleAddressesToSession} from './src/wallet/particleAuth';
 import {AutoLockContext} from './src/settings/AutoLockContext';
 import {DEFAULT_AUTO_LOCK_MS, loadAutoLockMs, setAutoLockMs as persistAutoLockMs} from './src/settings/autoLockPrefs';
 import {WelcomeScreen} from './src/onboarding/WelcomeScreen';
@@ -54,17 +55,38 @@ const TABS: {key: Tab; label: string; icon: TabIconName}[] = [
 
 function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
   const {colors} = useTheme();
-  const {setSession} = useSession();
+  const {session, setSession} = useSession();
   const [authState, setAuthState] = useState<AuthState>('loading');
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [googleError, setGoogleError] = useState<string | null>(null);
 
   useEffect(() => {
     // Best-effort, deferred: warms the secp256k1/ed25519 precomputation
     // so it isn't paid synchronously at onboarding handoff (see keys.ts's
     // own comment on why that timing matters).
     const timer = setTimeout(warmupCrypto, 0);
+    // Also best-effort: sets up Particle's SDK so the first real tap of
+    // "Continue with Google" isn't also paying init's cost — a missing/
+    // invalid native config here is surfaced later, loudly, from
+    // loginWithGoogle itself, not swallowed.
+    initParticleAuth();
     hasVault().then(exists => setAuthState(exists ? 'locked' : 'welcome'));
     return () => clearTimeout(timer);
   }, []);
+
+  async function handleGoogleLogin() {
+    setGoogleError(null);
+    setGoogleLoading(true);
+    try {
+      const addresses = await loginWithGoogle();
+      setSession(particleAddressesToSession(addresses));
+      setAuthState('unlocked');
+    } catch (err) {
+      setGoogleError(err instanceof Error ? err.message : 'Google sign-in failed.');
+    } finally {
+      setGoogleLoading(false);
+    }
+  }
 
   // Real gap this closes: unlocking derived a live private key into
   // session state with nothing that ever cleared it again short of a
@@ -90,9 +112,21 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
   }
 
   const handleLock = useCallback(() => {
+    // A Google-login session has no local vault/password to unlock
+    // against — sending it to the password-prompt LockedScreen would
+    // strand the user there with nothing to type. Sign them out
+    // entirely instead; loginWithGoogle() on the next "Continue with
+    // Google" tap resolves fast if Particle's own SDK still has a live
+    // native session, same as any "silently re-authenticate" pattern.
+    const wasGoogleSession = session?.authMethod === 'google';
     setSession(null);
-    setAuthState('locked');
-  }, [setSession]);
+    if (wasGoogleSession) {
+      logoutParticle();
+      setAuthState('welcome');
+    } else {
+      setAuthState('locked');
+    }
+  }, [session, setSession]);
 
   // Same shape as mango-mobile's own App.tsx: record when the app left
   // 'active', and on returning to 'active' lock only if enough time
@@ -145,7 +179,15 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
     );
   }
   if (authState === 'welcome') {
-    return <WelcomeScreen onCreate={() => setAuthState('create')} onImport={() => setAuthState('import')} />;
+    return (
+      <WelcomeScreen
+        onCreate={() => setAuthState('create')}
+        onImport={() => setAuthState('import')}
+        onGoogleLogin={handleGoogleLogin}
+        googleLoading={googleLoading}
+        googleError={googleError}
+      />
+    );
   }
   if (authState === 'create') {
     return <CreateWalletFlow onFinish={finishOnboarding} onCancel={() => setAuthState('welcome')} />;
