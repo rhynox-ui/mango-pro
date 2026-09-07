@@ -17,7 +17,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const STORAGE_KEY = 'mango_pro_auto_lock_ms_v1';
-export const DEFAULT_AUTO_LOCK_MS = 60_000;
+// 5 minutes, not 1 — a Google-login session's "lock" is a full sign-out
+// (logoutParticle() + back to the Welcome screen, not a quick password
+// re-entry; see App.tsx's own handleLock comment on why), so a 60-second
+// default punished perfectly ordinary brief backgrounding (checking
+// another app, switching to a terminal to read device logs) with a full
+// re-login. Still user-configurable in Security, presets unchanged.
+export const DEFAULT_AUTO_LOCK_MS = 5 * 60_000;
 
 export const AUTO_LOCK_OPTIONS: {label: string; ms: number}[] = [
   {label: 'Immediately', ms: 0},
