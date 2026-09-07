@@ -47,6 +47,7 @@ import {ProfileScreen} from './src/screens/ProfileScreen';
 import {SettingsScreen} from './src/screens/SettingsScreen';
 import {HistoryScreen} from './src/screens/HistoryScreen';
 import type {TokenSearchResult} from './src/core/tokenSearch';
+import type {DiscoveryToken} from './src/core/discoveryFeed';
 
 type Tab = 'home' | 'search' | 'swap' | 'profile';
 type Screen = 'tabs' | 'settings' | 'history';
@@ -349,6 +350,11 @@ function AppInner(): React.JSX.Element {
     setTab('swap');
   }
 
+  function selectDiscoveryToken(token: DiscoveryToken) {
+    setSelectedToken({chainKey: token.chainKey, address: token.tokenAddress, symbol: token.symbol});
+    setTab('swap');
+  }
+
   if (lastCrash) {
     return <CrashReportScreen crash={lastCrash} onDismiss={dismissCrashReport} />;
   }
@@ -368,7 +374,7 @@ function AppInner(): React.JSX.Element {
             ) : showingHistory ? (
               <HistoryScreen onBack={() => setScreen('tabs')} />
             ) : tab === 'home' ? (
-              <HomeScreen onOpenSettings={openSettings} />
+              <HomeScreen onOpenSettings={openSettings} onSelectToken={selectDiscoveryToken} />
             ) : tab === 'search' ? (
               <SearchScreen onSelectToken={selectSearchResult} />
             ) : tab === 'swap' ? (
