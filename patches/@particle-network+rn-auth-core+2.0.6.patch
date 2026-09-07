@@ -17,7 +17,7 @@ index 6cf5445..d816706 100644
    }
    buildTypes {
 diff --git a/node_modules/@particle-network/rn-auth-core/android/src/main/java/com/particleauthcore/ParticleAuthCoreModule.kt b/node_modules/@particle-network/rn-auth-core/android/src/main/java/com/particleauthcore/ParticleAuthCoreModule.kt
-index 5aa2bcf..c3f6036 100644
+index 5aa2bcf..9640fbb 100644
 --- a/node_modules/@particle-network/rn-auth-core/android/src/main/java/com/particleauthcore/ParticleAuthCoreModule.kt
 +++ b/node_modules/@particle-network/rn-auth-core/android/src/main/java/com/particleauthcore/ParticleAuthCoreModule.kt
 @@ -238,7 +238,7 @@ class ParticleAuthCoreModule(reactContext: ReactApplicationContext) :
@@ -29,3 +29,16 @@ index 5aa2bcf..c3f6036 100644
              runOnUiThread(Runnable {
                  AuthCore.openAccountAndSecurity(this)
              })
+@@ -246,12 +246,6 @@ class ParticleAuthCoreModule(reactContext: ReactApplicationContext) :
+         callback.invoke(ReactCallBack.success("success").toGson())
+     }
+ 
+-    @ReactMethod
+-    fun openAccountAndSecurity() {
+-
+-    }
+-
+-
+     //evm
+     @ReactMethod
+     fun evmGetAddress(promise: Promise) {
