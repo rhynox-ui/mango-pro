@@ -33,7 +33,7 @@
 //   as every other send in this app.
 
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {ActivityIndicator, Modal, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {ActivityIndicator, Image, Modal, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import Svg, {Circle, Path} from 'react-native-svg';
 import {formatUnits, parseUnits} from 'viem';
 import {TokenChartPanel} from '../components/TokenChartPanel';
@@ -76,6 +76,8 @@ export type DemoToken = {
   chainKey: ChainKey;
   address: string;
   symbol: string;
+  /** Real token image from wherever this token was picked (HomeScreen's DiscoveryToken / SearchScreen's TokenSearchResult both already carry one) — optional because the default demo token and any other bare construction site has none; AssetIcon below falls back to a lettered badge rather than fabricating one. */
+  imageUrl?: string | null;
 };
 
 // A real, highly-liquid token so the chart genuinely resolves a
@@ -100,6 +102,47 @@ function formatFeePct(rate: number): string {
 function formatEta(seconds: number): string {
   if (seconds < 60) return `~${Math.round(seconds)}s`;
   return `~${Math.round(seconds / 60)}m`;
+}
+
+/**
+ * The actual asset's own logo where one is real (a searched/discovered
+ * token's imageUrl, already fetched by HomeScreen/SearchScreen — never
+ * refetched here), falling back to a lettered badge rather than a wrong
+ * or fabricated icon when there isn't one (a bare DemoToken, or an image
+ * URL that 404s). Used for the traded token itself — the chain-native
+ * pay/receive side uses NetworkIcon directly instead, since that one has
+ * a real per-chain icon already ported (src/wallet/NetworkIcon.tsx).
+ */
+function AssetIcon({symbol, imageUrl, size = 16}: {symbol: string; imageUrl?: string | null; size?: number}) {
+  const {colors} = useTheme();
+  const [failed, setFailed] = useState(false);
+  const s = StyleSheet.create({
+    circle: {width: size, height: size, borderRadius: size / 2, backgroundColor: colors.pillBg, alignItems: 'center', justifyContent: 'center'},
+    letter: {fontSize: size * 0.55, fontWeight: '700', color: colors.textPrimary},
+    image: {width: size, height: size, borderRadius: size / 2},
+  });
+  if (imageUrl && !failed) {
+    return <Image source={{uri: imageUrl}} style={s.image} onError={() => setFailed(true)} />;
+  }
+  return (
+    <View style={s.circle}>
+      <Text style={s.letter}>{symbol.slice(0, 1).toUpperCase()}</Text>
+    </View>
+  );
+}
+
+/** USDC has no per-chain logo of its own in this app (NetworkIcon renders the CHAIN's icon, which would be wrong for a stablecoin riding on top of it) — a plain "$" badge, same honest-generic treatment ProfileScreen's own Total-cash icon already uses, not a fabricated brand mark. */
+function UsdcBadge({size = 16}: {size?: number}) {
+  const {colors} = useTheme();
+  const s = StyleSheet.create({
+    circle: {width: size, height: size, borderRadius: size / 2, backgroundColor: colors.pillBg, alignItems: 'center', justifyContent: 'center'},
+    sign: {fontSize: size * 0.6, fontWeight: '800', color: colors.textPrimary},
+  });
+  return (
+    <View style={s.circle}>
+      <Text style={s.sign}>$</Text>
+    </View>
+  );
 }
 
 // Same formatting ProfileScreen's own "Total Cash" row already uses —
@@ -780,6 +823,15 @@ export function TokenTradeScreen({
           )}
           <View style={styles.prMainRow}>
             <TouchableOpacity style={styles.assetSelector} onPress={onOpenSearch} activeOpacity={0.7} disabled={!onOpenSearch}>
+              {isBuySide ? (
+                payOrigin.asset === 'native' ? (
+                  <NetworkIcon chainKey={payOrigin.chainKey} size={16} />
+                ) : (
+                  <UsdcBadge size={16} />
+                )
+              ) : (
+                <AssetIcon symbol={token.symbol} imageUrl={token.imageUrl} size={16} />
+              )}
               <Text style={styles.assetSelectorText}>{paySymbol}</Text>
               <Text style={styles.assetSelectorChevron}>⌄</Text>
             </TouchableOpacity>
@@ -815,6 +867,7 @@ export function TokenTradeScreen({
           <Text style={styles.cardLabel}>You receive</Text>
           <View style={styles.prMainRow}>
             <TouchableOpacity style={styles.assetSelector} onPress={onOpenSearch} activeOpacity={0.7} disabled={!onOpenSearch}>
+              {isBuySide ? <AssetIcon symbol={token.symbol} imageUrl={token.imageUrl} size={16} /> : <NetworkIcon chainKey={token.chainKey} size={16} />}
               <Text style={styles.assetSelectorText}>{receiveSymbol}</Text>
               <Text style={styles.assetSelectorChevron}>⌄</Text>
             </TouchableOpacity>

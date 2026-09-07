@@ -120,7 +120,19 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
       const restored = await tryRestoreParticleSession();
       if (restored) {
         setSession(particleAddressesToSession(restored));
-        nextAuthStateAfterIntroRef.current = 'unlocked';
+        // Real bug this closes: app-lock (Security screen's "Require
+        // Face ID to reopen" toggle for Google sessions) only ever got
+        // enforced from handleLock — a backgrounded-then-resumed app, or
+        // an explicit lock. A cold start restoring a session here never
+        // consulted it at all, so a user who turned app-lock on still
+        // landed straight on 'unlocked' after force-quitting and
+        // reopening the app — the exact case app-lock exists for.
+        // Checked directly here (not via the separate appLockEnabled
+        // state above, which is set by its own independent, unawaited
+        // isAppLockEnabled() call and isn't guaranteed to have resolved
+        // by this point) so this decision never races that one.
+        const lockEnabled = await isAppLockEnabled();
+        nextAuthStateAfterIntroRef.current = lockEnabled ? 'app-locked' : 'unlocked';
       } else {
         nextAuthStateAfterIntroRef.current = 'welcome';
       }
@@ -398,14 +410,22 @@ function AppInner(): React.JSX.Element {
     setTab('profile');
     setPendingProfileAction('withdraw');
   };
+  // Settings' "Profile and Account" row has no dedicated screen either —
+  // Profile already covers address/account identity, so this just takes
+  // the user there, same reasoning as goToWalletActions above minus the
+  // pending-action handoff (there's no extra step to open once there).
+  const goToProfile = () => {
+    setScreen('tabs');
+    setTab('profile');
+  };
 
   function selectSearchResult(result: TokenSearchResult) {
-    setSelectedToken({chainKey: result.chainKey, address: result.tokenAddress, symbol: result.symbol});
+    setSelectedToken({chainKey: result.chainKey, address: result.tokenAddress, symbol: result.symbol, imageUrl: result.imageUrl});
     setTab('swap');
   }
 
   function selectDiscoveryToken(token: DiscoveryToken) {
-    setSelectedToken({chainKey: token.chainKey, address: token.tokenAddress, symbol: token.symbol});
+    setSelectedToken({chainKey: token.chainKey, address: token.tokenAddress, symbol: token.symbol, imageUrl: token.imageUrl});
     setTab('swap');
   }
 
@@ -424,7 +444,7 @@ function AppInner(): React.JSX.Element {
         <AuthGate>
           <View style={styles.body}>
             {showingSettings ? (
-              <SettingsScreen onBack={() => setScreen('tabs')} onOpenDepositWithdraw={goToWalletActions} />
+              <SettingsScreen onBack={() => setScreen('tabs')} onOpenDepositWithdraw={goToWalletActions} onOpenProfile={goToProfile} />
             ) : showingHistory ? (
               <HistoryScreen onBack={() => setScreen('tabs')} />
             ) : tab === 'home' ? (

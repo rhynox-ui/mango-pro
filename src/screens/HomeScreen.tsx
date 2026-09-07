@@ -29,11 +29,11 @@
 // state rather than silently relabeling Trending's numbers. Watchlist is
 // real too now (src/wallet/watchlist.ts), not a dead second tab.
 
-import {useEffect, useState} from 'react';
-import {ActivityIndicator, Alert, FlatList, Image, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
+import {useMemo, useEffect, useState} from 'react';
+import {ActivityIndicator, FlatList, Image, Modal, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {FilterIcon, GearIcon, StarIcon} from '../components/icons';
 import {fetchGraduatedTokens, fetchBondingTokens, fetchTrendingTokens, type DiscoveryToken} from '../core/discoveryFeed';
-import {getWatchlist, isWatchlisted, subscribeWatchlist, toggleWatchlist} from '../wallet/watchlist';
+import {getWatchlist, subscribeWatchlist, toggleWatchlist} from '../wallet/watchlist';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 
 const MANGO_MARK = require('../assets/mango-mark.png');
@@ -41,6 +41,42 @@ const MANGO_MARK = require('../assets/mango-mark.png');
 const TOKEN_FILTERS = ['Trending', 'Most held', 'Graduated', 'Bonding'] as const;
 type TokenFilter = (typeof TOKEN_FILTERS)[number];
 type DiscoveryTab = 'watchlist' | 'tokens';
+
+// Real client-side sort over whichever list is already on screen — every
+// field here (marketCapUsd, change24h) is real data discoveryFeed.ts
+// already fetched, not a new source. 'default' keeps each filter's own
+// real ranking (DexScreener's boost order for Trending, pump.fun's own
+// market-cap-sorted order for Graduated/Bonding) rather than silently
+// re-ordering it, which is why it's the first option, not a bare "None".
+const SORT_OPTIONS = [
+  {key: 'default', label: 'Default'},
+  {key: 'mcapDesc', label: 'Market cap: high to low'},
+  {key: 'mcapAsc', label: 'Market cap: low to high'},
+  {key: 'changeDesc', label: '24h change: gainers first'},
+  {key: 'changeAsc', label: '24h change: losers first'},
+] as const;
+type SortKey = (typeof SORT_OPTIONS)[number]['key'];
+
+function sortTokens(tokens: DiscoveryToken[], sort: SortKey): DiscoveryToken[] {
+  if (sort === 'default') return tokens;
+  const withRank = (value: number | null, missingLast: boolean) => (value == null ? (missingLast ? -Infinity : Infinity) : value);
+  const sorted = [...tokens];
+  switch (sort) {
+    case 'mcapDesc':
+      sorted.sort((a, b) => withRank(b.marketCapUsd, true) - withRank(a.marketCapUsd, true));
+      break;
+    case 'mcapAsc':
+      sorted.sort((a, b) => withRank(a.marketCapUsd, false) - withRank(b.marketCapUsd, false));
+      break;
+    case 'changeDesc':
+      sorted.sort((a, b) => withRank(b.change24h, true) - withRank(a.change24h, true));
+      break;
+    case 'changeAsc':
+      sorted.sort((a, b) => withRank(a.change24h, false) - withRank(b.change24h, false));
+      break;
+  }
+  return sorted;
+}
 
 function formatPrice(n: number | null): string {
   if (n == null) return '—';
@@ -69,6 +105,8 @@ export function HomeScreen({onOpenSettings, onSelectToken}: {onOpenSettings: () 
   const [error, setError] = useState<string | null>(null);
   const [watchlist, setWatchlist] = useState<DiscoveryToken[]>(getWatchlist());
   const [refreshToken, setRefreshToken] = useState(0);
+  const [sort, setSort] = useState<SortKey>('default');
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
 
   useEffect(() => subscribeWatchlist(setWatchlist), []);
 
@@ -96,16 +134,31 @@ export function HomeScreen({onOpenSettings, onSelectToken}: {onOpenSettings: () 
     };
   }, [filter, refreshToken]);
 
-  const listData = tab === 'watchlist' ? watchlist : tokens;
+  const unsortedListData = tab === 'watchlist' ? watchlist : tokens;
+  const listData = useMemo(() => sortTokens(unsortedListData, sort), [unsortedListData, sort]);
   const showingLiveList = tab === 'tokens' && filter !== 'Most held';
+  // Real bug this closes: TokenRow used to freeze its own "starred" look
+  // in local state the moment it mounted (`useState(isWatchlisted(token))`),
+  // so a token starred in an earlier session — or one whose watchlist
+  // status only resolved AFTER this row had already rendered — could
+  // show the wrong star forever, and FlatList had no reason to re-render
+  // Tokens-tab rows at all when `watchlist` changed (only `tokens` is its
+  // `data`). Deriving the starred set here and passing `extraData` below
+  // makes every row's star a live reflection of the real store, not a
+  // one-time snapshot.
+  const watchlistKeys = useMemo(() => new Set(watchlist.map(t => `${t.chainKey}:${t.tokenAddress.toLowerCase()}`)), [watchlist]);
 
   return (
+    <>
     <FlatList
       style={styles.screen}
       contentContainerStyle={styles.listContent}
       data={listData}
+      extraData={watchlistKeys}
       keyExtractor={item => `${item.chainKey}:${item.tokenAddress}`}
-      renderItem={({item}) => <TokenRow token={item} colors={colors} onPress={onSelectToken} />}
+      renderItem={({item}) => (
+        <TokenRow token={item} colors={colors} onPress={onSelectToken} starred={watchlistKeys.has(`${item.chainKey}:${item.tokenAddress.toLowerCase()}`)} />
+      )}
       ListHeaderComponent={
         <>
           <View style={styles.portfolioHeader}>
@@ -133,10 +186,10 @@ export function HomeScreen({onOpenSettings, onSelectToken}: {onOpenSettings: () 
           {tab === 'tokens' && (
             <View style={styles.filterRow}>
               <TouchableOpacity
-                style={styles.filterIconButton}
+                style={[styles.filterIconButton, sort !== 'default' && styles.filterIconButtonActive]}
                 activeOpacity={0.7}
-                onPress={() => Alert.alert('Coming soon', "More filters (chain, market cap, liquidity) aren't built yet — use the presets below for now.")}>
-                <FilterIcon color={colors.textSecondary} size={16} />
+                onPress={() => setSortMenuOpen(true)}>
+                <FilterIcon color={sort !== 'default' ? colors.ctaText : colors.textSecondary} size={16} />
               </TouchableOpacity>
               {TOKEN_FILTERS.map(f => (
                 <TouchableOpacity
@@ -176,13 +229,44 @@ export function HomeScreen({onOpenSettings, onSelectToken}: {onOpenSettings: () 
         </>
       }
     />
+
+    <Modal visible={sortMenuOpen} transparent animationType="fade" onRequestClose={() => setSortMenuOpen(false)}>
+      <TouchableOpacity style={styles.sortBackdrop} activeOpacity={1} onPress={() => setSortMenuOpen(false)}>
+        <TouchableOpacity activeOpacity={1} style={styles.sortCard} onPress={() => {}}>
+          <Text style={styles.sortTitle}>Sort by</Text>
+          {SORT_OPTIONS.map(opt => (
+            <TouchableOpacity
+              key={opt.key}
+              style={styles.sortRow}
+              activeOpacity={0.7}
+              onPress={() => {
+                setSort(opt.key);
+                setSortMenuOpen(false);
+              }}>
+              <Text style={styles.sortRowText}>{opt.label}</Text>
+              {sort === opt.key && <Text style={styles.sortCheck}>✓</Text>}
+            </TouchableOpacity>
+          ))}
+        </TouchableOpacity>
+      </TouchableOpacity>
+    </Modal>
+    </>
   );
 }
 
-function TokenRow({token, colors, onPress}: {token: DiscoveryToken; colors: Colors; onPress?: (token: DiscoveryToken) => void}) {
+function TokenRow({
+  token,
+  colors,
+  onPress,
+  starred,
+}: {
+  token: DiscoveryToken;
+  colors: Colors;
+  onPress?: (token: DiscoveryToken) => void;
+  starred: boolean;
+}) {
   const styles = makeStyles(colors);
   const [imageFailed, setImageFailed] = useState(false);
-  const [starred, setStarred] = useState(isWatchlisted(token));
   const positive = (token.change24h ?? 0) >= 0;
 
   return (
@@ -208,11 +292,7 @@ function TokenRow({token, colors, onPress}: {token: DiscoveryToken; colors: Colo
           </Text>
         )}
       </View>
-      <TouchableOpacity
-        style={styles.starButton}
-        hitSlop={8}
-        onPress={() => setStarred(toggleWatchlist(token))}
-        activeOpacity={0.6}>
+      <TouchableOpacity style={styles.starButton} hitSlop={8} onPress={() => toggleWatchlist(token)} activeOpacity={0.6}>
         <StarIcon color={starred ? colors.textPrimary : colors.textMuted} size={16} />
       </TouchableOpacity>
     </TouchableOpacity>
@@ -280,6 +360,7 @@ function makeStyles(colors: Colors) {
       borderWidth: 1,
       borderColor: colors.panelBorder,
     },
+    filterIconButtonActive: {backgroundColor: colors.ctaBg, borderColor: colors.ctaBg},
     filterPill: {
       paddingHorizontal: 14,
       paddingVertical: 9,
@@ -322,5 +403,25 @@ function makeStyles(colors: Colors) {
     tokenPrice: {color: colors.textPrimary, fontSize: 15.5, fontWeight: '700'},
     tokenChange: {fontSize: 12.5, fontWeight: '700'},
     starButton: {paddingLeft: 4},
+
+    sortBackdrop: {flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 24},
+    sortCard: {
+      backgroundColor: colors.panel,
+      borderColor: colors.panelBorder,
+      borderWidth: 1,
+      borderRadius: 16,
+      paddingVertical: 8,
+      paddingHorizontal: 4,
+    },
+    sortTitle: {color: colors.textMuted, fontSize: 11.5, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, paddingHorizontal: 14, paddingTop: 8, paddingBottom: 4},
+    sortRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 14,
+      paddingVertical: 13,
+    },
+    sortRowText: {color: colors.textPrimary, fontSize: 14.5, fontWeight: '600'},
+    sortCheck: {color: colors.navActive, fontSize: 15, fontWeight: '800'},
   });
 }

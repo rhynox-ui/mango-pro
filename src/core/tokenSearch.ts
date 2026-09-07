@@ -21,6 +21,7 @@ export type TokenSearchResult = {
   tokenAddress: string;
   symbol: string;
   name: string;
+  imageUrl: string | null;
   priceUsd: number | null;
   change24h: number | null;
   marketCapUsd: number | null;
@@ -69,12 +70,18 @@ export async function searchTokens(query: string): Promise<TokenSearchResult[]> 
       const priceUsd = Number(pair?.priceUsd);
       const change24h = Number(pair?.priceChange?.h24);
       const marketCapUsd = Number(pair?.marketCap ?? pair?.fdv);
+      // Same field discoveryFeed.ts's own hydrateBoostedToken already
+      // reads off a DexScreener pair — not part of DexScreenerPair's
+      // typed shape (only Trending's own boost-hydration path declared
+      // it before), so read the same way: an inline cast, never fabricated.
+      const info = (pair as {info?: {imageUrl?: string}})?.info;
 
       bestByKey.set(dedupeKey, {
         chainKey,
         tokenAddress,
         symbol: String(pair?.baseToken?.symbol ?? '?'),
         name: String(pair?.baseToken?.name ?? pair?.baseToken?.symbol ?? 'Unknown token'),
+        imageUrl: typeof info?.imageUrl === 'string' ? info.imageUrl : null,
         priceUsd: Number.isFinite(priceUsd) ? priceUsd : null,
         change24h: Number.isFinite(change24h) ? change24h : null,
         marketCapUsd: Number.isFinite(marketCapUsd) ? marketCapUsd : null,

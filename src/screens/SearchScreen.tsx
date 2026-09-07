@@ -7,7 +7,7 @@
 // tapping a result goes straight to the trade screen for now.
 
 import {useEffect, useRef, useState} from 'react';
-import {ActivityIndicator, FlatList, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {ActivityIndicator, FlatList, Image, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import {SearchIcon} from '../components/icons';
 import {CHAIN_LABEL} from '../core/chainData';
 import {fmtCompactUsd, searchTokens, type TokenSearchResult} from '../core/tokenSearch';
@@ -105,13 +105,18 @@ export function SearchScreen({onSelectToken}: {onSelectToken: (result: TokenSear
 
 function ResultRow({result, colors, onPress}: {result: TokenSearchResult; colors: Colors; onPress: () => void}) {
   const styles = makeStyles(colors);
+  const [imageFailed, setImageFailed] = useState(false);
   const positive = (result.change24h ?? 0) >= 0;
   const marketCap = fmtCompactUsd(result.marketCapUsd);
   return (
     <TouchableOpacity style={styles.resultRow} onPress={onPress} activeOpacity={0.7}>
-      <View style={styles.resultAvatar}>
-        <Text style={styles.resultAvatarText}>{result.symbol.slice(0, 1).toUpperCase()}</Text>
-      </View>
+      {result.imageUrl && !imageFailed ? (
+        <Image source={{uri: result.imageUrl}} style={styles.resultAvatarImage} onError={() => setImageFailed(true)} />
+      ) : (
+        <View style={styles.resultAvatar}>
+          <Text style={styles.resultAvatarText}>{result.symbol.slice(0, 1).toUpperCase()}</Text>
+        </View>
+      )}
       <View style={styles.resultInfo}>
         <Text style={styles.resultSymbol} numberOfLines={1}>
           {result.symbol}
@@ -169,6 +174,7 @@ function makeStyles(colors: Colors) {
       alignItems: 'center',
       justifyContent: 'center',
     },
+    resultAvatarImage: {width: 40, height: 40, borderRadius: 20, backgroundColor: colors.pillBg},
     resultAvatarText: {color: colors.textPrimary, fontSize: 15, fontWeight: '700'},
     resultInfo: {flex: 1, minWidth: 0, gap: 2},
     resultSymbol: {color: colors.textPrimary, fontSize: 15.5, fontWeight: '700'},
