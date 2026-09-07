@@ -261,8 +261,20 @@ export function TokenTradeScreen({
       : fetchWalletTokenBalance(token.chainKey, token.address, tokenDecimals, session.evm.address);
   }, [session, isBuySide, solana, token, tokenDecimals]);
 
-  const {balance, loading: balanceLoading} = useAvailableBalance(session ? fetchPayBalance : null, [session, isBuySide, solana, token, tokenDecimals]);
+  // Bumped by the "Couldn't load balance" retry tap below — useAvailableBalance
+  // only refetches when one of its deps changes, and none of the real deps
+  // (session/side/token) change on a retry tap, so this is a dedicated one.
+  const [balanceRetryToken, setBalanceRetryToken] = useState(0);
+  const {balance, loading: balanceLoading} = useAvailableBalance(session ? fetchPayBalance : null, [session, isBuySide, solana, token, tokenDecimals, balanceRetryToken]);
   const insufficientBalance = amtNum > 0 && balance !== null && amtNum > balance;
+  // A resolved balance of 0 is real (an empty wallet) and looks
+  // identical to a null balance in `balance !== null` checks — this
+  // specifically catches the OTHER case, where the fetch itself failed
+  // (RPC error, unsupported chain, network drop) and silently left the
+  // quick-percent row disabled with no explanation. Real device reports
+  // of "the percentage buttons don't do anything" trace to exactly this:
+  // balance stuck at null with no visible reason and no way to retry.
+  const balanceFetchFailed = !balanceLoading && balance === null && session !== null;
 
   // Tracks which quick-percent preset (if any) the typed amount still
   // matches, same real bug fix already shipped to mobile's DexScreen.tsx
@@ -691,11 +703,16 @@ export function TokenTradeScreen({
           {(quote?.payAmountUsd != null || session) && (
             <View style={styles.prMetaRow}>
               <Text style={styles.usdEquivText}>{quote?.payAmountUsd != null ? `≈ $${quote.payAmountUsd.toFixed(2)}` : ''}</Text>
-              {session && (
-                <Text style={styles.balanceTextSmall} numberOfLines={1}>
-                  {balanceLoading ? '…' : balance !== null ? `${formatAmountForInput(balance)} avail.` : ''}
-                </Text>
-              )}
+              {session &&
+                (balanceFetchFailed ? (
+                  <TouchableOpacity onPress={() => setBalanceRetryToken(t => t + 1)} hitSlop={6}>
+                    <Text style={[styles.balanceTextSmall, styles.balanceRetryText]}>Couldn't load balance — Retry</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <Text style={styles.balanceTextSmall} numberOfLines={1}>
+                    {balanceLoading ? '…' : balance !== null ? `${formatAmountForInput(balance)} avail.` : ''}
+                  </Text>
+                ))}
             </View>
           )}
         </View>
@@ -828,6 +845,7 @@ function makeStyles(colors: Colors) {
     prMainRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6},
     prMetaRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4, gap: 6},
     balanceTextSmall: {color: colors.textMuted, fontSize: 10, flexShrink: 1},
+    balanceRetryText: {color: colors.danger, fontWeight: '600', textDecorationLine: 'underline'},
     amountInput: {flex: 1, fontSize: 16, fontWeight: '600', color: colors.textPrimary},
     prAmountInput: {textAlign: 'right'},
     prReceiveAmount: {flex: 1, color: colors.textPrimary, fontSize: 16, fontWeight: '600', textAlign: 'right'},

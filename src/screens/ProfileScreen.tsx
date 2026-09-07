@@ -25,6 +25,7 @@ import {
 } from '../components/icons';
 import {CHAIN_LABEL, type ChainKey} from '../core/chainData';
 import {fetchUsdcPortfolio, USDC_SUPPORTED_CHAINS, type UsdcPortfolio} from '../core/usdcBalances';
+import {NetworkIcon} from '../wallet/NetworkIcon';
 import {sendUsdc, isValidRecipientAddress} from '../wallet/sendUsdc';
 import {filterTxHistoryForAccount, getTxHistory, subscribeTxHistory, type TxHistoryEntry} from '../wallet/txHistory';
 import {useTheme, type Colors} from '../theme/ThemeContext';
@@ -87,7 +88,18 @@ function formatWhen(timestamp: number): string {
   return new Date(timestamp).toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
 }
 
-export function ProfileScreen({onOpenSettings, onOpenHistory}: {onOpenSettings: () => void; onOpenHistory: () => void}) {
+export function ProfileScreen({
+  onOpenSettings,
+  onOpenHistory,
+  pendingAction,
+  onPendingActionHandled,
+}: {
+  onOpenSettings: () => void;
+  onOpenHistory: () => void;
+  /** Set by App.tsx when navigation here should also open a specific action (e.g. Settings' "Deposit and Withdraw" row) — consumed once below, not a persistent mode. */
+  pendingAction?: 'withdraw' | null;
+  onPendingActionHandled?: () => void;
+}) {
   const {colors} = useTheme();
   const {session} = useSession();
   const styles = makeStyles(colors);
@@ -140,6 +152,17 @@ export function ProfileScreen({onOpenSettings, onOpenHistory}: {onOpenSettings: 
       cancelled = true;
     };
   }, [session]);
+
+  useEffect(() => {
+    if (pendingAction === 'withdraw') {
+      setWithdrawStep('network');
+      onPendingActionHandled?.();
+    }
+    // onPendingActionHandled is a fresh closure every render (App.tsx
+    // doesn't memoize it) — only pendingAction's own value should
+    // re-trigger this, or it would fire on every unrelated re-render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAction]);
 
   function refreshUsdcPortfolio() {
     if (!session) return;
@@ -385,7 +408,10 @@ export function ProfileScreen({onOpenSettings, onOpenHistory}: {onOpenSettings: 
                       setDepositChain(chainKey);
                       setDepositStep('address');
                     }}>
-                    <Text style={styles.networkRowText}>{CHAIN_LABEL[chainKey]}</Text>
+                    <View style={styles.networkRowLeft}>
+                      <NetworkIcon chainKey={chainKey} size={22} />
+                      <Text style={styles.networkRowText}>{CHAIN_LABEL[chainKey]}</Text>
+                    </View>
                     <ChevronRightIcon color={colors.textMuted} size={16} />
                   </TouchableOpacity>
                 ))}
@@ -436,7 +462,10 @@ export function ProfileScreen({onOpenSettings, onOpenHistory}: {onOpenSettings: 
                       setWithdrawChain(chainKey);
                       setWithdrawStep('form');
                     }}>
-                    <Text style={styles.networkRowText}>{CHAIN_LABEL[chainKey]}</Text>
+                    <View style={styles.networkRowLeft}>
+                      <NetworkIcon chainKey={chainKey} size={22} />
+                      <Text style={styles.networkRowText}>{CHAIN_LABEL[chainKey]}</Text>
+                    </View>
                     <Text style={styles.networkRowBalance}>${formatUsd(balanceForChain(chainKey))}</Text>
                   </TouchableOpacity>
                 ))}
@@ -733,6 +762,7 @@ function makeStyles(colors: Colors) {
       paddingVertical: 15,
       marginBottom: 8,
     },
+    networkRowLeft: {flexDirection: 'row', alignItems: 'center', gap: 10},
     networkRowText: {color: colors.textPrimary, fontSize: 15, fontWeight: '700'},
     networkRowBalance: {color: colors.textMuted, fontSize: 13, fontWeight: '600'},
 

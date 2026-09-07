@@ -42,6 +42,8 @@ import {SolanaDevnetTestScreen} from './SolanaDevnetTestScreen';
 // one Mango, same channels, not a separate app's accounts.
 const X_URL = 'https://x.com/Mango_protocol';
 const TELEGRAM_URL = 'https://t.me/mango_protocol';
+const DOCS_URL = 'https://mangoprotocol.site';
+const SUPPORT_MAIL_URL = 'mailto:mango@mangoprotocol.site';
 
 type Row = {
   key: string;
@@ -77,14 +79,19 @@ export function SettingsScreen({onBack, onOpenDepositWithdraw}: {onBack: () => v
     // Diagnostic only, only meaningful for a Google-login session (see
     // this row's own destination screen for why) — a local seed-phrase
     // session already signs Solana transactions directly and has
-    // nothing to prove here.
-    ...(session?.authMethod === 'google'
+    // nothing to prove here. __DEV__-gated on top of that: this is real
+    // developer tooling for an unverified path (particleSigning.ts's own
+    // header — Google-session Solana signing shipped ahead of a
+    // real-device proof), not something an end user on a release build
+    // should see in their own Settings. Kept, not deleted, so it's still
+    // reachable from a debug build if that verification is ever done.
+    ...(__DEV__ && session?.authMethod === 'google'
       ? [{key: 'solana-devnet-test', label: 'Solana signing test (devnet)', Icon: RepeatIcon, onPress: () => setShowSolanaDevnetTest(true)}]
       : []),
     {key: 'legal', label: 'Legal and Privacy', Icon: ScaleIcon},
     {key: 'taxes', label: 'Taxes', Icon: FileTextIcon},
-    {key: 'help', label: 'Help and Support', Icon: HelpCircleIcon},
-    {key: 'docs', label: 'Documentation', Icon: BookOpenIcon},
+    {key: 'help', label: 'Help and Support', Icon: HelpCircleIcon, onPress: () => Linking.openURL(SUPPORT_MAIL_URL)},
+    {key: 'docs', label: 'Documentation', Icon: BookOpenIcon, onPress: () => Linking.openURL(DOCS_URL)},
     {key: 'x', label: 'X', Icon: XIcon, onPress: () => Linking.openURL(X_URL)},
     {key: 'telegram', label: 'Telegram', Icon: TelegramIcon, onPress: () => Linking.openURL(TELEGRAM_URL)},
     {

@@ -27,7 +27,7 @@
 
 import {useState} from 'react';
 import {Alert, FlatList, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
-import {FilterIcon, StarIcon} from '../components/icons';
+import {FilterIcon, GearIcon, StarIcon} from '../components/icons';
 import {MOCK_TOKENS, TOKEN_FILTERS, type DiscoveryToken, type TokenFilter} from '../data/mockDiscovery';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 
@@ -35,7 +35,7 @@ const MANGO_MARK = require('../assets/mango-mark.png');
 
 type DiscoveryTab = 'watchlist' | 'tokens';
 
-export function HomeScreen() {
+export function HomeScreen({onOpenSettings}: {onOpenSettings: () => void}) {
   const {colors} = useTheme();
   const styles = makeStyles(colors);
   const [tab, setTab] = useState<DiscoveryTab>('tokens');
@@ -55,7 +55,9 @@ export function HomeScreen() {
               <Image source={MANGO_MARK} style={styles.logoMarkImage} resizeMode="contain" />
             </View>
             <Text style={styles.balance}>$0.00</Text>
-            <View style={styles.logoMarkSpacer} />
+            <TouchableOpacity style={styles.settingsButton} onPress={onOpenSettings} hitSlop={8}>
+              <GearIcon color={colors.textSecondary} size={20} />
+            </TouchableOpacity>
           </View>
 
           <View style={styles.discoveryTabs}>
@@ -135,8 +137,15 @@ function makeStyles(colors: Colors) {
       backgroundColor: colors.panel,
     },
     logoMarkImage: {width: 28, height: 28},
-    logoMarkSpacer: {width: 56},
     balance: {color: colors.textPrimary, fontSize: 26, fontWeight: '700'},
+    settingsButton: {
+      width: 40,
+      height: 40,
+      borderRadius: 12,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.panel,
+    },
 
     discoveryTabs: {
       flexDirection: 'row',

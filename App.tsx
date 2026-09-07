@@ -310,6 +310,14 @@ function AppInner(): React.JSX.Element {
   const [screen, setScreen] = useState<Screen>('tabs');
   const [selectedToken, setSelectedToken] = useState<DemoToken | undefined>(undefined);
   const [lastCrash, setLastCrash] = useState<{message: string; stack: string; isFatal: boolean; at: number} | null>(null);
+  // Settings' "Deposit and Withdraw" row used to just switch to the
+  // Profile tab and leave the user to find the withdraw button
+  // themselves — landed on the dashboard with no obvious next step,
+  // which read as "this row does nothing real." This tells
+  // ProfileScreen to open its own real withdraw modal the moment it
+  // mounts from that specific navigation, without duplicating any of
+  // its modal state up here.
+  const [pendingProfileAction, setPendingProfileAction] = useState<'withdraw' | null>(null);
 
   useEffect(() => {
     readLastCrash().then(setLastCrash);
@@ -327,11 +335,13 @@ function AppInner(): React.JSX.Element {
   const openHistory = () => setScreen('history');
   // Settings' own "Deposit and Withdraw" row has no dedicated screen of
   // its own — Profile already IS that real destination (the totalCash
-  // row's +/- buttons), so this just takes the user there instead of
-  // duplicating that modal's state in a second place.
+  // row's +/- buttons), so this takes the user there AND tells it to
+  // open the real Withdraw modal immediately, rather than landing on
+  // the dashboard and leaving the user to find the button themselves.
   const goToWalletActions = () => {
     setScreen('tabs');
     setTab('profile');
+    setPendingProfileAction('withdraw');
   };
 
   function selectSearchResult(result: TokenSearchResult) {
@@ -358,7 +368,7 @@ function AppInner(): React.JSX.Element {
             ) : showingHistory ? (
               <HistoryScreen onBack={() => setScreen('tabs')} />
             ) : tab === 'home' ? (
-              <HomeScreen />
+              <HomeScreen onOpenSettings={openSettings} />
             ) : tab === 'search' ? (
               <SearchScreen onSelectToken={selectSearchResult} />
             ) : tab === 'swap' ? (
@@ -375,7 +385,12 @@ function AppInner(): React.JSX.Element {
                 }
               />
             ) : (
-              <ProfileScreen onOpenSettings={openSettings} onOpenHistory={openHistory} />
+              <ProfileScreen
+                onOpenSettings={openSettings}
+                onOpenHistory={openHistory}
+                pendingAction={pendingProfileAction}
+                onPendingActionHandled={() => setPendingProfileAction(null)}
+              />
             )}
           </View>
 
