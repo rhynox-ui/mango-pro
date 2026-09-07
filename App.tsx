@@ -289,7 +289,7 @@ function AppInner(): React.JSX.Element {
           bar is transparent over app content rather than a colored strip
           the app paints. barStyle (icon color) is what's left to control. */}
       <StatusBar barStyle={mode === 'dark' ? 'light-content' : 'dark-content'} />
-      <SafeAreaView style={styles.root} edges={['top', 'left', 'right']}>
+      <SafeAreaView style={styles.root} edges={['top', 'left', 'right', 'bottom']}>
         <AuthGate>
           <View style={styles.body}>
             {showingSettings ? (
@@ -301,7 +301,18 @@ function AppInner(): React.JSX.Element {
             ) : tab === 'search' ? (
               <SearchScreen onSelectToken={selectSearchResult} />
             ) : tab === 'swap' ? (
-              <TokenTradeScreen token={selectedToken} onOpenSearch={() => setTab('search')} />
+              <TokenTradeScreen
+                token={selectedToken}
+                onOpenSearch={() => setTab('search')}
+                onBack={
+                  selectedToken
+                    ? () => {
+                        setSelectedToken(undefined);
+                        setTab('search');
+                      }
+                    : undefined
+                }
+              />
             ) : (
               <ProfileScreen onOpenSettings={openSettings} onOpenHistory={openHistory} />
             )}
