@@ -12,10 +12,8 @@ import {useEffect, useMemo, useState} from 'react';
 import {ActivityIndicator, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import Svg, {Line as SvgLine} from 'react-native-svg';
 import {
-  AlertCircleIcon,
   ArrowUpIcon,
   CalendarIcon,
-  ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   GearIcon,
@@ -94,7 +92,6 @@ export function ProfileScreen({onOpenSettings, onOpenHistory}: {onOpenSettings: 
   const {colors} = useTheme();
   const {session} = useSession();
   const styles = makeStyles(colors);
-  const [bannerOpen, setBannerOpen] = useState(false);
   const [depositStep, setDepositStep] = useState<DepositStep | null>(null);
   const [depositChain, setDepositChain] = useState<ChainKey | null>(null);
   const [withdrawStep, setWithdrawStep] = useState<WithdrawStep | null>(null);
@@ -189,22 +186,6 @@ export function ProfileScreen({onOpenSettings, onOpenHistory}: {onOpenSettings: 
 
   return (
     <ScrollView style={styles.screen} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-      <TouchableOpacity style={styles.banner} onPress={() => setBannerOpen(v => !v)} activeOpacity={0.7}>
-        <AlertCircleIcon color={colors.warning} size={17} />
-        <Text style={styles.bannerText} numberOfLines={1}>
-          Elevated network fees on {CHAIN_LABEL.robinhood}.
-        </Text>
-        <ChevronDownIcon color={colors.textMuted} size={15} />
-      </TouchableOpacity>
-      {bannerOpen && (
-        <View style={styles.bannerDetail}>
-          <Text style={styles.bannerDetailText}>
-            Network conditions on {CHAIN_LABEL.robinhood} are temporarily driving gas costs higher than usual — trades still
-            go through, just at a higher fee than normal.
-          </Text>
-        </View>
-      )}
-
       <View style={styles.headerIcons}>
         <TouchableOpacity hitSlop={8} onPress={onOpenHistory}>
           <HistoryIcon color={colors.textSecondary} />
@@ -561,17 +542,6 @@ function makeStyles(colors: Colors) {
   return StyleSheet.create({
     screen: {flex: 1, backgroundColor: colors.bg},
     scrollContent: {paddingBottom: 32},
-    banner: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
-      backgroundColor: colors.panel,
-      paddingHorizontal: 16,
-      paddingVertical: 10,
-    },
-    bannerText: {flex: 1, color: colors.textPrimary, fontSize: 12.5, fontWeight: '600'},
-    bannerDetail: {backgroundColor: colors.panel, paddingHorizontal: 16, paddingBottom: 12},
-    bannerDetailText: {color: colors.textSecondary, fontSize: 11.5, lineHeight: 16},
 
     headerIcons: {flexDirection: 'row', justifyContent: 'flex-end', gap: 18, paddingHorizontal: 16, paddingTop: 14},
     identityRow: {
