@@ -9,7 +9,7 @@
 // "Joined <month year>" is the one real data point: today's date.
 
 import {useEffect, useMemo, useState} from 'react';
-import {ActivityIndicator, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import Svg, {Line as SvgLine} from 'react-native-svg';
 import {
   ArrowUpIcon,
@@ -17,7 +17,6 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   GearIcon,
-  GiftIcon,
   HistoryIcon,
   PencilIcon,
   PlusIcon,
@@ -200,17 +199,16 @@ export function ProfileScreen({onOpenSettings, onOpenHistory}: {onOpenSettings: 
           <View style={styles.avatar}>
             <Text style={styles.avatarText}>Y</Text>
           </View>
-          <TouchableOpacity style={styles.avatarEditButton} hitSlop={6}>
+          <TouchableOpacity
+            style={styles.avatarEditButton}
+            hitSlop={6}
+            onPress={() => Alert.alert('Coming soon', "Profile photo upload isn't built yet.")}>
             <PencilIcon color={colors.bg} size={11} />
           </TouchableOpacity>
         </View>
         <View style={styles.identityActions}>
           <TouchableOpacity style={styles.shareButton} hitSlop={6}>
             <UploadIcon color={colors.textPrimary} size={15} />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.rewardsButton} activeOpacity={0.85}>
-            <GiftIcon color={colors.ctaText} size={15} />
-            <Text style={styles.rewardsButtonText}>Rewards</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -220,7 +218,7 @@ export function ProfileScreen({onOpenSettings, onOpenHistory}: {onOpenSettings: 
           system exists yet, so the address is the identity shown until
           one does. */}
       <Text style={styles.handle}>{session ? truncateAddress(session.evm.address) : '—'}</Text>
-      <TouchableOpacity>
+      <TouchableOpacity onPress={() => Alert.alert('Coming soon', "Profile bios aren't built yet.")}>
         <Text style={styles.addBio}>+ Add a bio</Text>
       </TouchableOpacity>
 
@@ -585,17 +583,6 @@ function makeStyles(colors: Colors) {
       borderWidth: 1,
       borderColor: colors.panelBorder,
     },
-    rewardsButton: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 6,
-      paddingHorizontal: 16,
-      paddingVertical: 10,
-      borderRadius: 999,
-      backgroundColor: colors.ctaBg,
-    },
-    rewardsButtonText: {color: colors.ctaText, fontSize: 14, fontWeight: '700'},
-
     name: {color: colors.textPrimary, fontSize: 22, fontWeight: '800', marginTop: 14, paddingHorizontal: 16},
     handle: {color: colors.textMuted, fontSize: 14, marginTop: 2, paddingHorizontal: 16},
     addBio: {color: colors.textPrimary, fontSize: 14, fontWeight: '700', marginTop: 8, paddingHorizontal: 16},
