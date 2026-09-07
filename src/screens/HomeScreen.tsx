@@ -26,14 +26,14 @@
 // all. The portfolio balance is NOT mocked: a new account genuinely has $0.
 
 import {useState} from 'react';
-import {FlatList, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
+import {Alert, FlatList, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {FilterIcon, StarIcon} from '../components/icons';
 import {MOCK_TOKENS, TOKEN_FILTERS, type DiscoveryToken, type TokenFilter} from '../data/mockDiscovery';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 
 const MANGO_MARK = require('../assets/mango-mark.png');
 
-type DiscoveryTab = 'watchlist' | 'tokens' | 'perps';
+type DiscoveryTab = 'watchlist' | 'tokens';
 
 export function HomeScreen() {
   const {colors} = useTheme();
@@ -67,16 +67,13 @@ export function HomeScreen() {
               <Text style={[styles.discoveryTabText, tab === 'tokens' && styles.discoveryTabTextActive]}>Tokens</Text>
               {tab === 'tokens' && <View style={styles.discoveryTabIndicator} />}
             </TouchableOpacity>
-            <TouchableOpacity style={styles.discoveryTab} onPress={() => setTab('perps')} activeOpacity={0.7}>
-              <Text style={[styles.discoveryTabText, tab === 'perps' && styles.discoveryTabTextActive]}>Perps</Text>
-              <View style={styles.newBadge}>
-                <Text style={styles.newBadgeText}>New</Text>
-              </View>
-            </TouchableOpacity>
           </View>
 
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
-            <TouchableOpacity style={styles.filterIconButton} activeOpacity={0.7}>
+            <TouchableOpacity
+              style={styles.filterIconButton}
+              activeOpacity={0.7}
+              onPress={() => Alert.alert('Coming soon', "More filters (chain, market cap, liquidity) aren't built yet — use the presets below for now.")}>
               <FilterIcon color={colors.textSecondary} size={16} />
             </TouchableOpacity>
             {TOKEN_FILTERS.map(f => (
@@ -137,7 +134,7 @@ function makeStyles(colors: Colors) {
       borderRadius: 10,
       backgroundColor: colors.panel,
     },
-    logoMarkImage: {width: 22, height: 22},
+    logoMarkImage: {width: 28, height: 28},
     logoMarkSpacer: {width: 56},
     balance: {color: colors.textPrimary, fontSize: 26, fontWeight: '700'},
 
@@ -162,9 +159,6 @@ function makeStyles(colors: Colors) {
       borderRadius: 2,
       backgroundColor: colors.ctaBg,
     },
-    newBadge: {backgroundColor: colors.pillBg, borderRadius: 999, paddingHorizontal: 7, paddingVertical: 2},
-    newBadgeText: {color: colors.textSecondary, fontSize: 10, fontWeight: '700'},
-
     filterRow: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 12},
     filterIconButton: {
       width: 38,
