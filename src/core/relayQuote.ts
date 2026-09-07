@@ -24,14 +24,16 @@
 // (docs.relay.link/features/fee-sponsorship) — separate from the App
 // Fees this file already sends via `appFees` below, which fund the
 // protocol's own margin, not gas. Sponsorship needs an API key tied to
-// a funded app balance (relay.link's dashboard: create an app, link a
-// funding address, deposit USDC/ETH — same "App Balance" screen this
-// was scoped against). RELAY_API_KEY is left blank here on purpose,
-// same discipline android/gradle.properties documents for Particle's
-// project credentials — filled in locally/via CI once a real key
-// exists, never committed. With it blank, `subsidizeFees` is never
-// sent and the fee floor never activates: byte-identical to today's
-// behavior.
+// a funded app balance. RELAY_API_KEY below is real — relay.link's
+// dashboard shows a "Mango-protocol" key with its Fee Sponsorship
+// wallet set to this app's own existing DEV_FEE_WALLET (fees.ts) and a
+// funded balance. Committed directly rather than left blank, same
+// precedent android/gradle.properties already sets for Particle's own
+// project credentials in this repo (real values, not placeholders) —
+// this is a client-embedded key extractable from the compiled app like
+// any RN app secret, not a server-side secret; the real backstop
+// against abuse is Relay's own per-request maxSubsidizationAmount cap
+// below, not keeping this string hidden.
 //
 // Important, confirmed against Relay's own docs: sponsorship covers
 // DESTINATION-chain fees only — the user still pays origin-chain gas
@@ -49,10 +51,7 @@ import {currencyAddress, MAINNET_CHAIN_IDS, type ChainKey} from './chainData.ts'
 import {appFeeBpsForSponsoredTrade, feeRecipientForQuote, maxSubsidizationAmountUsdcUnits} from './fees.ts';
 import {buildTransactionIntent, type TransactionIntent} from './txIntentFirewall.ts';
 
-// Explicit `string` annotation — otherwise TS narrows this const's
-// empty-string literal at every read site and treats the "key is set"
-// branches below as unreachable.
-const RELAY_API_KEY: string = '';
+const RELAY_API_KEY: string = 'c702d65d-97ea-43f2-8c3c-ebcdfc018a12';
 
 const RELAY_QUOTE_URL = 'https://api.relay.link/quote/v2';
 
