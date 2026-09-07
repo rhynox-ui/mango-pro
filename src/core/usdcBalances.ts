@@ -17,11 +17,9 @@
 // chains failed, so a partial result can be shown as partial — never
 // silently presented as complete when it isn't.
 
-import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, type ChainKey} from './chainData.ts';
+import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, assetDecimalsForChain, type ChainKey} from './chainData.ts';
 import {fetchWalletSplTokenBalance, fetchWalletTokenBalance} from '../wallet/walletRpc.ts';
 import type {DerivedAccounts} from '../wallet/keys';
-
-const USDC_DECIMALS = ASSET_ONCHAIN_DECIMALS.USDC;
 
 /** Every chain this app has a verified USDC contract/mint address for — see this file's own header for why this is derived, not a separate hardcoded list. */
 export const USDC_SUPPORTED_CHAINS = Object.keys(TOKEN_ADDRESSES.USDC ?? {}) as ChainKey[];
@@ -38,10 +36,16 @@ export type UsdcPortfolio = {
 async function fetchOneChainUsdc(chainKey: ChainKey, session: DerivedAccounts): Promise<number> {
   const address = TOKEN_ADDRESSES.USDC[chainKey];
   if (!address) throw new Error(`No verified USDC address for ${chainKey}.`);
+  // Real bug this fixes: BNB Chain's own USDC contract uses 18 decimals,
+  // not the usual 6 (chainData.ts's own ASSET_ONCHAIN_DECIMALS_BY_CHAIN
+  // override) — reading it as 6 would misreport the balance by a factor
+  // of 10^12. assetDecimalsForChain already knows this per chain; a flat
+  // ASSET_ONCHAIN_DECIMALS.USDC constant here silently ignored it.
+  const decimals = assetDecimalsForChain(chainKey, 'USDC') ?? ASSET_ONCHAIN_DECIMALS.USDC;
   if (chainKey === 'solana') {
-    return fetchWalletSplTokenBalance(address, USDC_DECIMALS, session.solana.address);
+    return fetchWalletSplTokenBalance(address, decimals, session.solana.address);
   }
-  return fetchWalletTokenBalance(chainKey, address, USDC_DECIMALS, session.evm.address);
+  return fetchWalletTokenBalance(chainKey, address, decimals, session.evm.address);
 }
 
 export async function fetchUsdcPortfolio(session: DerivedAccounts): Promise<UsdcPortfolio> {

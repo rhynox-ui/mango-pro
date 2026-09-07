@@ -33,11 +33,12 @@
 //   as every other send in this app.
 
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {ActivityIndicator, Modal, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import Svg, {Circle, Path} from 'react-native-svg';
 import {formatUnits, parseUnits} from 'viem';
 import {TokenChartPanel} from '../components/TokenChartPanel';
 import {ChevronLeftIcon} from '../components/icons';
+import {NetworkIcon} from '../wallet/NetworkIcon';
 import {CHAIN_LABEL, NATIVE_SYMBOL, assetDecimalsForChain, currencyAddress, type ChainKey} from '../core/chainData';
 import {DEV_FEE_PCT} from '../core/fees';
 import {getRelayQuote, summarizeQuote, type QuoteSummary, type RelayQuote} from '../core/relayQuote';
@@ -60,7 +61,16 @@ import {addTxHistoryEntry} from '../wallet/txHistory';
 import {useSession} from '../wallet/SessionContext';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {TradeSettingsSheet} from '../components/TradeSettingsSheet';
-import {fetchUsdcPortfolio, type UsdcPortfolio} from '../core/usdcBalances';
+import {fetchUsdcPortfolio, USDC_SUPPORTED_CHAINS, type UsdcPortfolio} from '../core/usdcBalances';
+
+/**
+ * Buy-side only — what chain/asset "You pay" actually spends from. Sell
+ * has no equivalent: you can only sell a token from the chain it's
+ * actually held on, there's no "origin" to pick. Defaults to the
+ * token's own chain's native asset (today's only option before this),
+ * so nothing changes until a user actively picks something else.
+ */
+type PayOrigin = {chainKey: ChainKey; asset: 'native' | 'USDC'};
 
 export type DemoToken = {
   chainKey: ChainKey;
@@ -169,6 +179,21 @@ export function TokenTradeScreen({
   const [slippageBps, setSlippageBps] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
+  // Cross-chain buy: pay from any chain/asset this wallet actually
+  // holds, receive the token on its own chain — Relay itself already
+  // handles origin != destination chains fine (relayQuote.ts/
+  // executeRelayQuote.ts both take them as independent params); this
+  // was the one piece of plumbing missing. Resets to the token's own
+  // chain's native asset — today's only option before this — whenever
+  // the token changes, so switching tokens never silently carries over
+  // a payment origin that doesn't make sense for the new one.
+  const [payOrigin, setPayOrigin] = useState<PayOrigin>({chainKey: token.chainKey, asset: 'native'});
+  const [showPayOriginPicker, setShowPayOriginPicker] = useState(false);
+  useEffect(() => {
+    setPayOrigin({chainKey: token.chainKey, asset: 'native'});
+  }, [token]);
+  const crossChainPay = isBuySide && (payOrigin.chainKey !== token.chainKey || payOrigin.asset !== 'native');
+
   // Same real, live aggregator ProfileScreen's own "Total Cash" already
   // uses — reused here rather than re-derived, so this screen's own
   // portfolio figure can never quietly drift from the one on Profile.
@@ -187,21 +212,30 @@ export function TokenTradeScreen({
     };
   }, [session]);
 
-  const paySymbol = isBuySide ? NATIVE_SYMBOL[token.chainKey] : token.symbol;
+  // paySymbol reflects payOrigin's own choice on Buy (the token's own
+  // chain and native asset on Sell — unchanged, no origin to pick there).
+  const paySymbol = isBuySide ? (payOrigin.asset === 'native' ? NATIVE_SYMBOL[payOrigin.chainKey] : 'USDC') : token.symbol;
   const receiveSymbol = isBuySide ? token.symbol : NATIVE_SYMBOL[token.chainKey];
   const amtNum = Number(amount) || 0;
 
-  // Real USD value of the native asset being paid on Buy — the searched
-  // token itself has no reliable price source on Sell (walletPrices.ts
-  // only covers a small, conservative set of established assets), so
-  // this stays null there, same "nothing to cap without a real number"
-  // rule appFeeBps's own doc comment states. Feeds getRelayQuote's own
-  // originAmountUsd below (activating the large-trade fee cap that was
-  // otherwise dormant with nothing to compute it against) and the
-  // fallback-DEX path's fee cap/sweep.
+  // Real USD value of what's actually being paid on Buy — USDC is
+  // trivially 1:1 (a real stablecoin peg, not an approximation); the
+  // native asset needs a live price lookup, scoped to whichever chain
+  // payOrigin actually points at now, not always the token's own chain.
+  // The searched token itself has no reliable price source on Sell
+  // (walletPrices.ts only covers a small, conservative set of
+  // established assets), so this stays undefined there, same "nothing
+  // to cap without a real number" rule appFeeBps's own doc comment
+  // states. Feeds getRelayQuote's own originAmountUsd below (activating
+  // the large-trade fee cap that was otherwise dormant with nothing to
+  // compute it against) and the fallback-DEX path's fee cap/sweep.
   const [nativeUsdPrice, setNativeUsdPrice] = useState<number | null>(null);
   useEffect(() => {
-    const nativeSymbol = NATIVE_SYMBOL[token.chainKey];
+    if (!(isBuySide && payOrigin.asset === 'native')) {
+      setNativeUsdPrice(null);
+      return;
+    }
+    const nativeSymbol = NATIVE_SYMBOL[payOrigin.chainKey];
     let cancelled = false;
     fetchWalletPrices('usd')
       .then(prices => {
@@ -213,8 +247,8 @@ export function TokenTradeScreen({
     return () => {
       cancelled = true;
     };
-  }, [token.chainKey]);
-  const originAmountUsd = isBuySide && nativeUsdPrice != null ? amtNum * nativeUsdPrice : undefined;
+  }, [isBuySide, payOrigin]);
+  const originAmountUsd = !isBuySide ? undefined : payOrigin.asset === 'USDC' ? amtNum : nativeUsdPrice != null ? amtNum * nativeUsdPrice : undefined;
 
   // The searched token's own decimals — not carried by DexScreener's
   // search response, so Sell (which spends this token) needs a live
@@ -244,28 +278,39 @@ export function TokenTradeScreen({
   }, [token]);
 
   const solana = token.chainKey === 'solana';
+  // Which chain the PAY side's balance actually needs to be read from —
+  // payOrigin's own choice on Buy, always the token's own chain on Sell
+  // (reduces to `solana` there, same value as before this feature).
+  const originIsSolana = isBuySide ? payOrigin.chainKey === 'solana' : solana;
 
   // The real "how much can I spend" answer the quick-percent row below
-  // needs — native for Buy (chainData.ts already knows its decimals
-  // statically), the searched token itself for Sell (tokenDecimals,
-  // resolved above; unresolved yet just means no balance to report,
-  // same reasoning the quote effect below already applies).
+  // needs — payOrigin's own chain/asset for Buy (USDC reuses the
+  // portfolio this screen already fetches below, no extra RPC call; the
+  // picker itself only offers a chain once that fetch has resolved, so
+  // this never races an unresolved portfolio), the searched token itself
+  // for Sell (tokenDecimals, resolved above; unresolved yet just means
+  // no balance to report, same reasoning the quote effect below already
+  // applies).
   const fetchPayBalance = useCallback((): Promise<number> => {
     if (!session) return Promise.resolve(0);
     if (isBuySide) {
-      return solana ? fetchWalletSolanaBalance(session.solana.address) : fetchWalletNativeBalance(token.chainKey, session.evm.address);
+      if (payOrigin.asset === 'USDC') {
+        const result = usdcPortfolio?.results.find(r => r.chainKey === payOrigin.chainKey);
+        return Promise.resolve(result?.status === 'ok' ? result.balance : 0);
+      }
+      return originIsSolana ? fetchWalletSolanaBalance(session.solana.address) : fetchWalletNativeBalance(payOrigin.chainKey, session.evm.address);
     }
     if (tokenDecimals === null) return Promise.resolve(0);
     return solana
       ? fetchWalletSplTokenBalance(token.address, tokenDecimals, session.solana.address)
       : fetchWalletTokenBalance(token.chainKey, token.address, tokenDecimals, session.evm.address);
-  }, [session, isBuySide, solana, token, tokenDecimals]);
+  }, [session, isBuySide, solana, originIsSolana, token, tokenDecimals, payOrigin, usdcPortfolio]);
 
   // Bumped by the "Couldn't load balance" retry tap below — useAvailableBalance
   // only refetches when one of its deps changes, and none of the real deps
   // (session/side/token) change on a retry tap, so this is a dedicated one.
   const [balanceRetryToken, setBalanceRetryToken] = useState(0);
-  const {balance, loading: balanceLoading} = useAvailableBalance(session ? fetchPayBalance : null, [session, isBuySide, solana, token, tokenDecimals, balanceRetryToken]);
+  const {balance, loading: balanceLoading} = useAvailableBalance(session ? fetchPayBalance : null, [session, isBuySide, solana, token, tokenDecimals, balanceRetryToken, payOrigin, usdcPortfolio]);
   const insufficientBalance = amtNum > 0 && balance !== null && amtNum > balance;
   // A resolved balance of 0 is real (an empty wallet) and looks
   // identical to a null balance in `balance !== null` checks — this
@@ -300,16 +345,17 @@ export function TokenTradeScreen({
 
   async function handleMax() {
     if (balance === null) return;
-    if (!isBuySide) {
-      // Sell side pays the searched token — gas is paid separately in
-      // the chain's native asset, so the full token balance is spendable
-      // (same computeMaxAmount branch a non-native asset always takes).
+    if (!isBuySide || payOrigin.asset === 'USDC') {
+      // Sell side pays the searched token, or Buy paying USDC — either
+      // way gas is paid separately in the origin chain's native asset,
+      // so the full balance is spendable (same computeMaxAmount branch
+      // a non-native asset always takes).
       setAmount(formatAmountForInput(balance));
       return;
     }
     setMaxLoading(true);
     try {
-      const feeReserve = solana ? await estimateSolanaMaxReserveSol() : await estimateEvmNativeFeeReserve(token.chainKey);
+      const feeReserve = originIsSolana ? await estimateSolanaMaxReserveSol() : await estimateEvmNativeFeeReserve(payOrigin.chainKey);
       setAmount(formatAmountForInput(computeMaxAmount({balance, isNativeAsset: true, feeNative: feeReserve})));
     } catch {
       // The live fee estimate itself failed — fall back to the full
@@ -347,10 +393,17 @@ export function TokenTradeScreen({
       setQuoteLoading(false);
       return;
     }
-    // Buy spends native (decimals known statically); Sell spends the
-    // searched token (decimals only known once the live lookup above
-    // resolves) — either way, this is the "You pay" side's decimals.
-    const payDecimals = isBuySide ? assetDecimalsForChain(token.chainKey, NATIVE_SYMBOL[token.chainKey]) : tokenDecimals;
+    // Buy spends whatever payOrigin points at (native or USDC, on
+    // whichever chain was picked — decimals known statically either
+    // way, chainData.ts's own per-chain overrides included); Sell
+    // spends the searched token (decimals only known once the live
+    // lookup above resolves) — either way, this is the "You pay" side's
+    // decimals.
+    const payDecimals = isBuySide
+      ? payOrigin.asset === 'native'
+        ? assetDecimalsForChain(payOrigin.chainKey, NATIVE_SYMBOL[payOrigin.chainKey])
+        : assetDecimalsForChain(payOrigin.chainKey, 'USDC')
+      : tokenDecimals;
     if (payDecimals === undefined || payDecimals === null) {
       setQuote(null);
       rawQuoteRef.current = null;
@@ -369,15 +422,31 @@ export function TokenTradeScreen({
         setQuoteLoading(false);
         return;
       }
-      const userAddress = token.chainKey === 'solana' ? session.solana.address : session.evm.address;
+      // Origin (who signs, which chain the pay side actually spends on)
+      // and destination (where the token itself lives) are independent
+      // now — a cross-chain buy pays from payOrigin's own chain but
+      // still receives on the token's own chain, so the signer address
+      // and the recipient address can genuinely be different address
+      // TYPES (an EVM address paying in, a Solana address receiving, or
+      // vice versa). Both getRelayQuote and the intent firewall already
+      // take these as independent params — this was the one piece of
+      // wiring that hard-assumed they were always the same chain.
+      const userAddress = originIsSolana ? session.solana.address : session.evm.address;
+      const recipientAddress = solana ? session.solana.address : session.evm.address;
       const nativeCurrency = currencyAddress(token.chainKey, NATIVE_SYMBOL[token.chainKey]);
+      const originCurrency = isBuySide
+        ? payOrigin.asset === 'native'
+          ? currencyAddress(payOrigin.chainKey, NATIVE_SYMBOL[payOrigin.chainKey])
+          : currencyAddress(payOrigin.chainKey, 'USDC')
+        : token.address;
       getRelayQuote({
-        fromChainKey: token.chainKey,
+        fromChainKey: isBuySide ? payOrigin.chainKey : token.chainKey,
         toChainKey: token.chainKey,
-        originCurrency: isBuySide ? nativeCurrency : token.address,
+        originCurrency,
         destinationCurrency: isBuySide ? token.address : nativeCurrency,
         amountBaseUnits,
         userAddress,
+        recipientAddress,
         originAmountUsd,
         slippageTolerance: slippageBps ?? undefined,
       })
@@ -407,11 +476,28 @@ export function TokenTradeScreen({
           // bonding curve and PumpSwap's post-graduation pool instead
           // (fallbackDex.ts's own header explains why) — still null, and
           // still falling through to the original error, for an ordinary
-          // Solana token with no pump.fun presence at all.
+          // Solana token with no pump.fun presence at all. NONE of these
+          // fallback providers can bridge CHAINS — they're all direct
+          // on-chain DEX routers/aggregators, same-chain by construction
+          // (paying a different ASSET on the SAME chain, e.g. USDC
+          // instead of native, is exactly the ordinary case they already
+          // handle just fine — only an actual chain difference breaks
+          // that assumption) — so a genuinely cross-chain buy skips this
+          // entirely and just shows Relay's own error instead of
+          // pretending a same-chain aggregator could ever answer a
+          // cross-chain request.
+          if (isBuySide && payOrigin.chainKey !== token.chainKey) {
+            rawQuoteRef.current = null;
+            fallbackParamsRef.current = null;
+            setQuote(null);
+            setQuoteLoading(false);
+            setQuoteError(relayErrorMessage);
+            return;
+          }
           const receiveDecimalsFallback = isBuySide ? (tokenDecimals ?? 18) : (assetDecimalsForChain(token.chainKey, NATIVE_SYMBOL[token.chainKey]) ?? 18);
           const fallbackParams: FallbackRouteParams = {
             chainKey: token.chainKey,
-            sellToken: isBuySide ? nativeCurrency : token.address,
+            sellToken: originCurrency,
             buyToken: isBuySide ? token.address : nativeCurrency,
             sellAmount: amountBaseUnits,
             takerAddress: userAddress,
@@ -451,7 +537,7 @@ export function TokenTradeScreen({
         });
     }, QUOTE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [isBuySide, amount, amtNum, session, token, tokenDecimals, slippageBps, originAmountUsd]);
+  }, [isBuySide, amount, amtNum, session, token, tokenDecimals, slippageBps, originAmountUsd, payOrigin, originIsSolana, solana]);
 
   // Flipping side changes which balance the pay card is even reading
   // (native vs. the searched token) — any preset percentage of the OLD
@@ -683,6 +769,15 @@ export function TokenTradeScreen({
       <View style={styles.payReceiveRow}>
         <View style={[styles.card, styles.payReceiveCard]}>
           <Text style={styles.cardLabel}>You pay</Text>
+          {isBuySide && (
+            <TouchableOpacity style={styles.payOriginRow} onPress={() => setShowPayOriginPicker(true)} activeOpacity={0.7}>
+              <NetworkIcon chainKey={payOrigin.chainKey} size={13} />
+              <Text style={styles.payOriginText} numberOfLines={1}>
+                {crossChainPay ? `via ${CHAIN_LABEL[payOrigin.chainKey]}` : 'Pay from'}
+              </Text>
+              <Text style={styles.payOriginChevron}>⌄</Text>
+            </TouchableOpacity>
+          )}
           <View style={styles.prMainRow}>
             <TouchableOpacity style={styles.assetSelector} onPress={onOpenSearch} activeOpacity={0.7} disabled={!onOpenSearch}>
               <Text style={styles.assetSelectorText}>{paySymbol}</Text>
@@ -778,6 +873,69 @@ export function TokenTradeScreen({
       {executeError && <Text style={styles.errorText}>{executeError}</Text>}
 
       <TradeSettingsSheet visible={settingsOpen} onClose={() => setSettingsOpen(false)} slippageBps={slippageBps} onSave={setSlippageBps} />
+
+      <Modal visible={showPayOriginPicker} transparent animationType="fade" onRequestClose={() => setShowPayOriginPicker(false)}>
+        <View style={styles.pickerBackdrop}>
+          <View style={styles.pickerCard}>
+            <View style={styles.pickerHeaderRow}>
+              <Text style={styles.pickerTitle}>Pay with</Text>
+              <TouchableOpacity onPress={() => setShowPayOriginPicker(false)} hitSlop={8}>
+                <Text style={styles.pickerClose}>Close</Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              style={styles.pickerRow}
+              activeOpacity={0.7}
+              onPress={() => {
+                setPayOrigin({chainKey: token.chainKey, asset: 'native'});
+                setShowPayOriginPicker(false);
+              }}>
+              <NetworkIcon chainKey={token.chainKey} size={22} />
+              <Text style={styles.pickerRowText}>
+                {NATIVE_SYMBOL[token.chainKey]} on {CHAIN_LABEL[token.chainKey]}
+              </Text>
+              {payOrigin.chainKey === token.chainKey && payOrigin.asset === 'native' && <Text style={styles.pickerCheck}>✓</Text>}
+            </TouchableOpacity>
+
+            {/* Real cross-chain pay: same USDC balances ProfileScreen's
+                own Deposit/Withdraw already fetches (usdcPortfolio,
+                shared via this screen's own effect above) — pick any
+                chain actually holding USDC and Relay bridges it to the
+                token's own chain as part of the same quote. Rows with
+                nothing to spend stay visible (never hidden — same
+                "always show real state" rule this app holds to
+                elsewhere) but disabled, since picking one would just
+                fail on "insufficient balance" a moment later. */}
+            <Text style={styles.pickerSectionLabel}>USDC — pay from any chain you hold it on</Text>
+            {!usdcPortfolio ? (
+              <ActivityIndicator color={colors.textMuted} style={styles.pickerLoading} />
+            ) : (
+              USDC_SUPPORTED_CHAINS.map(chainKey => {
+                const result = usdcPortfolio.results.find(r => r.chainKey === chainKey);
+                const chainBalance = result?.status === 'ok' ? result.balance : 0;
+                const disabled = chainBalance <= 0;
+                const selected = payOrigin.chainKey === chainKey && payOrigin.asset === 'USDC';
+                return (
+                  <TouchableOpacity
+                    key={chainKey}
+                    style={[styles.pickerRow, disabled && styles.pickerRowDisabled]}
+                    activeOpacity={0.7}
+                    disabled={disabled}
+                    onPress={() => {
+                      setPayOrigin({chainKey, asset: 'USDC'});
+                      setShowPayOriginPicker(false);
+                    }}>
+                    <NetworkIcon chainKey={chainKey} size={22} />
+                    <Text style={styles.pickerRowText}>USDC on {CHAIN_LABEL[chainKey]}</Text>
+                    <Text style={styles.pickerRowBalance}>${chainBalance.toFixed(2)}</Text>
+                    {selected && <Text style={styles.pickerCheck}>✓</Text>}
+                  </TouchableOpacity>
+                );
+              })
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -840,6 +998,9 @@ function makeStyles(colors: Colors) {
       padding: 14,
     },
     cardLabel: {color: colors.textMuted, fontSize: 10, fontWeight: '700', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.6},
+    payOriginRow: {flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 8, marginTop: -4},
+    payOriginText: {color: colors.textSecondary, fontSize: 10.5, fontWeight: '600', flexShrink: 1},
+    payOriginChevron: {color: colors.textMuted, fontSize: 10, fontWeight: '700'},
     payReceiveRow: {flexDirection: 'row', gap: 8, marginTop: 12},
     payReceiveCard: {flex: 1, padding: 12},
     prMainRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6},
@@ -921,5 +1082,27 @@ function makeStyles(colors: Colors) {
     executeSuccessText: {color: colors.gain, fontSize: 15, fontWeight: '700'},
     executeHashText: {color: colors.textMuted, fontSize: 11, fontFamily: 'monospace'},
     executeWarningText: {color: colors.warning, fontSize: 10.5, textAlign: 'center', marginTop: 2},
+
+    pickerBackdrop: {flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)'},
+    pickerCard: {backgroundColor: colors.bg, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: 36, maxHeight: '75%'},
+    pickerHeaderRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14},
+    pickerTitle: {color: colors.textPrimary, fontSize: 18, fontWeight: '800'},
+    pickerClose: {color: colors.textMuted, fontSize: 13, fontWeight: '600'},
+    pickerSectionLabel: {color: colors.textMuted, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 14, marginBottom: 8},
+    pickerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      backgroundColor: colors.panel,
+      borderRadius: 14,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      marginBottom: 8,
+    },
+    pickerRowDisabled: {opacity: 0.4},
+    pickerRowText: {flex: 1, color: colors.textPrimary, fontSize: 14, fontWeight: '700'},
+    pickerRowBalance: {color: colors.textMuted, fontSize: 12.5, fontWeight: '600'},
+    pickerCheck: {color: colors.navActive, fontSize: 15, fontWeight: '800', marginLeft: 4},
+    pickerLoading: {marginVertical: 14},
   });
 }
