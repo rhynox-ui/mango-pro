@@ -9,7 +9,8 @@
 // "Joined <month year>" is the one real data point: today's date.
 
 import {useEffect, useMemo, useState} from 'react';
-import {ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {ActivityIndicator, Alert, Image, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {launchImageLibrary} from 'react-native-image-picker';
 import Svg, {Line as SvgLine} from 'react-native-svg';
 import {
   ArrowUpIcon,
@@ -28,6 +29,7 @@ import {fetchUsdcPortfolio, USDC_SUPPORTED_CHAINS, type UsdcPortfolio} from '../
 import {NetworkIcon} from '../wallet/NetworkIcon';
 import {sendUsdc, isValidRecipientAddress} from '../wallet/sendUsdc';
 import {filterTxHistoryForAccount, getTxHistory, subscribeTxHistory, type TxHistoryEntry} from '../wallet/txHistory';
+import {getAvatarUri, getBio, setAvatarUri as saveAvatarUri, setBio as saveBio} from '../wallet/profileLocal';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {useSession} from '../wallet/SessionContext';
 
@@ -117,6 +119,64 @@ export function ProfileScreen({
   const [positionTab, setPositionTab] = useState<PositionTab>('Open');
   const [assetFilter, setAssetFilter] = useState<AssetFilterKey>('All');
   const joined = useMemo(joinedLabel, []);
+
+  // Real, local-only bio + avatar (src/wallet/profileLocal.ts) — loaded
+  // fresh per account address so switching wallets on this device never
+  // shows a stale bio/photo from a different one.
+  const [bio, setBioValue] = useState('');
+  const [bioEditing, setBioEditing] = useState(false);
+  const [bioDraft, setBioDraft] = useState('');
+  const [avatarUri, setAvatarUriValue] = useState<string | null>(null);
+  const [avatarFailed, setAvatarFailed] = useState(false);
+  useEffect(() => {
+    if (!session) return;
+    const address = session.evm.address;
+    let cancelled = false;
+    Promise.all([getBio(address), getAvatarUri(address)]).then(([loadedBio, loadedAvatar]) => {
+      if (cancelled) return;
+      setBioValue(loadedBio);
+      setAvatarUriValue(loadedAvatar);
+      setAvatarFailed(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
+
+  function openBioEditor() {
+    setBioDraft(bio);
+    setBioEditing(true);
+  }
+
+  async function handleSaveBio() {
+    if (!session) return;
+    const trimmed = bioDraft.trim();
+    await saveBio(session.evm.address, trimmed);
+    setBioValue(trimmed);
+    setBioEditing(false);
+  }
+
+  async function handlePickAvatar() {
+    if (!session) return;
+    // includeBase64 + a capped maxWidth/maxHeight/quality: the picker's
+    // own real, built-in downsizing (not custom compression code this
+    // app would have to write) keeps the resulting data URI a reasonable
+    // size for permanent storage in AsyncStorage — see profileLocal.ts's
+    // own header for why bytes-in-storage, not a file path, is the
+    // actually-permanent choice here.
+    const result = await launchImageLibrary({mediaType: 'photo', selectionLimit: 1, includeBase64: true, maxWidth: 512, maxHeight: 512, quality: 0.7});
+    if (result.didCancel) return;
+    if (result.errorCode) {
+      Alert.alert('Could not open photo library', result.errorMessage ?? 'Please try again.');
+      return;
+    }
+    const asset = result.assets?.[0];
+    if (!asset?.base64) return;
+    const dataUri = `data:${asset.type ?? 'image/jpeg'};base64,${asset.base64}`;
+    await saveAvatarUri(session.evm.address, dataUri);
+    setAvatarUriValue(dataUri);
+    setAvatarFailed(false);
+  }
 
   // Real trade count for the meta chip below, and the real trades
   // behind the Positions section's own "Closed" tab (see its own render
@@ -219,13 +279,14 @@ export function ProfileScreen({
 
       <View style={styles.identityRow}>
         <View style={styles.avatarWrap}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>Y</Text>
-          </View>
-          <TouchableOpacity
-            style={styles.avatarEditButton}
-            hitSlop={6}
-            onPress={() => Alert.alert('Coming soon', "Profile photo upload isn't built yet.")}>
+          {avatarUri && !avatarFailed ? (
+            <Image source={{uri: avatarUri}} style={styles.avatarImage} onError={() => setAvatarFailed(true)} />
+          ) : (
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>Y</Text>
+            </View>
+          )}
+          <TouchableOpacity style={styles.avatarEditButton} hitSlop={6} onPress={handlePickAvatar}>
             <PencilIcon color={colors.bg} size={11} />
           </TouchableOpacity>
         </View>
@@ -241,8 +302,8 @@ export function ProfileScreen({
           system exists yet, so the address is the identity shown until
           one does. */}
       <Text style={styles.handle}>{session ? truncateAddress(session.evm.address) : '—'}</Text>
-      <TouchableOpacity onPress={() => Alert.alert('Coming soon', "Profile bios aren't built yet.")}>
-        <Text style={styles.addBio}>+ Add a bio</Text>
+      <TouchableOpacity onPress={openBioEditor}>
+        {bio ? <Text style={styles.bioText}>{bio}</Text> : <Text style={styles.addBio}>+ Add a bio</Text>}
       </TouchableOpacity>
 
       <View style={styles.socialRow}>
@@ -561,6 +622,32 @@ export function ProfileScreen({
           </View>
         </View>
       </Modal>
+
+      <Modal visible={bioEditing} animationType="slide" transparent onRequestClose={() => setBioEditing(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeaderRow}>
+              <Text style={styles.modalTitle}>Bio</Text>
+              <TouchableOpacity onPress={() => setBioEditing(false)} hitSlop={8}>
+                <Text style={styles.modalClose}>Close</Text>
+              </TouchableOpacity>
+            </View>
+            <TextInput
+              style={[styles.formInput, styles.bioInput]}
+              value={bioDraft}
+              onChangeText={setBioDraft}
+              placeholder="Say something about yourself"
+              placeholderTextColor={colors.textMuted}
+              multiline
+              maxLength={160}
+              autoFocus
+            />
+            <TouchableOpacity style={styles.sendButton} onPress={handleSaveBio} activeOpacity={0.8}>
+              <Text style={styles.sendButtonText}>Save</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -588,6 +675,7 @@ function makeStyles(colors: Colors) {
       justifyContent: 'center',
     },
     avatarText: {color: colors.ctaText, fontSize: 30, fontWeight: '800'},
+    avatarImage: {width: 84, height: 84, borderRadius: 42, backgroundColor: colors.panel},
     avatarEditButton: {
       position: 'absolute',
       bottom: 0,
@@ -615,6 +703,7 @@ function makeStyles(colors: Colors) {
     name: {color: colors.textPrimary, fontSize: 22, fontWeight: '800', marginTop: 14, paddingHorizontal: 16},
     handle: {color: colors.textMuted, fontSize: 14, marginTop: 2, paddingHorizontal: 16},
     addBio: {color: colors.textPrimary, fontSize: 14, fontWeight: '700', marginTop: 8, paddingHorizontal: 16},
+    bioText: {color: colors.textSecondary, fontSize: 13.5, lineHeight: 18, marginTop: 8, paddingHorizontal: 16},
 
     socialRow: {flexDirection: 'row', gap: 18, marginTop: 14, paddingHorizontal: 16},
     socialText: {color: colors.textMuted, fontSize: 13.5},
@@ -778,6 +867,7 @@ function makeStyles(colors: Colors) {
       paddingHorizontal: 14,
       paddingVertical: 12,
     },
+    bioInput: {minHeight: 90, textAlignVertical: 'top'},
     amountRow: {flexDirection: 'row', alignItems: 'center', gap: 8},
     amountInput: {flex: 1},
     maxButton: {
