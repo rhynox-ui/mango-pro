@@ -14,19 +14,45 @@
 // from the REQUEST body, never read back out of the response, or the
 // check would be circular and worthless.
 //
-// Fee: every request attaches appFeeBpsForSponsoredTrade() with
-// sponsoringGasOutright left false — Mango Pro's wallet today is a
-// plain EOA signing its own transactions (the smart-account/paymaster
-// layer is still gated on the Phase 0 provider spike), so there is no
-// sponsored gas cost yet for the chain-aware floor to protect against.
-// That floor activates the moment gas sponsorship goes live, not before
-// — wiring `sponsoringGasOutright: true` here today would inflate fees
-// for a cost the protocol isn't actually paying.
+// Fee: every request attaches appFeeBpsForSponsoredTrade(). Whether
+// `sponsoringGasOutright` is actually true is no longer a caller choice
+// (nothing ever passed it — dead plumbing) — it's derived below from
+// whether RELAY_API_KEY is actually configured, since the fee floor
+// this protects only needs to exist once real sponsorship is live.
+//
+// Real gas sponsorship: Relay's own "Fee Sponsorship" feature
+// (docs.relay.link/features/fee-sponsorship) — separate from the App
+// Fees this file already sends via `appFees` below, which fund the
+// protocol's own margin, not gas. Sponsorship needs an API key tied to
+// a funded app balance (relay.link's dashboard: create an app, link a
+// funding address, deposit USDC/ETH — same "App Balance" screen this
+// was scoped against). RELAY_API_KEY is left blank here on purpose,
+// same discipline android/gradle.properties documents for Particle's
+// project credentials — filled in locally/via CI once a real key
+// exists, never committed. With it blank, `subsidizeFees` is never
+// sent and the fee floor never activates: byte-identical to today's
+// behavior.
+//
+// Important, confirmed against Relay's own docs: sponsorship covers
+// DESTINATION-chain fees only — the user still pays origin-chain gas
+// themselves, on every trade, sponsored or not. Mango Pro's only
+// current trade screen (TokenTradeScreen.tsx) does same-chain buy/sell
+// (fromChainKey === toChainKey always), so origin and destination are
+// the same chain there today — verify with a real, funded key whether
+// Relay's sponsorship has any visible effect on that same-chain case
+// before assuming it does. The clearer, unambiguous win is real
+// cross-chain bridge+swap trades (build plan §3/§4, not yet built) —
+// that is where "destination chain" is genuinely a separate leg.
 
 import {formatUnits} from 'viem';
 import {currencyAddress, MAINNET_CHAIN_IDS, type ChainKey} from './chainData.ts';
-import {appFeeBpsForSponsoredTrade, feeRecipientForQuote} from './fees.ts';
+import {appFeeBpsForSponsoredTrade, feeRecipientForQuote, maxSubsidizationAmountUsdcUnits} from './fees.ts';
 import {buildTransactionIntent, type TransactionIntent} from './txIntentFirewall.ts';
+
+// Explicit `string` annotation — otherwise TS narrows this const's
+// empty-string literal at every read site and treats the "key is set"
+// branches below as unreachable.
+const RELAY_API_KEY: string = '';
 
 const RELAY_QUOTE_URL = 'https://api.relay.link/quote/v2';
 
@@ -41,7 +67,10 @@ async function postRelayQuote(body: Record<string, unknown>): Promise<Response> 
     try {
       res = await fetch(RELAY_QUOTE_URL, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          ...(RELAY_API_KEY ? {'x-api-key': RELAY_API_KEY} : {}),
+        },
         body: JSON.stringify(body),
       });
     } catch (err) {
@@ -72,7 +101,6 @@ export type GetRelayQuoteParams = {
   userAddress: string;
   recipientAddress?: string;
   originAmountUsd?: number | null;
-  sponsoringGasOutright?: boolean;
   /** Basis-points string ("50" = 0.5%), or omit entirely for Auto — Relay's own front-running-aware default. Never a client-side guess: when set, this is the literal bound Relay quotes against and the number shown back in details.slippageTolerance.total. */
   slippageTolerance?: string;
 };
@@ -138,13 +166,18 @@ export function intentForQuote(quote: RelayQuote): {intent: TransactionIntent; q
 }
 
 export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQuote> {
-  const {fromChainKey, toChainKey, fromAsset, toAsset, originCurrency, destinationCurrency, amountBaseUnits, userAddress, recipientAddress, originAmountUsd, sponsoringGasOutright, slippageTolerance} = params;
+  const {fromChainKey, toChainKey, fromAsset, toAsset, originCurrency, destinationCurrency, amountBaseUnits, userAddress, recipientAddress, originAmountUsd, slippageTolerance} = params;
 
   const resolvedOriginCurrency = originCurrency ?? (fromAsset ? currencyAddress(fromChainKey, fromAsset) : undefined);
   const resolvedDestinationCurrency = destinationCurrency ?? (toAsset ? currencyAddress(toChainKey, toAsset) : undefined);
   if (!resolvedOriginCurrency || !resolvedDestinationCurrency) {
     throw new Error('getRelayQuote requires either an explicit currency address or a resolvable asset symbol for both sides.');
   }
+
+  // Real sponsorship only exists once a funded Relay API key is
+  // configured (see RELAY_API_KEY's own comment above) — this is the
+  // one place that decides it, not the caller.
+  const sponsorshipActive = RELAY_API_KEY.length > 0;
 
   const body = {
     user: userAddress,
@@ -155,7 +188,20 @@ export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQ
     destinationCurrency: resolvedDestinationCurrency,
     amount: amountBaseUnits,
     tradeType: 'EXACT_INPUT',
-    appFees: [{recipient: feeRecipientForQuote(), fee: appFeeBpsForSponsoredTrade(fromChainKey, originAmountUsd, {sponsoringGasOutright})}],
+    // toChainKey, not fromChainKey — Relay's sponsorship (and the fee
+    // floor protecting it) is priced against the chain whose fees
+    // actually get sponsored: the destination, per Relay's own docs.
+    appFees: [{recipient: feeRecipientForQuote(), fee: appFeeBpsForSponsoredTrade(toChainKey, originAmountUsd, {sponsoringGasOutright: sponsorshipActive})}],
+    ...(sponsorshipActive
+      ? {
+          subsidizeFees: true,
+          // Relay refuses to sponsor AT ALL past this cap (not a partial
+          // sponsor) — generous relative to real cost so normal trades
+          // always clear it, but still a real ceiling on what one
+          // request can draw from the app balance.
+          maxSubsidizationAmount: maxSubsidizationAmountUsdcUnits(toChainKey),
+        }
+      : {}),
     // Additive only — omitted entirely on Auto, same as
     // mango-mobile's own relayBridge.js, so leaving slippage on Auto
     // is a real "field not sent" rather than a client-guessed default.

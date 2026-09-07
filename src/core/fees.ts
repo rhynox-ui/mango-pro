@@ -108,6 +108,23 @@ export function sponsoredFeeFloorUsd(chainKey: ChainKey): number {
   return SPONSORSHIP_COST_ESTIMATE_USD[chainKey] + MIN_SPONSORSHIP_MARGIN_USD;
 }
 
+// Relay's own per-request subsidization cap: it refuses to sponsor a
+// request AT ALL (never partially) once the real cost would exceed
+// this, per its own docs — so this needs to sit comfortably above the
+// real cost estimate, not track it precisely, or a normal trade risks
+// silently losing its sponsorship over a cost spike. 5x the existing
+// floor (itself already cost-plus-margin) leaves real room on every
+// chain in SPONSORSHIP_COST_ESTIMATE_USD, including Ethereum mainnet's
+// own volatility, while still bounding what any single request can draw
+// from the app balance.
+const MAX_SUBSIDIZATION_MULTIPLE = 5;
+
+/** maxSubsidizationAmount for Relay's sponsorship request, in USDC's own 6-decimal integer units (per Relay's docs: 1000000 = $1). */
+export function maxSubsidizationAmountUsdcUnits(chainKey: ChainKey): string {
+  const generousUsd = sponsoredFeeFloorUsd(chainKey) * MAX_SUBSIDIZATION_MULTIPLE;
+  return String(Math.round(generousUsd * 1_000_000));
+}
+
 /**
  * Same contract as appFeeBps(), except when `sponsoringGasOutright` is
  * true: the returned bps is raised (never lowered — appFeeBps()'s own
