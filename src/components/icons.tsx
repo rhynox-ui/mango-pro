@@ -330,6 +330,19 @@ export function CalendarIcon({color, size = 14}: IconProps) {
   );
 }
 
+// Real Lucide "log-out" path data (door frame + an arrow exiting it) —
+// same "real lucide path data through react-native-svg" convention this
+// file's own header describes.
+export function LogOutIcon({color, size = 18}: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" stroke={color} {...STROKE}>
+      <Path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <Path d="m16 17 5-5-5-5" />
+      <Path d="M21 12H9" />
+    </Svg>
+  );
+}
+
 // Token-row verification badge — a filled circle + checkmark, same
 // composite shape as the reference's blue badge but rendered in the
 // theme's own cta tokens instead of a flat blue, per this file's own

@@ -1,14 +1,14 @@
 // src/onboarding/LockedScreen.tsx
 //
 // Adapted from mango-mobile's own LockedScreen.tsx — same lockout
-// throttling (unlockAttempts.ts) and busy-state handling, minus
-// biometric unlock (react-native-keychain isn't a dependency here yet;
-// password-only unlock is a real, complete v1, and biometrics is a
-// straightforward follow-up once that dependency is added). Also same
-// MANGO_MARK require()+Image pattern mobile's own LockedScreen uses.
+// throttling (unlockAttempts.ts) and busy-state handling. Biometric
+// unlock (react-native-keychain) is now wired in too, same as mobile's
+// own version — see biometricAuth.ts for the real storage/gating
+// mechanics. Also same MANGO_MARK require()+Image pattern mobile's own
+// LockedScreen uses.
 
 import {useEffect, useMemo, useRef, useState} from 'react';
-import {Image, StyleSheet, Text, View} from 'react-native';
+import {Image, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {ErrorText, PasswordField, PrimaryButton} from './ui';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {getLockoutStatus, recordFailedAttempt, recordSuccessfulUnlock} from '../wallet/unlockAttempts';
@@ -21,11 +21,22 @@ function formatCountdown(ms: number): string {
   return `${Math.ceil(totalSeconds / 60)}m`;
 }
 
-export function LockedScreen({onUnlock}: {onUnlock: (password: string) => Promise<void> | void}) {
+export function LockedScreen({
+  onUnlock,
+  biometricEnabled,
+  biometryLabel,
+  onBiometricUnlock,
+}: {
+  onUnlock: (password: string) => Promise<void> | void;
+  biometricEnabled?: boolean;
+  biometryLabel?: string;
+  onBiometricUnlock?: () => Promise<void> | void;
+}) {
   const {colors} = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
+  const [biometricBusy, setBiometricBusy] = useState(false);
   const [error, setError] = useState('');
   const [lockoutMs, setLockoutMs] = useState(0);
   const lockoutInterval = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -72,6 +83,19 @@ export function LockedScreen({onUnlock}: {onUnlock: (password: string) => Promis
     setBusy(false);
   }
 
+  async function handleBiometricPress() {
+    if (!onBiometricUnlock) return;
+    setBiometricBusy(true);
+    setError('');
+    try {
+      await onBiometricUnlock();
+      await recordSuccessfulUnlock();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Biometric unlock failed — try your password.');
+    }
+    setBiometricBusy(false);
+  }
+
   return (
     <View style={styles.container}>
       <View style={styles.card}>
@@ -85,9 +109,14 @@ export function LockedScreen({onUnlock}: {onUnlock: (password: string) => Promis
         {lockoutMs > 0 && <Text style={styles.lockoutText}>Too many incorrect attempts — try again in {formatCountdown(lockoutMs)}.</Text>}
         <View style={styles.buttonWrap}>
           {busy && <Text style={styles.busyHint}>Unlocking — this can take a moment on some devices.</Text>}
-          <PrimaryButton onPress={handleUnlock} disabled={!password || busy || lockoutMs > 0} loading={busy}>
+          <PrimaryButton onPress={handleUnlock} disabled={!password || busy || biometricBusy || lockoutMs > 0} loading={busy}>
             Unlock
           </PrimaryButton>
+          {biometricEnabled && (
+            <TouchableOpacity onPress={handleBiometricPress} disabled={busy || biometricBusy} style={styles.biometricLink} hitSlop={8}>
+              <Text style={styles.biometricLinkText}>{biometricBusy ? 'Waiting…' : `Unlock with ${biometryLabel ?? 'biometric'}`}</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
     </View>
@@ -105,5 +134,7 @@ function makeStyles(colors: Colors) {
     buttonWrap: {width: '100%', marginTop: 12, gap: 10},
     busyHint: {color: colors.textSecondary, fontSize: 12, textAlign: 'center', lineHeight: 17},
     lockoutText: {color: colors.danger, fontSize: 12, textAlign: 'center', lineHeight: 17, marginTop: 4},
+    biometricLink: {alignItems: 'center', paddingVertical: 6},
+    biometricLinkText: {color: colors.textPrimary, fontSize: 13, fontWeight: '600'},
   });
 }

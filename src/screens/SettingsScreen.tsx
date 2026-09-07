@@ -22,6 +22,7 @@ import {
   GlobeIcon,
   HelpCircleIcon,
   LandmarkIcon,
+  LogOutIcon,
   RepeatIcon,
   ScaleIcon,
   ShieldCheckIcon,
@@ -32,6 +33,7 @@ import {
 } from '../components/icons';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {useSession} from '../wallet/SessionContext';
+import {useAuthActions} from '../settings/AuthActionsContext';
 import {SecurityScreen} from './SecurityScreen';
 import {AppearanceScreen} from './AppearanceScreen';
 import {SolanaDevnetTestScreen} from './SolanaDevnetTestScreen';
@@ -54,6 +56,7 @@ export function SettingsScreen({onBack, onOpenDepositWithdraw}: {onBack: () => v
   const {colors} = useTheme();
   const styles = makeStyles(colors);
   const {session} = useSession();
+  const {logout} = useAuthActions();
   const [showSecurity, setShowSecurity] = useState(false);
   const [showAppearance, setShowAppearance] = useState(false);
   const [showSolanaDevnetTest, setShowSolanaDevnetTest] = useState(false);
@@ -84,6 +87,17 @@ export function SettingsScreen({onBack, onOpenDepositWithdraw}: {onBack: () => v
     {key: 'docs', label: 'Documentation', Icon: BookOpenIcon},
     {key: 'x', label: 'X', Icon: XIcon, onPress: () => Linking.openURL(X_URL)},
     {key: 'telegram', label: 'Telegram', Icon: TelegramIcon, onPress: () => Linking.openURL(TELEGRAM_URL)},
+    {
+      key: 'log-out',
+      label: 'Log Out',
+      Icon: LogOutIcon,
+      danger: true,
+      onPress: () =>
+        Alert.alert('Log Out', session?.authMethod === 'google' ? 'Sign out of your Google account? You can sign back in any time.' : 'Lock this wallet? You can unlock it again with your password.', [
+          {text: 'Cancel', style: 'cancel'},
+          {text: 'Log Out', style: 'destructive', onPress: logout},
+        ]),
+    },
     {
       key: 'delete-account',
       label: 'Delete Account',

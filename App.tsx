@@ -21,7 +21,7 @@
 
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {SafeAreaProvider, SafeAreaView} from 'react-native-safe-area-context';
-import {ActivityIndicator, AppState, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
+import {AppState, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {ThemeProvider, useTheme, type Colors} from './src/theme/ThemeContext';
 import {SessionProvider, useSession} from './src/wallet/SessionContext';
 import {deriveAccounts, warmupCrypto} from './src/wallet/keys';
@@ -29,11 +29,16 @@ import {createVault, hasVault, loadVault, unlockVaultMnemonic} from './src/walle
 import {loginWithGoogle, logoutParticle, particleAddressesToSession} from './src/wallet/particleAuth';
 import {clearLastCrash, readLastCrash} from './src/debug/crashReporter';
 import {AutoLockContext} from './src/settings/AutoLockContext';
+import {AuthActionsContext} from './src/settings/AuthActionsContext';
+import {BiometricContext} from './src/settings/BiometricContext';
 import {DEFAULT_AUTO_LOCK_MS, loadAutoLockMs, setAutoLockMs as persistAutoLockMs} from './src/settings/autoLockPrefs';
+import {getBiometricPassword, getBiometryLabel, isBiometricAvailable, isBiometricUnlockEnabled} from './src/wallet/biometricAuth';
+import {RecommendBiometricModal} from './src/wallet/RecommendBiometricModal';
 import {WelcomeScreen} from './src/onboarding/WelcomeScreen';
 import {CreateWalletFlow} from './src/onboarding/CreateWalletFlow';
 import {ImportWalletFlow} from './src/onboarding/ImportWalletFlow';
 import {LockedScreen} from './src/onboarding/LockedScreen';
+import {IntroSplash} from './src/onboarding/IntroSplash';
 import {TabIcon, type TabIconName} from './src/navigation/TabIcon';
 import {HomeScreen} from './src/screens/HomeScreen';
 import {SearchScreen} from './src/screens/SearchScreen';
@@ -60,6 +65,23 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
   const [authState, setAuthState] = useState<AuthState>('loading');
   const [googleLoading, setGoogleLoading] = useState(false);
   const [googleError, setGoogleError] = useState<string | null>(null);
+  const [biometricAvailable, setBiometricAvailable] = useState(false);
+  const [biometricEnabled, setBiometricEnabled] = useState(false);
+  const [biometryLabel, setBiometryLabel] = useState('biometric');
+  // Only ever shown once, right after finishOnboarding (Create or
+  // Import) — never on a returning user's unlock. Holds the just-typed
+  // password in memory only long enough for a same-screen "Enable" tap
+  // to use it; cleared as soon as the modal closes either way.
+  const [showRecommendBiometric, setShowRecommendBiometric] = useState(false);
+  const freshPasswordRef = useRef('');
+  // Determines the post-intro screen AND which intro to play at all —
+  // IntroSplash isn't mounted until this resolves (a fast AsyncStorage
+  // read, not the deliberate animation), so a returning user gets the
+  // short `quick` intro from the very first frame instead of always
+  // sitting through the full ~6s brand moment meant for first-time
+  // installs. Same reasoning as mango-mobile's own App.tsx.
+  const nextAuthStateAfterIntroRef = useRef<AuthState>('welcome');
+  const [vaultChecked, setVaultChecked] = useState(false);
 
   useEffect(() => {
     // Best-effort, deferred: warms the secp256k1/ed25519 precomputation
@@ -80,7 +102,13 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
     // taps "Continue with Google" pays that risk, and the seed-phrase
     // path (unaffected either way) is never put in the blast radius of
     // an SDK this app can't yet verify is safe to auto-run.
-    hasVault().then(exists => setAuthState(exists ? 'locked' : 'welcome'));
+    hasVault().then(exists => {
+      nextAuthStateAfterIntroRef.current = exists ? 'locked' : 'welcome';
+      setVaultChecked(true);
+    });
+    isBiometricAvailable().then(setBiometricAvailable);
+    isBiometricUnlockEnabled().then(setBiometricEnabled);
+    getBiometryLabel().then(setBiometryLabel);
     return () => clearTimeout(timer);
   }, []);
 
@@ -165,6 +193,10 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
     await createVault(mnemonic, password);
     setSession(accounts);
     setAuthState('unlocked');
+    if (biometricAvailable && !biometricEnabled) {
+      freshPasswordRef.current = password;
+      setShowRecommendBiometric(true);
+    }
   }
 
   async function unlock(password: string) {
@@ -181,12 +213,23 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
     setAuthState('unlocked');
   }
 
+  async function handleBiometricUnlock() {
+    const password = await getBiometricPassword();
+    if (!password) {
+      throw new Error('Biometric unlock was cancelled.');
+    }
+    await unlock(password);
+  }
+
+  function handleIntroDone() {
+    setAuthState(nextAuthStateAfterIntroRef.current);
+  }
+
   if (authState === 'loading') {
-    return (
-      <View style={[styles.loadingScreen, {backgroundColor: colors.bg}]}>
-        <ActivityIndicator color={colors.textMuted} />
-      </View>
-    );
+    if (!vaultChecked) {
+      return <View style={[styles.loadingScreen, {backgroundColor: colors.bg}]} />;
+    }
+    return <IntroSplash onDone={handleIntroDone} quick={nextAuthStateAfterIntroRef.current === 'locked'} />;
   }
   if (authState === 'welcome') {
     return (
@@ -206,9 +249,27 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
     return <ImportWalletFlow onFinish={finishOnboarding} onCancel={() => setAuthState('welcome')} />;
   }
   if (authState === 'locked') {
-    return <LockedScreen onUnlock={unlock} />;
+    return <LockedScreen onUnlock={unlock} biometricEnabled={biometricEnabled} biometryLabel={biometryLabel} onBiometricUnlock={handleBiometricUnlock} />;
   }
-  return <AutoLockContext.Provider value={{autoLockMs, setAutoLockMs: handleAutoLockChange}}>{children}</AutoLockContext.Provider>;
+  return (
+    <AutoLockContext.Provider value={{autoLockMs, setAutoLockMs: handleAutoLockChange}}>
+      <AuthActionsContext.Provider value={{logout: handleLock}}>
+        <BiometricContext.Provider value={{biometricAvailable, biometricEnabled, biometryLabel, setBiometricEnabled}}>
+          {children}
+          <RecommendBiometricModal
+            visible={showRecommendBiometric}
+            biometryLabel={biometryLabel}
+            password={freshPasswordRef.current}
+            onDone={enabled => {
+              setBiometricEnabled(enabled);
+              setShowRecommendBiometric(false);
+              freshPasswordRef.current = '';
+            }}
+          />
+        </BiometricContext.Provider>
+      </AuthActionsContext.Provider>
+    </AutoLockContext.Provider>
+  );
 }
 
 // Temporary diagnostic screen — see crashReporter.ts's own header. Shown

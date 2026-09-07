@@ -4,6 +4,17 @@
     <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
         <!-- Customize your theme here. -->
         <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
+        <!-- Cold-start background (shown by the OS before the JS root can
+             render anything) — was unset, so it fell back to AppCompat's
+             bare default instead of this app's own ground color.
+             Deliberately just a flat color, not a logo: the real branded
+             reveal is IntroSplash.tsx, which mounts as soon as the JS
+             root does and owns the whole "logo fades/scales in" moment.
+             A static logo here too would flash oddly (appear, vanish on
+             JS mount, then fade back in) instead of reading as one
+             continuous reveal — see mango-mobile's own AppTheme, which
+             makes the same call. -->
+        <item name="android:windowBackground">@color/splashBackground</item>
     </style>
 
 </resources>
