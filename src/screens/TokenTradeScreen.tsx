@@ -37,6 +37,7 @@ import {ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View} 
 import Svg, {Circle, Path} from 'react-native-svg';
 import {formatUnits, parseUnits} from 'viem';
 import {TokenChartPanel} from '../components/TokenChartPanel';
+import {ChevronLeftIcon} from '../components/icons';
 import {CHAIN_LABEL, NATIVE_SYMBOL, assetDecimalsForChain, currencyAddress, type ChainKey} from '../core/chainData';
 import {DEV_FEE_PCT} from '../core/fees';
 import {getRelayQuote, summarizeQuote, type QuoteSummary, type RelayQuote} from '../core/relayQuote';
@@ -119,9 +120,16 @@ function SettingsGlyph({color}: {color: string}) {
 export function TokenTradeScreen({
   token = DEFAULT_DEMO_TOKEN,
   onOpenSearch,
+  onBack,
 }: {
   token?: DemoToken;
   onOpenSearch?: () => void;
+  // Only passed when this screen was opened by picking a specific token
+  // (from Search) rather than tapping the Swap tab directly — the tab
+  // itself has nowhere to "go back" to (same as any other bottom-tab
+  // root), but a token opened from a search result reads as having been
+  // drilled into, and there was no way back to that search without this.
+  onBack?: () => void;
 }) {
   const {colors} = useTheme();
   const {session} = useSession();
@@ -571,6 +579,11 @@ export function TokenTradeScreen({
       </View>
 
       <View style={styles.chainRow}>
+        {onBack && (
+          <TouchableOpacity style={styles.backButton} onPress={onBack} hitSlop={8} activeOpacity={0.7}>
+            <ChevronLeftIcon color={colors.textPrimary} size={20} />
+          </TouchableOpacity>
+        )}
         <View style={styles.chainPill}>
           <Text style={styles.chainPillLabel}>Trading on </Text>
           <Text style={styles.chainPillValue}>{CHAIN_LABEL[token.chainKey]}</Text>
@@ -772,6 +785,7 @@ function makeStyles(colors: Colors) {
     portfolioLabel: {color: colors.textMuted, fontSize: 11, fontWeight: '600'},
     portfolioValue: {color: colors.textPrimary, fontSize: 15, fontWeight: '800'},
     chainRow: {flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8},
+    backButton: {width: 26, height: 26, alignItems: 'center', justifyContent: 'center'},
     chainPill: {
       flex: 1,
       flexDirection: 'row',
