@@ -13,6 +13,13 @@ type BiometricContextValue = {
   biometricEnabled: boolean;
   biometryLabel: string;
   setBiometricEnabled: (enabled: boolean) => void;
+  // Separate from biometricEnabled above: that gates the real vault
+  // password (seed-phrase sessions only — see biometricAuth.ts). A
+  // Google/Particle session has no local password to gate at all, so it
+  // gets a different mechanism, appLockAuth.ts's own marker-secret gate
+  // on APP ACCESS itself rather than on any secret worth protecting.
+  appLockEnabled: boolean;
+  setAppLockEnabled: (enabled: boolean) => void;
 };
 
 export const BiometricContext = createContext<BiometricContextValue | null>(null);

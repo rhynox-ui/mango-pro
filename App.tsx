@@ -33,11 +33,13 @@ import {AuthActionsContext} from './src/settings/AuthActionsContext';
 import {BiometricContext} from './src/settings/BiometricContext';
 import {DEFAULT_AUTO_LOCK_MS, loadAutoLockMs, setAutoLockMs as persistAutoLockMs} from './src/settings/autoLockPrefs';
 import {getBiometricPassword, getBiometryLabel, isBiometricAvailable, isBiometricUnlockEnabled} from './src/wallet/biometricAuth';
+import {isAppLockEnabled, verifyAppLock} from './src/wallet/appLockAuth';
 import {RecommendBiometricModal} from './src/wallet/RecommendBiometricModal';
 import {WelcomeScreen} from './src/onboarding/WelcomeScreen';
 import {CreateWalletFlow} from './src/onboarding/CreateWalletFlow';
 import {ImportWalletFlow} from './src/onboarding/ImportWalletFlow';
 import {LockedScreen} from './src/onboarding/LockedScreen';
+import {AppLockScreen} from './src/onboarding/AppLockScreen';
 import {IntroSplash} from './src/onboarding/IntroSplash';
 import {TabIcon, type TabIconName} from './src/navigation/TabIcon';
 import {HomeScreen} from './src/screens/HomeScreen';
@@ -51,7 +53,7 @@ import type {DiscoveryToken} from './src/core/discoveryFeed';
 
 type Tab = 'home' | 'search' | 'swap' | 'profile';
 type Screen = 'tabs' | 'settings' | 'history';
-type AuthState = 'loading' | 'welcome' | 'create' | 'import' | 'locked' | 'unlocked';
+type AuthState = 'loading' | 'welcome' | 'create' | 'import' | 'locked' | 'app-locked' | 'unlocked';
 
 const TABS: {key: Tab; label: string; icon: TabIconName}[] = [
   {key: 'home', label: 'Home', icon: 'home'},
@@ -69,6 +71,9 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
   const [biometricAvailable, setBiometricAvailable] = useState(false);
   const [biometricEnabled, setBiometricEnabled] = useState(false);
   const [biometryLabel, setBiometryLabel] = useState('biometric');
+  // Google/Particle-session app-lock — see appLockAuth.ts's own header
+  // for why this is a separate mechanism from biometricEnabled above.
+  const [appLockEnabled, setAppLockEnabled] = useState(false);
   // Only ever shown once, right after finishOnboarding (Create or
   // Import) — never on a returning user's unlock. Holds the just-typed
   // password in memory only long enough for a same-screen "Enable" tap
@@ -109,6 +114,7 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
     });
     isBiometricAvailable().then(setBiometricAvailable);
     isBiometricUnlockEnabled().then(setBiometricEnabled);
+    isAppLockEnabled().then(setAppLockEnabled);
     getBiometryLabel().then(setBiometryLabel);
     return () => clearTimeout(timer);
   }, []);
@@ -151,13 +157,24 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
   }
 
   const handleLock = useCallback(() => {
-    // A Google-login session has no local vault/password to unlock
-    // against — sending it to the password-prompt LockedScreen would
-    // strand the user there with nothing to type. Sign them out
-    // entirely instead; loginWithGoogle() on the next "Continue with
-    // Google" tap resolves fast if Particle's own SDK still has a live
-    // native session, same as any "silently re-authenticate" pattern.
     const wasGoogleSession = session?.authMethod === 'google';
+    // App-lock enabled: gate access with biometrics instead of a full
+    // sign-out. Nothing sensitive to clear either way — a Google
+    // session's own `session` value is just addresses (Particle's MPC
+    // network holds the real key, never this device, per
+    // particleAuth.ts's own header), so keeping it in memory across this
+    // gate costs nothing and avoids a real network re-auth on unlock.
+    if (wasGoogleSession && appLockEnabled) {
+      setAuthState('app-locked');
+      return;
+    }
+    // A Google-login session with app-lock OFF has no local
+    // vault/password to unlock against — sending it to the
+    // password-prompt LockedScreen would strand the user there with
+    // nothing to type. Sign them out entirely instead; loginWithGoogle()
+    // on the next "Continue with Google" tap resolves fast if Particle's
+    // own SDK still has a live native session, same as any
+    // "silently re-authenticate" pattern.
     setSession(null);
     if (wasGoogleSession) {
       logoutParticle();
@@ -165,7 +182,20 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
     } else {
       setAuthState('locked');
     }
-  }, [session, setSession]);
+  }, [session, setSession, appLockEnabled]);
+
+  /** Resolves true/false rather than throwing — AppLockScreen shows its own error copy on false, nothing to catch. */
+  async function handleAppLockUnlock(): Promise<boolean> {
+    const ok = await verifyAppLock();
+    if (ok) setAuthState('unlocked');
+    return ok;
+  }
+
+  function handleAppLockLogout() {
+    setSession(null);
+    logoutParticle();
+    setAuthState('welcome');
+  }
 
   // Same shape as mango-mobile's own App.tsx: record when the app left
   // 'active', and on returning to 'active' lock only if enough time
@@ -252,10 +282,13 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
   if (authState === 'locked') {
     return <LockedScreen onUnlock={unlock} biometricEnabled={biometricEnabled} biometryLabel={biometryLabel} onBiometricUnlock={handleBiometricUnlock} />;
   }
+  if (authState === 'app-locked') {
+    return <AppLockScreen onUnlock={handleAppLockUnlock} onLogout={handleAppLockLogout} biometryLabel={biometryLabel} />;
+  }
   return (
     <AutoLockContext.Provider value={{autoLockMs, setAutoLockMs: handleAutoLockChange}}>
       <AuthActionsContext.Provider value={{logout: handleLock}}>
-        <BiometricContext.Provider value={{biometricAvailable, biometricEnabled, biometryLabel, setBiometricEnabled}}>
+        <BiometricContext.Provider value={{biometricAvailable, biometricEnabled, biometryLabel, setBiometricEnabled, appLockEnabled, setAppLockEnabled}}>
           {children}
           <RecommendBiometricModal
             visible={showRecommendBiometric}
