@@ -97,8 +97,29 @@ export async function loginWithGoogle(): Promise<ParticleAddresses> {
     const message = err && typeof err === 'object' && 'message' in err ? String((err as {message: unknown}).message) : 'Google sign-in failed.';
     throw new Error(message);
   }
-  const [evmAddress, solanaAddress] = await Promise.all([evm.getAddress(), solana.getAddress()]);
+  const [evmAddress, solanaAddress] = await Promise.all([evm.getAddress(), solanaAddressWithRetry()]);
   return {evmAddress, solanaAddress};
+}
+
+/**
+ * A real device test surfaced solana.getAddress() coming back empty
+ * immediately after a fresh Google login, while evm.getAddress() (called
+ * in the same instant, via the same Promise.all above) resolved fine —
+ * Particle's MPC key-share provisioning for a second chain can plausibly
+ * lag a moment behind the OAuth callback resolving, since it's a real
+ * backend operation, not a value already sitting on-device. Retries a
+ * few times with a short delay rather than accepting a single immediate
+ * empty result at face value; still returns whatever the last attempt
+ * got (including empty) if it never resolves — never fabricates an
+ * address that doesn't come from Particle's own SDK.
+ */
+async function solanaAddressWithRetry(): Promise<string> {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const address = await solana.getAddress();
+    if (address) return address;
+    if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 750));
+  }
+  return '';
 }
 
 export async function logoutParticle(): Promise<void> {
