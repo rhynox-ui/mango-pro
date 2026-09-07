@@ -10,8 +10,9 @@
 // real rather than sitting as a placeholder for no reason.
 
 import {useState} from 'react';
-import {Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
+import {Alert, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {
+  AlertCircleIcon,
   BellIcon,
   BookOpenIcon,
   ChevronLeftIcon,
@@ -46,6 +47,7 @@ type Row = {
   Icon: IconComponent;
   value?: string;
   onPress?: () => void;
+  danger?: boolean;
 };
 
 export function SettingsScreen({onBack, onOpenDepositWithdraw}: {onBack: () => void; onOpenDepositWithdraw: () => void}) {
@@ -82,6 +84,17 @@ export function SettingsScreen({onBack, onOpenDepositWithdraw}: {onBack: () => v
     {key: 'docs', label: 'Documentation', Icon: BookOpenIcon},
     {key: 'x', label: 'X', Icon: XIcon, onPress: () => Linking.openURL(X_URL)},
     {key: 'telegram', label: 'Telegram', Icon: TelegramIcon, onPress: () => Linking.openURL(TELEGRAM_URL)},
+    {
+      key: 'delete-account',
+      label: 'Delete Account',
+      Icon: AlertCircleIcon,
+      danger: true,
+      onPress: () =>
+        Alert.alert(
+          'Delete Account',
+          "Mango Pro is non-custodial — there's no server-side account to delete. The real equivalent is wiping this wallet from your device, which isn't built as its own action yet (it needs a proper \"have you backed up your recovery phrase\" confirmation first, since it can't be undone). For now, uninstalling the app removes everything it stores locally.",
+        ),
+    },
   ];
 
   if (showSecurity) {
@@ -94,6 +107,15 @@ export function SettingsScreen({onBack, onOpenDepositWithdraw}: {onBack: () => v
     return <SolanaDevnetTestScreen onBack={() => setShowSolanaDevnetTest(false)} />;
   }
 
+  // Rows with no real destination yet still need to respond to a tap —
+  // silently doing nothing reads as broken, not as "not built yet". Same
+  // honest-disclosure rule this app already holds itself to elsewhere
+  // (App.tsx's own header: a destination going nowhere isn't honest;
+  // this is the equivalent for a settings row instead of a nav tab).
+  function comingSoon(label: string) {
+    Alert.alert('Coming soon', `${label} isn't built yet.`);
+  }
+
   return (
     <View style={styles.screen}>
       <TouchableOpacity onPress={onBack} hitSlop={10} style={styles.backButton}>
@@ -102,13 +124,13 @@ export function SettingsScreen({onBack, onOpenDepositWithdraw}: {onBack: () => v
       <Text style={styles.title}>Settings</Text>
       <ScrollView contentContainerStyle={styles.rows} showsVerticalScrollIndicator={false}>
         {ROWS.map((row, i) => (
-          <TouchableOpacity key={row.key} style={styles.row} activeOpacity={0.6} onPress={row.onPress}>
+          <TouchableOpacity key={row.key} style={styles.row} activeOpacity={0.6} onPress={row.onPress ?? (() => comingSoon(row.label))}>
             <View style={styles.rowIcon}>
-              <row.Icon color={colors.textPrimary} />
+              <row.Icon color={row.danger ? colors.danger : colors.textPrimary} />
             </View>
-            <Text style={styles.rowLabel}>{row.label}</Text>
+            <Text style={[styles.rowLabel, row.danger && {color: colors.danger}]}>{row.label}</Text>
             {row.value != null && <Text style={styles.rowValue}>{row.value}</Text>}
-            <ChevronRightIcon color={colors.textMuted} size={16} />
+            {!row.danger && <ChevronRightIcon color={colors.textMuted} size={16} />}
             {i < ROWS.length - 1 && <View style={styles.divider} />}
           </TouchableOpacity>
         ))}
