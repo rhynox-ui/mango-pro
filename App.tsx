@@ -21,12 +21,13 @@
 
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {SafeAreaProvider, SafeAreaView} from 'react-native-safe-area-context';
-import {ActivityIndicator, AppState, StatusBar, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
+import {ActivityIndicator, AppState, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {ThemeProvider, useTheme, type Colors} from './src/theme/ThemeContext';
 import {SessionProvider, useSession} from './src/wallet/SessionContext';
 import {deriveAccounts, warmupCrypto} from './src/wallet/keys';
 import {createVault, hasVault, loadVault, unlockVaultMnemonic} from './src/wallet/vault';
-import {initParticleAuth, loginWithGoogle, logoutParticle, particleAddressesToSession} from './src/wallet/particleAuth';
+import {loginWithGoogle, logoutParticle, particleAddressesToSession} from './src/wallet/particleAuth';
+import {clearLastCrash, readLastCrash} from './src/debug/crashReporter';
 import {AutoLockContext} from './src/settings/AutoLockContext';
 import {DEFAULT_AUTO_LOCK_MS, loadAutoLockMs, setAutoLockMs as persistAutoLockMs} from './src/settings/autoLockPrefs';
 import {WelcomeScreen} from './src/onboarding/WelcomeScreen';
@@ -65,11 +66,20 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
     // so it isn't paid synchronously at onboarding handoff (see keys.ts's
     // own comment on why that timing matters).
     const timer = setTimeout(warmupCrypto, 0);
-    // Also best-effort: sets up Particle's SDK so the first real tap of
-    // "Continue with Google" isn't also paying init's cost — a missing/
-    // invalid native config here is surfaced later, loudly, from
-    // loginWithGoogle itself, not swallowed.
-    initParticleAuth();
+    // Deliberately NOT calling initParticleAuth() here anymore. It used
+    // to run eagerly on every app launch as a warmup (so the first real
+    // tap of "Continue with Google" wouldn't also pay init's cost), but
+    // that means Particle's native SDK — never proven to actually
+    // initialize on a real device, only proven to compile — ran
+    // unconditionally for every user, including the ones who never touch
+    // Google login at all. If that native init fails hard (a JNI-level
+    // crash, not a JS exception initParticleAuth's own try/catch could
+    // ever catch), it takes down the whole app before anything renders.
+    // loginWithGoogle() already calls initParticleAuth() itself as its
+    // first line — deferring it there means only someone who actually
+    // taps "Continue with Google" pays that risk, and the seed-phrase
+    // path (unaffected either way) is never put in the blast radius of
+    // an SDK this app can't yet verify is safe to auto-run.
     hasVault().then(exists => setAuthState(exists ? 'locked' : 'welcome'));
     return () => clearTimeout(timer);
   }, []);
@@ -201,12 +211,53 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
   return <AutoLockContext.Provider value={{autoLockMs, setAutoLockMs: handleAutoLockChange}}>{children}</AutoLockContext.Provider>;
 }
 
+// Temporary diagnostic screen — see crashReporter.ts's own header. Shown
+// once, on the launch right after a JS-level crash, so it can be
+// screenshotted without needing a computer; "Dismiss" clears it and
+// continues into the normal app.
+function CrashReportScreen({crash, onDismiss}: {crash: {message: string; stack: string; isFatal: boolean; at: number}; onDismiss: () => void}): React.JSX.Element {
+  return (
+    <View style={crashStyles.root}>
+      <Text style={crashStyles.title}>App crashed last time</Text>
+      <ScrollView style={crashStyles.scroll}>
+        <Text selectable style={crashStyles.meta}>{new Date(crash.at).toLocaleString()} · {crash.isFatal ? 'fatal' : 'non-fatal'}</Text>
+        <Text selectable style={crashStyles.message}>{crash.message}</Text>
+        <Text selectable style={crashStyles.stack}>{crash.stack}</Text>
+      </ScrollView>
+      <TouchableOpacity onPress={onDismiss} style={crashStyles.dismissButton}>
+        <Text style={crashStyles.dismissLabel}>Dismiss</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+const crashStyles = StyleSheet.create({
+  root: {flex: 1, backgroundColor: '#1a0000', paddingTop: 48, paddingHorizontal: 16},
+  title: {color: '#ff6b6b', fontSize: 18, fontWeight: '700', marginBottom: 12},
+  scroll: {flex: 1},
+  meta: {color: '#ffffff', fontSize: 13, marginBottom: 8},
+  message: {color: '#ffdddd', fontSize: 14, fontWeight: '600', marginBottom: 8},
+  stack: {color: '#ffbbbb', fontSize: 11, fontFamily: 'monospace'},
+  dismissButton: {marginVertical: 16, paddingVertical: 14, alignItems: 'center', backgroundColor: '#330000', borderRadius: 8},
+  dismissLabel: {color: '#ffffff', fontWeight: '700'},
+});
+
 function AppInner(): React.JSX.Element {
   const {colors, mode} = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [tab, setTab] = useState<Tab>('home');
   const [screen, setScreen] = useState<Screen>('tabs');
   const [selectedToken, setSelectedToken] = useState<DemoToken | undefined>(undefined);
+  const [lastCrash, setLastCrash] = useState<{message: string; stack: string; isFatal: boolean; at: number} | null>(null);
+
+  useEffect(() => {
+    readLastCrash().then(setLastCrash);
+  }, []);
+
+  function dismissCrashReport() {
+    clearLastCrash();
+    setLastCrash(null);
+  }
 
   const showingSettings = screen === 'settings';
   const showingHistory = screen === 'history';
@@ -225,6 +276,10 @@ function AppInner(): React.JSX.Element {
   function selectSearchResult(result: TokenSearchResult) {
     setSelectedToken({chainKey: result.chainKey, address: result.tokenAddress, symbol: result.symbol});
     setTab('swap');
+  }
+
+  if (lastCrash) {
+    return <CrashReportScreen crash={lastCrash} onDismiss={dismissCrashReport} />;
   }
 
   return (
