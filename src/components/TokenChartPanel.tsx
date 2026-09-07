@@ -39,7 +39,7 @@ function fmtCompact(n: number): string {
 }
 
 export function TokenChartPanel({chainKey, tokenAddress}: {chainKey: ChainKey; tokenAddress: string | null}) {
-  const {colors, mode} = useTheme();
+  const {colors} = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const [pair, setPair] = useState<{chainId: string; pairAddress: string} | null>(null);
@@ -83,7 +83,11 @@ export function TokenChartPanel({chainKey, tokenAddress}: {chainKey: ChainKey; t
     };
   }, [chainKey, tokenAddress]);
 
-  const embedUrl = pair ? dexScreenerEmbedUrl({chainId: pair.chainId, pairAddress: pair.pairAddress, theme: mode}) : null;
+  // Always dark, regardless of the app's own light/dark mode — a
+  // deliberate choice, not a bug: candlestick charts read better against
+  // a dark ground, and keeping the chart panel dark independent of the
+  // app theme is standard for trading UIs.
+  const embedUrl = pair ? dexScreenerEmbedUrl({chainId: pair.chainId, pairAddress: pair.pairAddress, theme: 'dark'}) : null;
   const holders = security?.holders ?? null;
   const holderCount = security?.holderCount ?? null;
   const hasHolders = (holders?.length ?? 0) > 0;
