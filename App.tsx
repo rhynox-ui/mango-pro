@@ -26,7 +26,7 @@ import {ThemeProvider, useTheme, type Colors} from './src/theme/ThemeContext';
 import {SessionProvider, useSession} from './src/wallet/SessionContext';
 import {deriveAccounts, warmupCrypto} from './src/wallet/keys';
 import {createVault, hasVault, loadVault, unlockVaultMnemonic} from './src/wallet/vault';
-import {loginWithGoogle, logoutParticle, particleAddressesToSession} from './src/wallet/particleAuth';
+import {loginWithGoogle, logoutParticle, particleAddressesToSession, tryRestoreParticleSession} from './src/wallet/particleAuth';
 import {clearLastCrash, readLastCrash} from './src/debug/crashReporter';
 import {AutoLockContext} from './src/settings/AutoLockContext';
 import {AuthActionsContext} from './src/settings/AuthActionsContext';
@@ -94,22 +94,36 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
     // so it isn't paid synchronously at onboarding handoff (see keys.ts's
     // own comment on why that timing matters).
     const timer = setTimeout(warmupCrypto, 0);
-    // Deliberately NOT calling initParticleAuth() here anymore. It used
-    // to run eagerly on every app launch as a warmup (so the first real
-    // tap of "Continue with Google" wouldn't also pay init's cost), but
-    // that means Particle's native SDK — never proven to actually
-    // initialize on a real device, only proven to compile — ran
-    // unconditionally for every user, including the ones who never touch
-    // Google login at all. If that native init fails hard (a JNI-level
-    // crash, not a JS exception initParticleAuth's own try/catch could
-    // ever catch), it takes down the whole app before anything renders.
-    // loginWithGoogle() already calls initParticleAuth() itself as its
-    // first line — deferring it there means only someone who actually
-    // taps "Continue with Google" pays that risk, and the seed-phrase
-    // path (unaffected either way) is never put in the blast radius of
-    // an SDK this app can't yet verify is safe to auto-run.
-    hasVault().then(exists => {
-      nextAuthStateAfterIntroRef.current = exists ? 'locked' : 'welcome';
+    // Deliberately NOT calling initParticleAuth() unconditionally here.
+    // It used to run eagerly on every app launch as a warmup (so the
+    // first real tap of "Continue with Google" wouldn't also pay init's
+    // cost), but that means Particle's native SDK — never proven to
+    // actually initialize on a real device, only proven to compile —
+    // ran unconditionally for every user, including the ones who never
+    // touch Google login at all. If that native init fails hard (a
+    // JNI-level crash, not a JS exception initParticleAuth's own
+    // try/catch could ever catch), it takes down the whole app before
+    // anything renders. tryRestoreParticleSession() below only touches
+    // Particle's SDK at all for someone who has actually used Google
+    // login before (its own header explains the gate) — that's the same
+    // safety property this comment used to describe, just no longer
+    // "never on cold start", since that was the real bug behind
+    // "Google login doesn't persist, kicks me back to Welcome":
+    // hasVault() alone (a LOCAL seed-phrase vault) never had a way to
+    // know a Google session existed at all.
+    hasVault().then(async exists => {
+      if (exists) {
+        nextAuthStateAfterIntroRef.current = 'locked';
+        setVaultChecked(true);
+        return;
+      }
+      const restored = await tryRestoreParticleSession();
+      if (restored) {
+        setSession(particleAddressesToSession(restored));
+        nextAuthStateAfterIntroRef.current = 'unlocked';
+      } else {
+        nextAuthStateAfterIntroRef.current = 'welcome';
+      }
       setVaultChecked(true);
     });
     isBiometricAvailable().then(setBiometricAvailable);
@@ -117,7 +131,10 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
     isAppLockEnabled().then(setAppLockEnabled);
     getBiometryLabel().then(setBiometryLabel);
     return () => clearTimeout(timer);
-  }, []);
+    // setSession is a stable context setter (SessionContext's own
+    // useState setter) — listed to satisfy the lint rule, not because
+    // this mount-only effect should ever actually re-run on it changing.
+  }, [setSession]);
 
   async function handleGoogleLogin() {
     setGoogleError(null);
@@ -260,7 +277,11 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
     if (!vaultChecked) {
       return <View style={[styles.loadingScreen, {backgroundColor: colors.bg}]} />;
     }
-    return <IntroSplash onDone={handleIntroDone} quick={nextAuthStateAfterIntroRef.current === 'locked'} />;
+    // Quick intro for any returning user — a seed session going to
+    // LockedScreen, or a Google session silently restored straight to
+    // 'unlocked' by tryRestoreParticleSession() above. Only a genuine
+    // first install (still 'welcome') gets the full ~6s brand moment.
+    return <IntroSplash onDone={handleIntroDone} quick={nextAuthStateAfterIntroRef.current !== 'welcome'} />;
   }
   if (authState === 'welcome') {
     return (

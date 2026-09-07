@@ -46,8 +46,9 @@
 // Particle's own configuration error — a real, loud failure, not a
 // silent fake success.
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {init as initParticleBase, Env, LoginType, SupportAuthType} from '@particle-network/rn-base';
-import {init as initAuthCore, connect, disconnect, evm, solana} from '@particle-network/rn-auth-core';
+import {init as initAuthCore, connect, disconnect, evm, isConnected, solana} from '@particle-network/rn-auth-core';
 import {Ethereum} from '@particle-network/chains';
 import type {DerivedAccounts} from './keys';
 
@@ -98,7 +99,66 @@ export async function loginWithGoogle(): Promise<ParticleAddresses> {
     throw new Error(message);
   }
   const [evmAddress, solanaAddress] = await Promise.all([evm.getAddress(), solanaAddressWithRetry()]);
+  // Fire-and-forget — this is the only thing that lets a cold start ever
+  // know a Google session existed at all (see tryRestoreParticleSession's
+  // own header for the real bug this closes). Never awaited: losing this
+  // write in the exact instant the app is killed right after login is a
+  // narrow edge case worth accepting rather than delaying a successful
+  // login on a storage write.
+  markGoogleSessionSeen();
   return {evmAddress, solanaAddress};
+}
+
+const GOOGLE_SESSION_SEEN_KEY = 'mango_pro_google_session_seen_v1';
+
+function markGoogleSessionSeen(): void {
+  AsyncStorage.setItem(GOOGLE_SESSION_SEEN_KEY, '1').catch(() => {});
+}
+
+async function hasGoogleSessionEverExisted(): Promise<boolean> {
+  try {
+    return (await AsyncStorage.getItem(GOOGLE_SESSION_SEEN_KEY)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The real fix for "Google login doesn't persist — kicks me back to
+ * Welcome": App.tsx's own cold-start check only ever asked hasVault()
+ * (a LOCAL seed-phrase vault) whether to skip Welcome — a Google
+ * session never creates one, so a returning Google user was shown
+ * Welcome again every time, regardless of a live Particle session
+ * underneath. isConnected() is Particle's own real session check (a
+ * genuine rn-auth-core export, not guessed), so this restores the same
+ * addresses loginWithGoogle() would have, without re-running the OAuth
+ * flow.
+ *
+ * Gated on hasGoogleSessionEverExisted() FIRST, before touching
+ * Particle's SDK at all — this preserves the exact safety property
+ * initParticleAuth()'s own header describes needing (App.tsx
+ * deliberately stopped auto-running Particle's native SDK for every
+ * user after it caused a real crash; only someone who has actually
+ * used Google login before should ever pay that native-init cost
+ * again). A user who has never touched Google login still never
+ * triggers Particle's native module on cold start, same guarantee as
+ * before this fix — this only restores a session for someone who
+ * already proved that SDK initializes fine on their device once
+ * already.
+ */
+export async function tryRestoreParticleSession(): Promise<ParticleAddresses | null> {
+  const everLoggedIn = await hasGoogleSessionEverExisted();
+  if (!everLoggedIn) return null;
+  initParticleAuth();
+  try {
+    const connected = await isConnected();
+    if (!connected) return null;
+    const [evmAddress, solanaAddress] = await Promise.all([evm.getAddress(), solanaAddressWithRetry()]);
+    if (!evmAddress) return null;
+    return {evmAddress, solanaAddress};
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -123,6 +183,12 @@ async function solanaAddressWithRetry(): Promise<string> {
 }
 
 export async function logoutParticle(): Promise<void> {
+  // Cleared BEFORE the disconnect() call, not after — an explicit
+  // logout should mean the next cold start shows Welcome, same as
+  // before tryRestoreParticleSession() existed; if disconnect() itself
+  // fails below, this app is still done trusting a session the user
+  // just told it to end, not silently restoring it again next launch.
+  AsyncStorage.removeItem(GOOGLE_SESSION_SEEN_KEY).catch(() => {});
   try {
     await disconnect();
   } catch {
