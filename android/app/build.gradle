@@ -72,6 +72,59 @@ def enableProguardInReleaseBuilds = false
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+// Real release signing — see keystore.properties.example for the
+// template. android/keystore.properties is gitignored (a production
+// signing key must never live in git history).
+//
+// FAILS CLOSED when it's missing. Ported from mango-mobile's own
+// build.gradle after an audit flagged this exact repo's release
+// buildType as always signingConfig signingConfigs.debug — the
+// debug.keystore checked into this repo, whose password is the
+// public, documented 'android'. An APK signed with it is an APK
+// anyone can produce an "update" for, and Android's own update rule
+// is exactly signature matching, so a debug-signed release build is
+// one a stranger can push a replacement over. Silent is the dangerous
+// part: the build succeeds, the APK installs and runs, and nothing
+// anywhere says which key signed it.
+//
+// Debug-signed release builds are still genuinely useful (the
+// existing android-debug-apk.yml workflow produces a standalone,
+// Hermes-bundled sideload APK for real-device testing — there's no
+// real release keystore secret configured for this repo yet), so this
+// doesn't remove them. It makes them explicit: pass
+// -PALLOW_DEBUG_SIGNED_RELEASE=true and the build proceeds with a
+// loud warning.
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+def keystoreProperties = new Properties()
+def hasReleaseKeystore = keystorePropertiesFile.exists()
+if (hasReleaseKeystore) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+def allowDebugSignedRelease = project.hasProperty('ALLOW_DEBUG_SIGNED_RELEASE') &&
+    project.property('ALLOW_DEBUG_SIGNED_RELEASE').toString().toBoolean()
+
+// Evaluated on the release task itself rather than at configuration
+// time, so a plain `./gradlew assembleDebug` or an IDE sync on a
+// checkout with no keystore still works untouched — only an actual
+// release build is gated.
+def assertReleaseSigningAllowed = {
+    if (!hasReleaseKeystore && !allowDebugSignedRelease) {
+        throw new GradleException(
+            "Refusing to build a release variant with no android/keystore.properties.\n" +
+            "It would be signed with the checked-in debug keystore (public password: 'android'),\n" +
+            "which lets anyone publish an update over this app.\n\n" +
+            "  To ship for real: create android/keystore.properties from keystore.properties.example.\n" +
+            "  For a throwaway test APK: ./gradlew assembleRelease -PALLOW_DEBUG_SIGNED_RELEASE=true"
+        )
+    }
+    if (!hasReleaseKeystore) {
+        logger.warn("")
+        logger.warn("*** WARNING: release variant is being signed with the DEBUG keystore. ***")
+        logger.warn("*** Testing only. Do not distribute this build to users.             ***")
+        logger.warn("")
+    }
+}
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
@@ -105,18 +158,33 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        if (hasReleaseKeystore) {
+            release {
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            signingConfig hasReleaseKeystore ? signingConfigs.release : signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }
+    }
+}
+
+// See assertReleaseSigningAllowed above. Matched on the task name so it
+// covers assembleRelease and bundleRelease alike (and the per-ABI split
+// variants the RN plugin generates), without needing a hardcoded list.
+tasks.configureEach { task ->
+    if (task.name ==~ /^(assemble|bundle|install|package).*Release$/) {
+        task.doFirst { assertReleaseSigningAllowed() }
     }
 }
 

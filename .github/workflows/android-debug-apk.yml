@@ -14,10 +14,15 @@ name: Android release APK
 # debug APK expects to fetch JS from a live Metro dev server rather than
 # carrying it, and there's no dev machine on the same network as a
 # tester's phone for it to reach. `release` bundles the JS into the APK
-# itself and is signed with the debug keystore (android/app/build.gradle's
-# own signingConfigs.debug, already wired into buildTypes.release) — a
-# real production release would need its own signing config, but that's
-# out of scope for a sideloaded test build.
+# itself. android/app/build.gradle now fails closed on a release build
+# with no android/keystore.properties (a security audit flagged the old
+# unconditional signingConfigs.debug fallback -- debug.keystore's
+# password is the public, documented 'android', so anyone could sign a
+# replacement "update"), so this sideloaded test build passes the
+# explicit -PALLOW_DEBUG_SIGNED_RELEASE=true opt-in below. There is no
+# real release keystore secret configured for this repo yet -- a real
+# production release needs one, but that's out of scope for a
+# sideloaded test build.
 on:
   push:
     branches: [main]
@@ -60,7 +65,10 @@ jobs:
 
       - name: Build release APK (bundles JS — no Metro needed on-device)
         working-directory: android
-        run: ./gradlew assembleRelease --no-daemon
+        # -PALLOW_DEBUG_SIGNED_RELEASE=true is the explicit opt-in
+        # build.gradle now requires for a debug-signed release build —
+        # see the file header comment above.
+        run: ./gradlew assembleRelease --no-daemon -PALLOW_DEBUG_SIGNED_RELEASE=true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
