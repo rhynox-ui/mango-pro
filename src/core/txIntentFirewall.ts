@@ -40,6 +40,17 @@
 //     the classic infinite-approval drain: the sequence looks like a
 //     normal swap, and the router keeps the right to take the rest of
 //     the balance afterwards.
+//   - Direct transfers. No item may call transfer()/transferFrom() as
+//     its own top-level selector, on any token, full stop. A real swap
+//     route never needs the wallet to sign one directly — that call
+//     only ever happens INSIDE a router's own contract execution, using
+//     an allowance the approve step above already granted. Without this,
+//     a hostile item shaped like `{to: anyToken, data: transfer(attacker,
+//     wholeBalance)}` trips neither the native-value bound (the amount
+//     lives in calldata, not the tx's own `value`) nor the approve
+//     branch (it isn't an approve at all) — so it would sign with no
+//     amount bound whatsoever, not "more than this trade needs" but the
+//     entire balance of whatever token `to` names.
 //
 // Together those bound the worst case to "the trade the user asked for
 // went to the wrong place" instead of "the wallet was emptied". Calldata
@@ -72,6 +83,37 @@
 // omits one. They are enforced when present. That asymmetry is
 // intentional and is why the bounds above are written to hold on their
 // own, without any help from `details`.
+
+// Real, confirmed critical gap this file had (found verifying an
+// uploaded audit's MANGO-C01 claim against this exact function): the
+// loop below only ever recognized approve()/Permit2-approve() as a
+// selector worth decoding. Any OTHER selector — including a raw
+// transfer(address,uint256) or transferFrom(address,address,uint256)
+// aimed straight at a token contract — passed through completely
+// unchecked, since it trips neither the native-value bound (all value
+// is in calldata, not the tx's own `value` field) nor the approve
+// branch. A single hostile extra item shaped like
+// `{to: someToken, data: transfer(attacker, entireBalance)}` would
+// have been signed and broadcast with NO bound on the amount at all —
+// not "more than this trade needs" but literally the whole balance of
+// whatever token `to` names, unrelated to the trade being reviewed.
+// This directly contradicted this file's own header claim ("bound the
+// worst case to... never 'the wallet was emptied'").
+//
+// Fix: block both selectors outright, for every item, regardless of
+// which token they target. This needs no new calldata-decoding
+// capability and no per-router allowlist (still not attempted, same as
+// before) — a real swap route never needs the WALLET to sign a
+// standalone transfer/transferFrom as one of its own transaction
+// items. A router's swap function calls transferFrom itself, as part
+// of ITS OWN contract execution, using the allowance the approve step
+// already granted; that internal call never appears as a separate
+// {to, data} item for the wallet to sign. So a top-level item whose
+// selector IS one of these two is never a legitimate swap step in any
+// route shape this app relies on — it's only ever an unrelated direct
+// transfer smuggled into the batch.
+const ERC20_TRANSFER_SELECTOR = '0xa9059cbb';
+const ERC20_TRANSFER_FROM_SELECTOR = '0x23b872dd';
 
 const ERC20_APPROVE_SELECTOR = '0x095ea7b3';
 // Permit2's approve(address token, address spender, uint160 amount,
@@ -385,6 +427,12 @@ export function assertTransactionItemsMatchIntent(items: RelayTransactionItem[] 
     totalNativeValue += value;
 
     const selector = selectorOf(data.data);
+    if (selector === ERC20_TRANSFER_SELECTOR || selector === ERC20_TRANSFER_FROM_SELECTOR) {
+      fail(
+        `The routing service asked you to sign a direct token transfer (to ${to}) instead of a swap step. ` +
+          'A real route never needs your wallet to call transfer/transferFrom itself — only a contract you already approved does that internally.',
+      );
+    }
     if (selector === ERC20_APPROVE_SELECTOR || selector === PERMIT2_APPROVE_SELECTOR) {
       // ERC-20: approve(spender, amount)                  -> spender word 0, amount word 1.
       // Permit2: approve(token, spender, amount, expiry)  -> spender word 1, amount word 2.

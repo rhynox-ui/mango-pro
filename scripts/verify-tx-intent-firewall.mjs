@@ -78,6 +78,8 @@ const word = value => BigInt(value).toString(16).padStart(64, '0');
 const addrWord = address => address.slice(2).toLowerCase().padStart(64, '0');
 const erc20Approve = (spender, amount) => `0x095ea7b3${addrWord(spender)}${word(amount)}`;
 const permit2Approve = (token, spender, amount) => `0x87517c45${addrWord(token)}${addrWord(spender)}${word(amount)}${word(0)}`;
+const erc20Transfer = (to, amount) => `0xa9059cbb${addrWord(to)}${word(amount)}`;
+const erc20TransferFrom = (from, to, amount) => `0x23b872dd${addrWord(from)}${addrWord(to)}${word(amount)}`;
 
 const swapItem = (overrides = {}) => ({
   data: {chainId: 8453, to: ROUTER, data: '0xdeadbeef', value: ONE_ETH.toString(), ...overrides},
@@ -153,6 +155,36 @@ check('BLOCKS approving a spender no transaction in the route calls', () => {
         tokenIntent,
       ),
     'no transaction in this route calls that address',
+  );
+});
+check('BLOCKS a raw transfer() smuggled into the route (whole-balance drain, no approval needed)', () => {
+  // Real gap this covers (confirmed against an uploaded audit's
+  // MANGO-C01 claim): before the fix, this item tripped neither the
+  // native-value bound (0 native moves) nor the approve branch (wrong
+  // selector) and would have signed with NO bound on the amount at
+  // all — not "more than this trade needs", the entire balance.
+  blocks(
+    () =>
+      assertTransactionItemsMatchIntent(
+        [{data: {chainId: 8453, to: USDC_BASE, data: erc20Transfer(ATTACKER, 999_000_000n), value: '0'}}],
+        tokenIntent,
+      ),
+    'direct token transfer',
+  );
+});
+check('BLOCKS a raw transferFrom() smuggled into the route, on ANY token (not just the origin one)', () => {
+  // Deliberately targets a token that ISN'T tokenIntent's origin
+  // currency — this selector is blocked unconditionally, not just when
+  // it targets the token being traded, since an unrelated token the
+  // user holds needs the same protection.
+  const OTHER_TOKEN = '0x4444444444444444444444444444444444444444';
+  blocks(
+    () =>
+      assertTransactionItemsMatchIntent(
+        [{data: {chainId: 8453, to: OTHER_TOKEN, data: erc20TransferFrom(USER, ATTACKER, 5_000_000n), value: '0'}}],
+        tokenIntent,
+      ),
+    'direct token transfer',
   );
 });
 check('BLOCKS an unlimited approval to a stranger (the classic drain)', () => {
