@@ -99,9 +99,42 @@ export async function loadCachedNewsArticles(): Promise<NewsArticle[]> {
 
 const parser = new XMLParser({ignoreAttributes: false, attributeNamePrefix: '@_'});
 
+// Some feeds (Decrypt's confirmed) double-encode entities in their
+// titles/descriptions — fast-xml-parser only unwraps the outer XML
+// layer, so what's left after that is still literal HTML-entity text
+// (e.g. "Biden&#39;s") that needs a second decode pass. Covers numeric
+// entities plus the small set of named ones actually seen in RSS
+// content — not a full HTML-entity table, since pulling one in for
+// this is overkill under Hermes.
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+  mdash: '—',
+  ndash: '–',
+  hellip: '…',
+  lsquo: '‘',
+  rsquo: '’',
+  ldquo: '“',
+  rdquo: '”',
+};
+
+function decodeHtmlEntities(input: string): string {
+  return input.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (match, entity: string) => {
+    if (entity[0] === '#') {
+      const code = entity[1] === 'x' || entity[1] === 'X' ? parseInt(entity.slice(2), 16) : parseInt(entity.slice(1), 10);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : match;
+    }
+    return NAMED_ENTITIES[entity] ?? match;
+  });
+}
+
 function stripHtml(input: string | undefined | null): string | null {
   if (!input) return null;
-  const text = input.replace(/<[^>]*>/g, '').trim();
+  const text = decodeHtmlEntities(input.replace(/<[^>]*>/g, '')).trim();
   return text.length > 0 ? text : null;
 }
 
@@ -127,17 +160,20 @@ async function fetchOneSource(source: NewsSource): Promise<NewsArticle[]> {
   return list.map((item, i): NewsArticle => {
     const link = typeof item?.link === 'string' ? item.link : '';
     const mediaContent = item?.['media:content'];
+    const mediaThumbnail = item?.['media:thumbnail'];
     const enclosure = item?.enclosure;
     const imageUrl =
       firstImageFromHtml(item?.['content:encoded']) ??
       firstImageFromHtml(item?.description) ??
       (typeof mediaContent?.['@_url'] === 'string' ? mediaContent['@_url'] : null) ??
+      (typeof mediaThumbnail?.['@_url'] === 'string' ? mediaThumbnail['@_url'] : null) ??
       (typeof enclosure?.['@_url'] === 'string' && typeof enclosure?.['@_type'] === 'string' && enclosure['@_type'].startsWith('image/')
         ? enclosure['@_url']
         : null);
+    const rawTitle = typeof item?.title === 'string' ? item.title.trim() : '';
     return {
-      id: link || `${source.id}-${i}-${String(item?.title ?? '')}`,
-      title: typeof item?.title === 'string' ? item.title.trim() : 'Untitled',
+      id: link || `${source.id}-${i}-${rawTitle}`,
+      title: rawTitle ? decodeHtmlEntities(rawTitle) : 'Untitled',
       link,
       source: source.name,
       publishedAt: parsePubDate(item?.pubDate),
