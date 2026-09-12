@@ -31,6 +31,7 @@ import {sendUsdc, isValidRecipientAddress} from '../wallet/sendUsdc';
 import {filterTxHistoryForAccount, getTxHistory, subscribeTxHistory, type TxHistoryEntry} from '../wallet/txHistory';
 import {getAvatarUri, getBio, getUsername, isValidUsername, setAvatarUri as saveAvatarUri, setBio as saveBio, setUsername as saveUsername} from '../wallet/profileLocal';
 import {computePortfolioChange, filterHistoryByRange, getPortfolioHistory, recordPortfolioSnapshot, type PortfolioSnapshot} from '../wallet/portfolioHistory';
+import {ReferralModal} from '../referral/ReferralModal';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {useSession} from '../wallet/SessionContext';
 
@@ -137,6 +138,7 @@ export function ProfileScreen({
   // the Deposit modal, so nothing is actually hidden, just not repeated
   // where a username now does that job.
   const [username, setUsernameValue] = useState('');
+  const [showReferral, setShowReferral] = useState(false);
   const [usernameEditing, setUsernameEditing] = useState(false);
   const [usernameDraft, setUsernameDraft] = useState('');
   const [usernameError, setUsernameError] = useState('');
@@ -369,7 +371,7 @@ export function ProfileScreen({
           </TouchableOpacity>
         </View>
         <View style={styles.identityActions}>
-          <TouchableOpacity style={styles.shareButton} hitSlop={6}>
+          <TouchableOpacity style={styles.shareButton} hitSlop={6} onPress={() => setShowReferral(true)}>
             <UploadIcon color={colors.textPrimary} size={15} />
           </TouchableOpacity>
         </View>
@@ -787,6 +789,15 @@ export function ProfileScreen({
           </View>
         </View>
       </Modal>
+
+      {session && (
+        <ReferralModal
+          visible={showReferral}
+          onClose={() => setShowReferral(false)}
+          address={session.evm.address}
+          privateKeyHex={session.evm.privateKey}
+        />
+      )}
     </ScrollView>
   );
 }
