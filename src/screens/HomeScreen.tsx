@@ -30,7 +30,7 @@
 // real too now (src/wallet/watchlist.ts), not a dead second tab.
 
 import {useMemo, useEffect, useState} from 'react';
-import {ActivityIndicator, FlatList, Image, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
+import {ActivityIndicator, FlatList, Image, Keyboard, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import {FilterIcon, GearIcon, StarIcon} from '../components/icons';
 import {fetchGraduatedTokens, fetchBondingTokens, fetchTrendingTokens, type DiscoveryToken} from '../core/discoveryFeed';
 import {CHAIN_LABEL, type ChainKey} from '../core/chainData';
@@ -99,6 +99,44 @@ function sortTokens(tokens: DiscoveryToken[], sort: SortKey): DiscoveryToken[] {
   return sorted;
 }
 
+// Real client-side filter over marketCapUsd — same already-fetched field
+// sortTokens's own mcap options use, not a new source. A token with no
+// real marketCapUsd (pump.fun's own listing sometimes omits it) is
+// excluded rather than guessed into a bucket, same "never fabricate"
+// rule as everywhere else this app touches real-but-incomplete data.
+const MCAP_PRESETS: {label: string; min: number | null; max: number | null}[] = [
+  {label: 'Under $100K', min: null, max: 100_000},
+  {label: '$100K–$1M', min: 100_000, max: 1_000_000},
+  {label: '$1M–$10M', min: 1_000_000, max: 10_000_000},
+  {label: '$10M–$100M', min: 10_000_000, max: 100_000_000},
+  {label: '$100M–$1B', min: 100_000_000, max: 1_000_000_000},
+  {label: 'Over $1B', min: 1_000_000_000, max: null},
+];
+
+type McapRange = {min: number | null; max: number | null};
+
+/** Accepts plain numbers or a k/m/b suffix (e.g. "1.5m" -> 1_500_000) — the same compact shape formatMarketCap already displays, so typing back what you see just works. Empty/unparsable input is null, never a fabricated 0. */
+function parseCompactUsd(input: string): number | null {
+  const trimmed = input.trim().toLowerCase();
+  if (!trimmed) return null;
+  const match = trimmed.match(/^\$?([\d.]+)\s*([kmb])?$/);
+  if (!match) return null;
+  const base = Number(match[1]);
+  if (!Number.isFinite(base)) return null;
+  const multiplier = match[2] === 'k' ? 1_000 : match[2] === 'm' ? 1_000_000 : match[2] === 'b' ? 1_000_000_000 : 1;
+  return base * multiplier;
+}
+
+function filterByMcap(tokens: DiscoveryToken[], range: McapRange | null): DiscoveryToken[] {
+  if (!range) return tokens;
+  return tokens.filter(t => {
+    if (t.marketCapUsd == null) return false;
+    if (range.min != null && t.marketCapUsd < range.min) return false;
+    if (range.max != null && t.marketCapUsd > range.max) return false;
+    return true;
+  });
+}
+
 function formatPrice(n: number | null): string {
   if (n == null) return '—';
   if (n >= 1) return `$${n.toFixed(2)}`;
@@ -146,14 +184,29 @@ export function HomeScreen({
   // tokens" available today, with true platform filtering tracked
   // separately for once more real launchpad sources exist.
   const [chainFilter, setChainFilter] = useState<ChainKey | 'all'>('all');
+  // Applied range — null means no filter. Kept separate from the draft
+  // min/max text fields below so a half-typed number never silently
+  // filters the list before the user actually applies it.
+  const [mcapFilter, setMcapFilter] = useState<McapRange | null>(null);
+  const [mcapMinDraft, setMcapMinDraft] = useState('');
+  const [mcapMaxDraft, setMcapMaxDraft] = useState('');
+  const [mcapError, setMcapError] = useState('');
 
   useEffect(() => subscribeWatchlist(setWatchlist), []);
 
   // Switching discovery filter can move to a chain the previous
   // selection doesn't cover (e.g. Graduated/Bonding is Solana-only) —
-  // reset rather than silently show an empty list.
+  // reset rather than silently show an empty list. Market cap is a
+  // real range regardless of source, but a filter this narrow silently
+  // carried across an unrelated tab switch is still surprising — reset
+  // it the same way for the same "never silently hide everything"
+  // reason.
   useEffect(() => {
     setChainFilter('all');
+    setMcapFilter(null);
+    setMcapMinDraft('');
+    setMcapMaxDraft('');
+    setMcapError('');
   }, [filter]);
 
   useEffect(() => {
@@ -199,7 +252,8 @@ export function HomeScreen({
     () => (chainFilter === 'all' ? unsortedListData : unsortedListData.filter(t => t.chainKey === chainFilter)),
     [unsortedListData, chainFilter],
   );
-  const listData = useMemo(() => sortTokens(chainFilteredData, sort), [chainFilteredData, sort]);
+  const mcapFilteredData = useMemo(() => filterByMcap(chainFilteredData, mcapFilter), [chainFilteredData, mcapFilter]);
+  const listData = useMemo(() => sortTokens(mcapFilteredData, sort), [mcapFilteredData, sort]);
   const showingLiveList = tab === 'tokens' && filter !== 'Most held';
   // Real bug this closes: TokenRow used to freeze its own "starred" look
   // in local state the moment it mounted (`useState(isWatchlisted(token))`),
@@ -257,10 +311,10 @@ export function HomeScreen({
           {tab === 'tokens' && (
             <View style={styles.filterRow}>
               <TouchableOpacity
-                style={[styles.filterIconButton, sort !== 'default' && styles.filterIconButtonActive]}
+                style={[styles.filterIconButton, (sort !== 'default' || mcapFilter) && styles.filterIconButtonActive]}
                 activeOpacity={0.7}
                 onPress={() => setSortMenuOpen(true)}>
-                <FilterIcon color={sort !== 'default' ? colors.ctaText : colors.textSecondary} size={16} />
+                <FilterIcon color={sort !== 'default' || mcapFilter ? colors.ctaText : colors.textSecondary} size={16} />
               </TouchableOpacity>
               {TOKEN_FILTERS.map(f => (
                 <TouchableOpacity
@@ -313,11 +367,22 @@ export function HomeScreen({
               </TouchableOpacity>
             </View>
           )}
-          {showingLiveList && !loading && !error && chainFilter !== 'all' && listData.length === 0 && (
+          {showingLiveList && !loading && !error && (chainFilter !== 'all' || mcapFilter) && listData.length === 0 && (
             <View style={styles.stateBlock}>
-              <Text style={styles.stateText}>No {filter.toLowerCase()} tokens on {CHAIN_LABEL[chainFilter] ?? chainFilter} right now.</Text>
-              <TouchableOpacity onPress={() => setChainFilter('all')} activeOpacity={0.7}>
-                <Text style={styles.stateRetry}>Show all chains</Text>
+              <Text style={styles.stateText}>
+                No {filter.toLowerCase()} tokens
+                {chainFilter !== 'all' ? ` on ${CHAIN_LABEL[chainFilter] ?? chainFilter}` : ''}
+                {mcapFilter ? ' in this market cap range' : ''} right now.
+              </Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setChainFilter('all');
+                  setMcapFilter(null);
+                  setMcapMinDraft('');
+                  setMcapMaxDraft('');
+                }}
+                activeOpacity={0.7}>
+                <Text style={styles.stateRetry}>Clear filters</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -356,6 +421,93 @@ export function HomeScreen({
                 {sort === opt.key && <Text style={styles.sortCheck}>✓</Text>}
               </TouchableOpacity>
             ))}
+
+            <View style={styles.mcapDivider} />
+            <Text style={styles.sortTitle}>Market cap</Text>
+            <View style={styles.mcapPresetWrap}>
+              {MCAP_PRESETS.map(preset => {
+                const selected = mcapFilter?.min === preset.min && mcapFilter?.max === preset.max;
+                return (
+                  <TouchableOpacity
+                    key={preset.label}
+                    style={[styles.mcapChip, selected && styles.mcapChipActive]}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      setMcapFilter(preset);
+                      setMcapMinDraft(preset.min != null ? String(preset.min) : '');
+                      setMcapMaxDraft(preset.max != null ? String(preset.max) : '');
+                      setMcapError('');
+                    }}>
+                    <Text style={[styles.mcapChipText, selected && styles.mcapChipTextActive]}>{preset.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <View style={styles.mcapCustomRow}>
+              <TextInput
+                value={mcapMinDraft}
+                onChangeText={t => {
+                  setMcapMinDraft(t);
+                  setMcapError('');
+                }}
+                placeholder="Min"
+                placeholderTextColor={colors.textMuted}
+                keyboardType="decimal-pad"
+                style={styles.mcapInput}
+              />
+              <Text style={styles.mcapCustomDash}>–</Text>
+              <TextInput
+                value={mcapMaxDraft}
+                onChangeText={t => {
+                  setMcapMaxDraft(t);
+                  setMcapError('');
+                }}
+                placeholder="Max"
+                placeholderTextColor={colors.textMuted}
+                keyboardType="decimal-pad"
+                style={styles.mcapInput}
+              />
+            </View>
+            {!!mcapError && <Text style={styles.mcapError}>{mcapError}</Text>}
+            <View style={styles.mcapActionRow}>
+              <TouchableOpacity
+                style={styles.mcapClearButton}
+                activeOpacity={0.7}
+                onPress={() => {
+                  setMcapFilter(null);
+                  setMcapMinDraft('');
+                  setMcapMaxDraft('');
+                  setMcapError('');
+                }}>
+                <Text style={styles.mcapClearButtonText}>Clear</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.mcapApplyButton}
+                activeOpacity={0.7}
+                onPress={() => {
+                  const min = parseCompactUsd(mcapMinDraft);
+                  const max = parseCompactUsd(mcapMaxDraft);
+                  if (!mcapMinDraft.trim() && !mcapMaxDraft.trim()) {
+                    setMcapFilter(null);
+                    setMcapError('');
+                    Keyboard.dismiss();
+                    return;
+                  }
+                  if ((mcapMinDraft.trim() && min == null) || (mcapMaxDraft.trim() && max == null)) {
+                    setMcapError("Couldn't read that number — try e.g. 500K or 2.5M.");
+                    return;
+                  }
+                  if (min != null && max != null && min > max) {
+                    setMcapError('Min is higher than Max.');
+                    return;
+                  }
+                  setMcapFilter({min, max});
+                  setMcapError('');
+                  Keyboard.dismiss();
+                }}>
+                <Text style={styles.mcapApplyButtonText}>Apply</Text>
+              </TouchableOpacity>
+            </View>
           </ScrollView>
         </TouchableOpacity>
       </TouchableOpacity>
@@ -551,5 +703,50 @@ function makeStyles(colors: Colors) {
     },
     sortRowText: {color: colors.textPrimary, fontSize: 14.5, fontWeight: '600'},
     sortCheck: {color: colors.navActive, fontSize: 15, fontWeight: '800'},
+
+    mcapDivider: {height: 1, backgroundColor: colors.divider, marginTop: 6, marginBottom: 4},
+    mcapPresetWrap: {flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 14, paddingBottom: 4},
+    mcapChip: {
+      paddingHorizontal: 11,
+      paddingVertical: 7,
+      borderRadius: 999,
+      backgroundColor: colors.panel,
+      borderWidth: 1,
+      borderColor: colors.panelBorder,
+    },
+    mcapChipActive: {backgroundColor: colors.ctaBg, borderColor: colors.ctaBg},
+    mcapChipText: {color: colors.textSecondary, fontSize: 12, fontWeight: '600'},
+    mcapChipTextActive: {color: colors.ctaText},
+    mcapCustomRow: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, marginTop: 8},
+    mcapInput: {
+      flex: 1,
+      backgroundColor: colors.input,
+      borderColor: colors.panelBorder,
+      borderWidth: 1,
+      borderRadius: 12,
+      paddingHorizontal: 12,
+      paddingVertical: 9,
+      color: colors.textPrimary,
+      fontSize: 13.5,
+    },
+    mcapCustomDash: {color: colors.textMuted, fontSize: 13},
+    mcapError: {color: colors.danger, fontSize: 11.5, paddingHorizontal: 14, marginTop: 6},
+    mcapActionRow: {flexDirection: 'row', gap: 8, paddingHorizontal: 14, marginTop: 12, marginBottom: 4},
+    mcapClearButton: {
+      flex: 1,
+      alignItems: 'center',
+      paddingVertical: 10,
+      borderRadius: 12,
+      backgroundColor: colors.pillBg,
+    },
+    mcapClearButtonText: {color: colors.textPrimary, fontSize: 13, fontWeight: '700'},
+    mcapApplyButton: {
+      flex: 1,
+      alignItems: 'center',
+      paddingVertical: 10,
+      borderRadius: 12,
+      backgroundColor: colors.ctaBg,
+    },
+    mcapApplyButtonText: {color: colors.ctaText, fontSize: 13, fontWeight: '700'},
   });
 }
