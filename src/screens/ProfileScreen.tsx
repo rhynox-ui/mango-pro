@@ -29,7 +29,7 @@ import {fetchUsdcPortfolio, USDC_SUPPORTED_CHAINS, type UsdcPortfolio} from '../
 import {NetworkIcon} from '../wallet/NetworkIcon';
 import {sendUsdc, isValidRecipientAddress} from '../wallet/sendUsdc';
 import {filterTxHistoryForAccount, getTxHistory, subscribeTxHistory, type TxHistoryEntry} from '../wallet/txHistory';
-import {getAvatarUri, getBio, setAvatarUri as saveAvatarUri, setBio as saveBio} from '../wallet/profileLocal';
+import {getAvatarUri, getBio, getUsername, isValidUsername, setAvatarUri as saveAvatarUri, setBio as saveBio, setUsername as saveUsername} from '../wallet/profileLocal';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {useSession} from '../wallet/SessionContext';
 
@@ -128,15 +128,26 @@ export function ProfileScreen({
   const [bioDraft, setBioDraft] = useState('');
   const [avatarUri, setAvatarUriValue] = useState<string | null>(null);
   const [avatarFailed, setAvatarFailed] = useState(false);
+  // Real, local-only username — same storage shape as bio/avatar. Once
+  // set, this replaces the raw address as the identity shown up top (a
+  // real user-chosen handle beats a hex string), and the address itself
+  // drops out of that spot — it's still real and still shown in full in
+  // the Deposit modal, so nothing is actually hidden, just not repeated
+  // where a username now does that job.
+  const [username, setUsernameValue] = useState('');
+  const [usernameEditing, setUsernameEditing] = useState(false);
+  const [usernameDraft, setUsernameDraft] = useState('');
+  const [usernameError, setUsernameError] = useState('');
   useEffect(() => {
     if (!session) return;
     const address = session.evm.address;
     let cancelled = false;
-    Promise.all([getBio(address), getAvatarUri(address)]).then(([loadedBio, loadedAvatar]) => {
+    Promise.all([getBio(address), getAvatarUri(address), getUsername(address)]).then(([loadedBio, loadedAvatar, loadedUsername]) => {
       if (cancelled) return;
       setBioValue(loadedBio);
       setAvatarUriValue(loadedAvatar);
       setAvatarFailed(false);
+      setUsernameValue(loadedUsername);
     });
     return () => {
       cancelled = true;
@@ -154,6 +165,24 @@ export function ProfileScreen({
     await saveBio(session.evm.address, trimmed);
     setBioValue(trimmed);
     setBioEditing(false);
+  }
+
+  function openUsernameEditor() {
+    setUsernameDraft(username);
+    setUsernameError('');
+    setUsernameEditing(true);
+  }
+
+  async function handleSaveUsername() {
+    if (!session) return;
+    const trimmed = usernameDraft.trim();
+    if (trimmed && !isValidUsername(trimmed)) {
+      setUsernameError('3-20 characters, starting with a letter — letters, numbers, and underscore only.');
+      return;
+    }
+    await saveUsername(session.evm.address, trimmed);
+    setUsernameValue(trimmed);
+    setUsernameEditing(false);
   }
 
   async function handlePickAvatar() {
@@ -297,11 +326,14 @@ export function ProfileScreen({
         </View>
       </View>
 
-      <Text style={styles.name}>Your Profile</Text>
-      {/* Real, from the unlocked wallet's own EVM account — no username
-          system exists yet, so the address is the identity shown until
-          one does. */}
-      <Text style={styles.handle}>{session ? truncateAddress(session.evm.address) : '—'}</Text>
+      <TouchableOpacity onPress={openUsernameEditor}>
+        <Text style={styles.name}>{username ? `@${username}` : 'Your Profile'}</Text>
+      </TouchableOpacity>
+      {/* Once a real username is set, it's the identity shown — the raw
+          address drops out of this spot (still shown in full in the
+          Deposit modal, never actually hidden, just not repeated here).
+          Before a username exists, the address is what's real to show. */}
+      {!username && <Text style={styles.handle}>{session ? truncateAddress(session.evm.address) : '—'}</Text>}
       <TouchableOpacity onPress={openBioEditor}>
         {bio ? <Text style={styles.bioText}>{bio}</Text> : <Text style={styles.addBio}>+ Add a bio</Text>}
       </TouchableOpacity>
@@ -643,6 +675,41 @@ export function ProfileScreen({
               autoFocus
             />
             <TouchableOpacity style={styles.sendButton} onPress={handleSaveBio} activeOpacity={0.8}>
+              <Text style={styles.sendButtonText}>Save</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={usernameEditing} animationType="slide" transparent onRequestClose={() => setUsernameEditing(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeaderRow}>
+              <Text style={styles.modalTitle}>Username</Text>
+              <TouchableOpacity onPress={() => setUsernameEditing(false)} hitSlop={8}>
+                <Text style={styles.modalClose}>Close</Text>
+              </TouchableOpacity>
+            </View>
+            <TextInput
+              style={styles.formInput}
+              value={usernameDraft}
+              onChangeText={text => {
+                setUsernameDraft(text);
+                setUsernameError('');
+              }}
+              placeholder="yourname"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              autoCorrect={false}
+              maxLength={20}
+              autoFocus
+            />
+            {usernameError ? (
+              <Text style={styles.modalWarning}>{usernameError}</Text>
+            ) : (
+              <Text style={styles.modalHint}>3-20 characters. Letters, numbers, and underscore only — shown instead of your address.</Text>
+            )}
+            <TouchableOpacity style={styles.sendButton} onPress={handleSaveUsername} activeOpacity={0.8}>
               <Text style={styles.sendButtonText}>Save</Text>
             </TouchableOpacity>
           </View>

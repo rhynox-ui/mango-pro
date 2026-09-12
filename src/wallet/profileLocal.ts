@@ -27,9 +27,39 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const BIO_KEY_PREFIX = 'mango_pro_profile_bio_v1:';
 const AVATAR_KEY_PREFIX = 'mango_pro_profile_avatar_v1:';
+const USERNAME_KEY_PREFIX = 'mango_pro_profile_username_v1:';
 
 function keyFor(prefix: string, address: string): string {
   return `${prefix}${address.toLowerCase()}`;
+}
+
+/** 3-20 chars, letters/digits/underscore, must start with a letter — same shape most handle systems use, chosen so a username can never be confused with a hex address or a base58 one. */
+const USERNAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_]{2,19}$/;
+
+export function isValidUsername(name: string): boolean {
+  return USERNAME_PATTERN.test(name.trim());
+}
+
+export async function getUsername(address: string): Promise<string> {
+  try {
+    return (await AsyncStorage.getItem(keyFor(USERNAME_KEY_PREFIX, address))) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+export async function setUsername(address: string, username: string): Promise<void> {
+  const key = keyFor(USERNAME_KEY_PREFIX, address);
+  try {
+    const trimmed = username.trim();
+    if (trimmed) {
+      await AsyncStorage.setItem(key, trimmed);
+    } else {
+      await AsyncStorage.removeItem(key);
+    }
+  } catch {
+    // Best-effort — same reasoning as setBio's own comment below.
+  }
 }
 
 export async function getBio(address: string): Promise<string> {

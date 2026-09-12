@@ -58,7 +58,7 @@ type AuthState = 'loading' | 'welcome' | 'create' | 'import' | 'locked' | 'app-l
 const TABS: {key: Tab; label: string; icon: TabIconName}[] = [
   {key: 'home', label: 'Home', icon: 'home'},
   {key: 'search', label: 'Search', icon: 'search'},
-  {key: 'swap', label: 'Swap', icon: 'swap'},
+  {key: 'swap', label: 'Trade', icon: 'swap'},
   {key: 'profile', label: 'Profile', icon: 'profile'},
 ];
 
