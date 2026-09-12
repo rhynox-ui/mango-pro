@@ -11,7 +11,8 @@ import {useEffect, useMemo, useRef, useState} from 'react';
 import {Image, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {ErrorText, PasswordField, PrimaryButton} from './ui';
 import {useTheme, type Colors} from '../theme/ThemeContext';
-import {getLockoutStatus, recordFailedAttempt, recordSuccessfulUnlock} from '../wallet/unlockAttempts';
+import {getLockoutStatus} from '../wallet/unlockAttempts';
+import {VaultLockedError} from '../wallet/vault';
 
 const MANGO_MARK = require('../assets/mango-mark.png');
 
@@ -69,12 +70,15 @@ export function LockedScreen({
     setError('');
     await new Promise(resolve => setTimeout(resolve, 0));
     try {
+      // Lockout is enforced inside unlockVaultMnemonic itself now (a
+      // security audit flagged this screen as the ONLY place the
+      // throttle was ever applied — see vault.ts's own header) — this
+      // screen just reacts to VaultLockedError for the countdown UI
+      // rather than tracking attempts itself.
       await onUnlock(password);
-      await recordSuccessfulUnlock();
     } catch (err) {
-      const status = await recordFailedAttempt();
-      if (status.locked) {
-        setLockoutMs(status.remainingMs);
+      if (err instanceof VaultLockedError) {
+        setLockoutMs(err.remainingMs);
         setError('Too many incorrect attempts.');
       } else {
         setError(err instanceof Error ? err.message : 'Incorrect password.');
@@ -89,9 +93,13 @@ export function LockedScreen({
     setError('');
     try {
       await onBiometricUnlock();
-      await recordSuccessfulUnlock();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Biometric unlock failed — try your password.');
+      if (err instanceof VaultLockedError) {
+        setLockoutMs(err.remainingMs);
+        setError('Too many incorrect attempts.');
+      } else {
+        setError(err instanceof Error ? err.message : 'Biometric unlock failed — try your password.');
+      }
     }
     setBiometricBusy(false);
   }

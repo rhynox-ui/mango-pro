@@ -451,10 +451,6 @@ function AppInner(): React.JSX.Element {
     setTab('swap');
   }
 
-  if (lastCrash) {
-    return <CrashReportScreen crash={lastCrash} onDismiss={dismissCrashReport} />;
-  }
-
   return (
     <SafeAreaProvider>
       {/* backgroundColor is gone from RN 0.87's StatusBar types — recent
@@ -464,50 +460,66 @@ function AppInner(): React.JSX.Element {
       <StatusBar barStyle={mode === 'dark' ? 'light-content' : 'dark-content'} />
       <SafeAreaView style={styles.root} edges={['top', 'left', 'right', 'bottom']}>
         <AuthGate>
-          <View style={styles.body}>
-            {showingSettings ? (
-              <SettingsScreen onBack={() => setScreen('tabs')} onOpenDepositWithdraw={goToWalletActions} onOpenProfile={goToProfile} />
-            ) : showingHistory ? (
-              <HistoryScreen onBack={() => setScreen('tabs')} />
-            ) : tab === 'home' ? (
-              <HomeScreen onOpenSettings={openSettings} onSelectToken={selectDiscoveryToken} onOpenDeposit={goToDeposit} />
-            ) : tab === 'search' ? (
-              <SearchScreen onSelectToken={selectSearchResult} />
-            ) : tab === 'swap' ? (
-              <TokenTradeScreen
-                token={selectedToken}
-                onOpenSearch={() => setTab('search')}
-                onBack={
-                  selectedToken
-                    ? () => {
-                        setSelectedToken(undefined);
-                        setTab('search');
-                      }
-                    : undefined
-                }
-              />
-            ) : (
-              <ProfileScreen
-                onOpenSettings={openSettings}
-                onOpenHistory={openHistory}
-                pendingAction={pendingProfileAction}
-                onPendingActionHandled={() => setPendingProfileAction(null)}
-              />
-            )}
-          </View>
+          {/* Real gap this closes (a security/bug audit pass flagged it):
+              this used to be an early `if (lastCrash) return
+              <CrashReportScreen/>` BEFORE AuthGate ever rendered — shown to
+              whoever opened the app next, no password or biometric check
+              at all, with the full raw error message and stack trace
+              selectable on screen. Rendering it as AuthGate's own children
+              instead means it only ever appears once AuthGate's own
+              loading/welcome/locked/app-locked checks have already let
+              the real user through — same authenticated surface as the
+              tabs below, not a bypass of it. */}
+          {lastCrash ? (
+            <CrashReportScreen crash={lastCrash} onDismiss={dismissCrashReport} />
+          ) : (
+            <>
+              <View style={styles.body}>
+                {showingSettings ? (
+                  <SettingsScreen onBack={() => setScreen('tabs')} onOpenDepositWithdraw={goToWalletActions} onOpenProfile={goToProfile} />
+                ) : showingHistory ? (
+                  <HistoryScreen onBack={() => setScreen('tabs')} />
+                ) : tab === 'home' ? (
+                  <HomeScreen onOpenSettings={openSettings} onSelectToken={selectDiscoveryToken} onOpenDeposit={goToDeposit} />
+                ) : tab === 'search' ? (
+                  <SearchScreen onSelectToken={selectSearchResult} />
+                ) : tab === 'swap' ? (
+                  <TokenTradeScreen
+                    token={selectedToken}
+                    onOpenSearch={() => setTab('search')}
+                    onBack={
+                      selectedToken
+                        ? () => {
+                            setSelectedToken(undefined);
+                            setTab('search');
+                          }
+                        : undefined
+                    }
+                  />
+                ) : (
+                  <ProfileScreen
+                    onOpenSettings={openSettings}
+                    onOpenHistory={openHistory}
+                    pendingAction={pendingProfileAction}
+                    onPendingActionHandled={() => setPendingProfileAction(null)}
+                  />
+                )}
+              </View>
 
-          {!showingPushedScreen && (
-            <View style={styles.tabBar}>
-              {TABS.map(t => {
-                const active = tab === t.key;
-                return (
-                  <TouchableOpacity key={t.key} style={styles.tabItem} onPress={() => setTab(t.key)} activeOpacity={0.7}>
-                    <TabIcon name={t.icon} color={active ? colors.navActive : colors.textMuted} size={20} />
-                    <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>{t.label}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+              {!showingPushedScreen && (
+                <View style={styles.tabBar}>
+                  {TABS.map(t => {
+                    const active = tab === t.key;
+                    return (
+                      <TouchableOpacity key={t.key} style={styles.tabItem} onPress={() => setTab(t.key)} activeOpacity={0.7}>
+                        <TabIcon name={t.icon} color={active ? colors.navActive : colors.textMuted} size={20} />
+                        <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>{t.label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+            </>
           )}
         </AuthGate>
       </SafeAreaView>

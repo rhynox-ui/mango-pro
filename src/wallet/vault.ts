@@ -21,8 +21,19 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {decryptSecret as cipherDecrypt, encryptSecret as cipherEncrypt, type SecretRecord} from './walletCipher.ts';
+import {getLockoutStatus, recordFailedAttempt, recordSuccessfulUnlock} from './unlockAttempts';
 
 export {decryptSecret, encryptSecret} from './walletCipher.ts';
+
+/** Thrown by unlockVaultMnemonic when the attempt lockout (unlockAttempts.ts) is active. Carries remainingMs so a UI can show a countdown without a second getLockoutStatus() read. */
+export class VaultLockedError extends Error {
+  remainingMs: number;
+  constructor(remainingMs: number) {
+    super(`Too many incorrect attempts. Try again in ${Math.ceil(remainingMs / 1000)}s.`);
+    this.name = 'VaultLockedError';
+    this.remainingMs = remainingMs;
+  }
+}
 export type {SecretRecord};
 
 const STORAGE_KEY = 'mango_pro_wallet_vault_v1';
@@ -58,9 +69,33 @@ export async function clearVault(): Promise<void> {
   await AsyncStorage.removeItem(STORAGE_KEY);
 }
 
-/** Decrypts the stored vault's mnemonic with a password. Throws "Incorrect password." on a wrong password or corrupt record. */
+/**
+ * Decrypts the stored vault's mnemonic with a password. Throws
+ * "Incorrect password." on a wrong password or corrupt record, or
+ * VaultLockedError while the attempt lockout is active.
+ *
+ * Lockout enforcement lives HERE, not in each caller's own UI code — a
+ * security audit flagged that it used to live only in LockedScreen.tsx,
+ * so any other call site (EnableBiometricModal.tsx calls this directly
+ * to verify a password before enrolling biometrics) got unlimited,
+ * unthrottled guesses. Centralizing it in the one real decrypt primitive
+ * means every future caller inherits the same throttle by construction,
+ * rather than needing to remember to wire unlockAttempts.ts itself.
+ */
 export async function unlockVaultMnemonic(vault: StoredVault, password: string): Promise<string> {
-  return cipherDecrypt(vault.mnemonicRecord, password);
+  const status = await getLockoutStatus();
+  if (status.locked) {
+    throw new VaultLockedError(status.remainingMs);
+  }
+  try {
+    const mnemonic = await cipherDecrypt(vault.mnemonicRecord, password);
+    await recordSuccessfulUnlock();
+    return mnemonic;
+  } catch (err) {
+    if (err instanceof VaultLockedError) throw err;
+    await recordFailedAttempt();
+    throw err;
+  }
 }
 
 /** Encrypts a fresh mnemonic under a password and persists it as the vault. */

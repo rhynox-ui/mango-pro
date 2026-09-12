@@ -5,11 +5,14 @@
 // here survives a process kill, by design: only the encrypted vault in
 // AsyncStorage does).
 //
-// No auto-lock-on-background yet (mobile's own App.tsx has a real
-// AUTO_LOCK_GRACE_MS timer for this) — once unlocked, the session stays
-// live until the app process ends. A real gap worth closing before this
-// app handles meaningful balances, not something this file pretends is
-// solved.
+// Auto-lock-on-background IS real now (a security/bug audit pass flagged
+// this comment as stale and it was — fixed here rather than just the
+// values elsewhere): App.tsx's own AppState-driven handler
+// (autoLockMsRef/handleLock) clears this session after the configured
+// grace period once the app is backgrounded, the same real enforcement
+// mobile's own App.tsx has. This file doesn't own that logic itself —
+// it just holds whatever App.tsx puts here — so the timer lives there,
+// not duplicated into a second mechanism here.
 
 import {createContext, useContext, useMemo, useState, type ReactNode} from 'react';
 import type {DerivedAccounts} from './keys';

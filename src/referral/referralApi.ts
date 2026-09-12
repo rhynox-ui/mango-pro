@@ -62,7 +62,7 @@ async function parseJsonResponse<T>(res: Response): Promise<T> {
 }
 
 export async function getReferralStats(address: string): Promise<ReferralStats> {
-  const res = await fetch(`${API_BASE}/me?address=${address}`);
+  const res = await fetch(`${API_BASE}/me?address=${encodeURIComponent(address)}`);
   return parseJsonResponse<ReferralStats>(res);
 }
 

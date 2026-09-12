@@ -202,7 +202,7 @@ export async function checkTokenSecurity(chainId: number | string | null | undef
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(`${API_BASE}/${chainId}?contract_addresses=${tokenAddress}`, {signal: controller.signal} as RequestInit);
+    const res = await fetch(`${API_BASE}/${chainId}?contract_addresses=${encodeURIComponent(tokenAddress)}`, {signal: controller.signal} as RequestInit);
     if (!res.ok) return null;
     const data = (await res.json()) as {result?: Record<string, any>};
     const result = data?.result?.[tokenAddress.toLowerCase()];
