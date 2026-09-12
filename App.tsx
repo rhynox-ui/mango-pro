@@ -226,6 +226,21 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
     setAuthState('welcome');
   }
 
+  /**
+   * The real "Delete Account" destination — SettingsScreen calls
+   * clearVault() itself (behind its own real backup-confirmation UI,
+   * per clearVault()'s own documented precondition) and then this, to
+   * reset app-level state. Deliberately goes straight to 'welcome', not
+   * 'locked': hasVault() would now return false, so 'locked' would stand
+   * a user in front of a password screen with no vault left to unlock
+   * against — a dead end for a wallet that no longer exists on this
+   * device.
+   */
+  function handleWalletWipe() {
+    setSession(null);
+    setAuthState('welcome');
+  }
+
   // Same shape as mango-mobile's own App.tsx: record when the app left
   // 'active', and on returning to 'active' lock only if enough time
   // passed AND the app was actually unlocked when it backgrounded (no
@@ -320,7 +335,7 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
   }
   return (
     <AutoLockContext.Provider value={{autoLockMs, setAutoLockMs: handleAutoLockChange}}>
-      <AuthActionsContext.Provider value={{logout: handleLock}}>
+      <AuthActionsContext.Provider value={{logout: handleLock, deleteWallet: handleWalletWipe}}>
         <BiometricContext.Provider value={{biometricAvailable, biometricEnabled, biometryLabel, setBiometricEnabled, appLockEnabled, setAppLockEnabled}}>
           {children}
           <RecommendBiometricModal

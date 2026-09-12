@@ -10,7 +10,7 @@
 // real rather than sitting as a placeholder for no reason.
 
 import {useState} from 'react';
-import {Alert, Linking, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
+import {Alert, Linking, Modal, ScrollView, Share, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import {
   AlertCircleIcon,
   BellIcon,
@@ -35,6 +35,7 @@ import {useTheme, type Colors} from '../theme/ThemeContext';
 import {useSession} from '../wallet/SessionContext';
 import {useAuthActions} from '../settings/AuthActionsContext';
 import {filterTxHistoryForAccount, getTxHistory} from '../wallet/txHistory';
+import {clearVault} from '../wallet/vault';
 import {SecurityScreen} from './SecurityScreen';
 import {AppearanceScreen} from './AppearanceScreen';
 import {SolanaDevnetTestScreen} from './SolanaDevnetTestScreen';
@@ -86,11 +87,30 @@ export function SettingsScreen({
   const {colors} = useTheme();
   const styles = makeStyles(colors);
   const {session} = useSession();
-  const {logout} = useAuthActions();
+  const {logout, deleteWallet} = useAuthActions();
   const [showSecurity, setShowSecurity] = useState(false);
   const [showAppearance, setShowAppearance] = useState(false);
   const [showDocumentation, setShowDocumentation] = useState(false);
   const [showSolanaDevnetTest, setShowSolanaDevnetTest] = useState(false);
+  const [showDeleteWallet, setShowDeleteWallet] = useState(false);
+  const [backupConfirmed, setBackupConfirmed] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const canConfirmDelete = backupConfirmed && deleteConfirmText.trim().toUpperCase() === 'DELETE';
+
+  function resetDeleteWalletModal() {
+    setShowDeleteWallet(false);
+    setBackupConfirmed(false);
+    setDeleteConfirmText('');
+    setDeleteBusy(false);
+  }
+
+  /** The real wipe, gated on canConfirmDelete above — see clearVault()'s own documented precondition and AuthActionsContext.tsx's own header for why the destructive call and its confirmation both live here, in one place. */
+  async function handleConfirmDeleteWallet() {
+    setDeleteBusy(true);
+    await clearVault();
+    deleteWallet();
+  }
 
   async function handleExportTaxes() {
     const scoped = session ? filterTxHistoryForAccount(getTxHistory(), {evmAddress: session.evm.address, solanaAddress: session.solana.address}) : getTxHistory();
@@ -174,10 +194,12 @@ export function SettingsScreen({
       Icon: AlertCircleIcon,
       danger: true,
       onPress: () =>
-        Alert.alert(
-          'Delete Account',
-          "Mango Pro is non-custodial — there's no server-side account to delete. The real equivalent is wiping this wallet from your device, which isn't built as its own action yet (it needs a proper \"have you backed up your recovery phrase\" confirmation first, since it can't be undone). For now, uninstalling the app removes everything it stores locally.",
-        ),
+        session?.authMethod === 'google'
+          ? Alert.alert(
+              'Delete Account',
+              "Mango Pro is non-custodial — there's no server-side account to delete. Your key lives with Google/Particle, not on this device, so there's no local wallet here to wipe either. Log Out above removes this device's session; uninstalling the app removes everything else it stores locally.",
+            )
+          : setShowDeleteWallet(true),
     },
   ];
 
@@ -222,6 +244,46 @@ export function SettingsScreen({
           </TouchableOpacity>
         ))}
       </ScrollView>
+
+      <Modal visible={showDeleteWallet} animationType="slide" transparent onRequestClose={resetDeleteWalletModal}>
+        <View style={styles.deleteBackdrop}>
+          <View style={styles.deleteCard}>
+            <Text style={styles.deleteTitle}>Delete wallet from this device</Text>
+            <Text style={styles.deleteWarning}>
+              This permanently removes your wallet's keys from this device. If you haven't saved your recovery phrase somewhere safe, any funds in
+              this wallet will be lost forever — Mango cannot recover them for you.
+            </Text>
+
+            <TouchableOpacity style={styles.deleteCheckboxRow} onPress={() => setBackupConfirmed(c => !c)} activeOpacity={0.7} disabled={deleteBusy}>
+              <View style={[styles.deleteCheckbox, backupConfirmed && styles.deleteCheckboxChecked]}>{backupConfirmed && <Text style={styles.deleteCheckmark}>✓</Text>}</View>
+              <Text style={styles.deleteCheckboxLabel}>I've saved my recovery phrase and understand this cannot be undone</Text>
+            </TouchableOpacity>
+
+            <Text style={styles.deleteInputLabel}>Type DELETE to confirm</Text>
+            <TextInput
+              style={styles.deleteInput}
+              value={deleteConfirmText}
+              onChangeText={setDeleteConfirmText}
+              placeholder="DELETE"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              editable={!deleteBusy}
+            />
+
+            <TouchableOpacity
+              style={[styles.deleteButton, (!canConfirmDelete || deleteBusy) && styles.deleteButtonDisabled]}
+              disabled={!canConfirmDelete || deleteBusy}
+              onPress={handleConfirmDeleteWallet}
+              activeOpacity={0.85}>
+              <Text style={styles.deleteButtonText}>{deleteBusy ? 'Deleting…' : 'Delete Wallet'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.deleteCancelButton} onPress={resetDeleteWalletModal} disabled={deleteBusy}>
+              <Text style={styles.deleteCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -243,5 +305,33 @@ function makeStyles(colors: Colors) {
     rowLabel: {flex: 1, color: colors.textPrimary, fontSize: 16.5, fontWeight: '500'},
     rowValue: {color: colors.textMuted, fontSize: 14, marginRight: 4},
     divider: {position: 'absolute', bottom: 0, left: 38, right: 0, height: 1, backgroundColor: colors.divider},
+
+    deleteBackdrop: {flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)'},
+    deleteCard: {backgroundColor: colors.bg, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: 36},
+    deleteTitle: {color: colors.textPrimary, fontSize: 18, fontWeight: '800', marginBottom: 10},
+    deleteWarning: {color: colors.danger, fontSize: 13, lineHeight: 19, fontWeight: '600', marginBottom: 20},
+    deleteCheckboxRow: {flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 20},
+    deleteCheckbox: {width: 20, height: 20, borderRadius: 6, borderWidth: 1.5, borderColor: colors.panelBorder, alignItems: 'center', justifyContent: 'center'},
+    deleteCheckboxChecked: {backgroundColor: colors.danger, borderColor: colors.danger},
+    deleteCheckmark: {color: colors.bg, fontSize: 12, fontWeight: '900'},
+    deleteCheckboxLabel: {color: colors.textSecondary, fontSize: 13, flex: 1},
+    deleteInputLabel: {color: colors.textMuted, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6},
+    deleteInput: {
+      color: colors.textPrimary,
+      fontSize: 14,
+      fontWeight: '600',
+      backgroundColor: colors.panel,
+      borderWidth: 1,
+      borderColor: colors.panelBorder,
+      borderRadius: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      marginBottom: 20,
+    },
+    deleteButton: {backgroundColor: colors.danger, borderRadius: 14, paddingVertical: 15, alignItems: 'center'},
+    deleteButtonDisabled: {opacity: 0.4},
+    deleteButtonText: {color: '#FFFFFF', fontSize: 14.5, fontWeight: '800'},
+    deleteCancelButton: {marginTop: 12, alignItems: 'center'},
+    deleteCancelText: {color: colors.textSecondary, fontSize: 13, fontWeight: '600'},
   });
 }
