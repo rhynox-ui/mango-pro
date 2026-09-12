@@ -41,17 +41,35 @@
 // tokenSearch.ts/dexScreener.ts already hold themselves to), not a crash.
 //
 // Real, disclosed gap: Birdeye, CoinMarketCap, and Ave.ai were all
-// researched as additional sources — none offers a genuinely keyless
-// free tier, each requires its own registered API key (the same shape
-// as Relay's own key, already wired elsewhere in this app). Not wired
-// in here; add one only once a real key exists to configure it with,
-// the same way Relay's key was supplied directly rather than guessed or
-// left as a placeholder. Pons/ponsfamily.com's own docs were unreachable
-// from this session's own sandbox (network egress blocked its docs
-// domain) — not integrated for the same reason GeckoTerminal's own
-// unconfirmed fields elsewhere in this app family are flagged rather
-// than guessed: a wrong endpoint shape fabricated from an unreachable
-// source is worse than not having the source at all.
+// researched as additional sources. Birdeye and Ave.ai each require
+// their own registered API key (the same shape as Relay's own key,
+// already wired elsewhere in this app) — not wired in here; add one
+// only once a real key exists to configure it with, the same way
+// Relay's key was supplied directly rather than guessed or left as a
+// placeholder. Pons/ponsfamily.com's own docs were unreachable from
+// this session's own sandbox (network egress blocked its docs domain)
+// — not integrated for the same reason GeckoTerminal's own unconfirmed
+// fields elsewhere in this app family are flagged rather than guessed:
+// a wrong endpoint shape fabricated from an unreachable source is
+// worse than not having the source at all.
+//
+// CoinMarketCap re-checked separately (task-tracked, not guessed):
+// CMC has since shipped a real "Keyless Public API" covering a subset
+// of its DEX routes (pair/token/liquidity/holder/security/swap/K-line)
+// with literally no signup or key. But CMC's own docs describe it as
+// sharing an undisclosed, IP-pooled rate limit and pitch it explicitly
+// for "prototyping and testing," not production traffic — there's no
+// key to request a higher tier with if Home's own live discovery feed
+// ever gets throttled, unlike every other source here. CMC's actual
+// production-grade free option is its keyed Basic tier (15,000
+// calls/month, 50 req/min) — real, but the same "needs a registered
+// key" shape as Birdeye/Ave.ai above, not a genuine improvement over
+// them. Same conclusion as before, sharper reasoning: not wired in
+// until a real key exists to configure it with. (Verified via CMC's
+// own current API docs/academy pages — this sandbox's network egress
+// to coinmarketcap.com itself is blocked, so nothing here was fabricated
+// from an assumed response shape; only endpoint existence and the
+// rate-limit/production guidance were confirmed, not a live call.)
 
 import {chainKeyForDexScreenerChainId, type DexScreenerPair} from './dexScreener';
 import {geckoTerminalNetworkForChainOrNull} from './geckoTerminalNetworks';
