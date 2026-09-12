@@ -20,12 +20,23 @@
 //   fetched live (src/wallet/walletRpc.ts's fetchErc20TokenMetadata /
 //   fetchSplMintDecimals) the moment a token is selected, cached
 //   forever after (a token's decimals can never change once deployed).
-// - Balances are real too: the pay side's native or on-chain token
-//   balance (fetchWalletNativeBalance/fetchWalletTokenBalance/Solana
-//   equivalents in walletRpc.ts) drives the 25/50/75/MAX quick-percent
-//   row, Max on a native pay side reserves a live gas estimate, and an
-//   amount over the real balance blocks the trade with a clear message
-//   instead of failing on-chain.
+// - Balances are real too. Mango Pro is USDC-first, not chain-first: Buy
+//   always spends this wallet's ONE aggregate USDC balance across every
+//   supported chain (src/core/usdcBalances.ts's fetchCashPortfolio,
+//   the same total ProfileScreen's own Total Cash shows) — there is no
+//   user-facing chain picker, no native-asset payment option, nothing
+//   to choose. Internally, payOrigin still auto-picks whichever single
+//   chain holds the most, because Relay's own quote API needs one
+//   concrete origin chain per call — that's a routing detail, not
+//   something shown to the user. One real, disclosed limitation this
+//   creates: if the typed amount fits the aggregate only by combining
+//   several chains (funds split across them), execution can't do that
+//   yet (true multi-chain splitting is separate, unbuilt engineering)
+//   and the trade is blocked with an honest explanation rather than
+//   silently failing on-chain. Sell spends the searched token's own
+//   real on-chain balance and always delivers proceeds as that same
+//   aggregate USDC (native only on the rare chain with no verified
+//   cash address at all).
 // - Execution is real on both sides: tapping Buy/Sell runs the quote
 //   through src/core/txIntentFirewall.ts (via executeRelayQuote.ts)
 //   before signing anything, then signs and broadcasts directly with
@@ -33,7 +44,7 @@
 //   as every other send in this app.
 
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {ActivityIndicator, Image, Modal, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {ActivityIndicator, Image, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import Svg, {Circle, Path} from 'react-native-svg';
 import {formatUnits, parseUnits} from 'viem';
 import {TokenChartPanel} from '../components/TokenChartPanel';
@@ -44,19 +55,9 @@ import {DEV_FEE_PCT} from '../core/fees';
 import {getRelayQuote, summarizeQuote, type QuoteSummary, type RelayQuote} from '../core/relayQuote';
 import {executeRelayQuote, type ExecuteStep} from '../core/executeRelayQuote';
 import {checkFallbackRoute, sweepFallbackFeeFromNativeBalance, tryFallbackProviders, type FallbackRouteParams} from '../core/fallbackDex';
-import {fetchWalletPrices} from '../core/walletPrices';
 import {TransactionIntentError} from '../core/txIntentFirewall';
-import {
-  estimateEvmNativeFeeReserve,
-  estimateSolanaMaxReserveSol,
-  fetchErc20TokenMetadata,
-  fetchSplMintDecimals,
-  fetchWalletNativeBalance,
-  fetchWalletSolanaBalance,
-  fetchWalletSplTokenBalance,
-  fetchWalletTokenBalance,
-} from '../wallet/walletRpc';
-import {computeMaxAmount, formatAmountForInput, useAvailableBalance} from '../wallet/useAvailableBalance';
+import {fetchErc20TokenMetadata, fetchSplMintDecimals, fetchWalletSplTokenBalance, fetchWalletTokenBalance} from '../wallet/walletRpc';
+import {formatAmountForInput, useAvailableBalance} from '../wallet/useAvailableBalance';
 import {addTxHistoryEntry} from '../wallet/txHistory';
 import {useSession} from '../wallet/SessionContext';
 import {useTheme, type Colors} from '../theme/ThemeContext';
@@ -64,20 +65,17 @@ import {TradeSettingsSheet} from '../components/TradeSettingsSheet';
 import {cashLogoUrl, fetchCashPortfolio, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
 
 /**
- * Buy-side only — what chain/asset "You pay" actually spends from. Sell
- * has no equivalent: you can only sell a token from the chain it's
- * actually held on, there's no "origin" to pick. Defaults to the
- * token's own chain's native asset (today's only option before this),
- * so nothing changes until a user actively picks something else.
- *
- * 'cash' means whichever real asset CASH_ASSET_BY_CHAIN names for that
- * chain — USDC almost everywhere, USDG on Robinhood Chain. Without
- * this, a wallet whose only funds are USDG on Robinhood had no way to
- * spend them on a token living on any OTHER chain — the exact "stuck
- * cash" gap Total Cash/Deposit/Withdraw already closed for viewing and
- * moving that balance, just not yet for trading with it.
+ * Buy-side only — which chain the user's cash actually gets spent from.
+ * Sell has no equivalent: you can only sell a token from the chain it's
+ * actually held on, there's no origin to pick. Always resolves to
+ * whichever real asset CASH_ASSET_BY_CHAIN names for that chain — USDC
+ * almost everywhere, USDG on Robinhood Chain — auto-picked (see the
+ * effect that sets this) from wherever the wallet's balance actually is,
+ * never a user-facing choice: the user sees one USDC balance, not a
+ * chain to pick. This is still tracked internally because Relay's own
+ * quote API needs one concrete origin chain per call.
  */
-type PayOrigin = {chainKey: ChainKey; asset: 'native' | 'cash'};
+type PayOrigin = {chainKey: ChainKey};
 
 export type DemoToken = {
   chainKey: ChainKey;
@@ -243,48 +241,26 @@ export function TokenTradeScreen({
   const [slippageBps, setSlippageBps] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  // Cross-chain buy: pay from any chain/asset this wallet actually
-  // holds, receive the token on its own chain — Relay itself already
-  // handles origin != destination chains fine (relayQuote.ts/
-  // executeRelayQuote.ts both take them as independent params); this
-  // was the one piece of plumbing missing. Resets to the token's own
-  // chain's native asset — today's only option before this — whenever
-  // the token changes, so switching tokens never silently carries over
-  // a payment origin that doesn't make sense for the new one.
-  const [payOrigin, setPayOrigin] = useState<PayOrigin>({chainKey: token.chainKey, asset: 'native'});
-  const [showPayOriginPicker, setShowPayOriginPicker] = useState(false);
-  // True once the user has actually picked a "Pay from" option themselves
-  // — the auto-default effect below never overrides a deliberate choice,
-  // only ever fills in a sane default before one exists. Only reset on a
-  // TOKEN change (not every time cashPortfolio below happens to update),
-  // so a deliberate pick survives a background balance refresh.
-  const manualPayOriginRef = useRef(false);
-  useEffect(() => {
-    manualPayOriginRef.current = false;
-  }, [token]);
-  const crossChainPay = isBuySide && (payOrigin.chainKey !== token.chainKey || payOrigin.asset !== 'native');
+  // Real product decision: Mango Pro is USDC-first, not chain-first. The
+  // user thinks in one USDC balance; Mango thinks in chains. A Buy always
+  // spends cash (USDC everywhere it exists, USDG on Robinhood — resolved
+  // via CASH_ASSET_BY_CHAIN, never shown to the user as a different
+  // currency), auto-sourced from whichever chain actually holds it —
+  // there is no user-facing native-asset payment option and no manual
+  // "pick a chain" step any more (see the effect below). payOrigin still
+  // carries a real chainKey internally, because Relay's own quote API
+  // needs one concrete origin chain per call — hiding chain complexity
+  // from the user doesn't mean removing chain awareness from execution.
+  const [payOrigin, setPayOrigin] = useState<PayOrigin>({chainKey: token.chainKey});
 
-  // Sell-side counterpart to payOrigin: what a sell's proceeds land as.
-  // Real gap this closes — Buy already defaults to spending cash
-  // wherever this wallet holds it (the effect above), but Sell always
-  // converted to the chain's native asset with no way to choose
-  // otherwise, so a sale's proceeds never actually joined the "one cash
-  // balance across chains" this app's own Profile screen is built
-  // around. Defaults to cash when the token's own chain actually has a
-  // verified cash address (CASH_SUPPORTED_CHAINS) — same honesty rule
-  // as everywhere else this app checks that list — and to native
-  // otherwise (no fabricated option on a chain with no real cash asset).
-  // Always same-chain (token.chainKey): unlike a cross-chain Buy, there
-  // is no reason to receive a sale's proceeds on a DIFFERENT chain than
-  // the token was sold on. 'cash' resolves to CASH_ASSET_BY_CHAIN's real
-  // asset for that chain (USDC almost everywhere, USDG on Robinhood) —
-  // selling a Robinhood-chain token can land its proceeds as real USDG
-  // now, the same way selling anywhere else already lands USDC.
-  const [receiveAsset, setReceiveAsset] = useState<'native' | 'cash'>(CASH_SUPPORTED_CHAINS.includes(token.chainKey) ? 'cash' : 'native');
-  const [showReceiveAssetPicker, setShowReceiveAssetPicker] = useState(false);
-  useEffect(() => {
-    setReceiveAsset(CASH_SUPPORTED_CHAINS.includes(token.chainKey) ? 'cash' : 'native');
-  }, [token]);
+  // Sell always delivers proceeds as cash too — same reasoning as Buy
+  // above, no user-facing toggle. The one real, disclosed gap: a chain
+  // with no verified cash address at all (CASH_SUPPORTED_CHAINS doesn't
+  // cover every chain this app can chart a token on, e.g. Plasma/X
+  // Layer) has nothing to convert proceeds INTO, so those still land as
+  // the chain's own native asset — an honest limitation, not a choice
+  // offered to the user.
+  const receiveAsset: 'native' | 'cash' = CASH_SUPPORTED_CHAINS.includes(token.chainKey) ? 'cash' : 'native';
 
   // Same real, live aggregator ProfileScreen's own "Total Cash" already
   // uses — reused here rather than re-derived, so this screen's own
@@ -304,17 +280,13 @@ export function TokenTradeScreen({
     };
   }, [session]);
 
-  // Real fix: default "Pay from" to wherever this wallet actually holds
-  // cash (USDC or, on Robinhood, USDG), not always the token's own
-  // chain's native asset — which a fresh or lightly-funded wallet often
-  // holds none of, landing the Buy flow on a real "0 avail." balance by
-  // default. cashPortfolio is the same real, already-fetched aggregator
-  // the picker below already uses; this just applies its answer as the
-  // starting pick instead of requiring the user to open the picker and
-  // choose it manually every time. Never overrides a manual pick, and a
-  // wallet with no cash anywhere simply gets the token's own chain's
-  // native asset, which is still the more honest choice than
-  // auto-selecting an empty chain.
+  // Silently picks whichever chain actually holds this wallet's biggest
+  // cash balance and routes the Buy from there — no user-facing "Pay
+  // from" step. When nothing has a balance yet (fresh wallet, or
+  // cashPortfolio still loading), falls back to a real cash-supported
+  // chain rather than the token's own chain if that chain has none
+  // (e.g. Plasma/X Layer) — always a chain execution can actually use,
+  // never token.chainKey blindly.
   //
   // Keyed on [token, cashPortfolio] — not cashPortfolio alone. Real bug
   // this fixes, live-confirmed across three separate tokens/chains
@@ -324,61 +296,34 @@ export function TokenTradeScreen({
   // Every token switch after that needed its OWN re-run (a Buy's payable
   // chain is per-token state) but got none, since nothing in
   // cashPortfolio itself had changed — leaving payOrigin silently stuck
-  // on whatever it was for the previous token: native SOL/ETH with "0
-  // avail." or a failed balance fetch, even though this exact same
-  // wallet had a real, already-fetched USDC/USDG balance sitting right
-  // there in cashPortfolio the whole time.
+  // on whatever it was for the previous token.
   useEffect(() => {
-    if (manualPayOriginRef.current) return;
     let best: {chainKey: ChainKey; balance: number} | null = null;
     for (const result of cashPortfolio?.results ?? []) {
       if (result.status !== 'ok' || result.balance <= 0) continue;
       if (!best || result.balance > best.balance) best = {chainKey: result.chainKey, balance: result.balance};
     }
-    setPayOrigin(best ? {chainKey: best.chainKey, asset: 'cash'} : {chainKey: token.chainKey, asset: 'native'});
+    const fallbackChain = CASH_SUPPORTED_CHAINS.includes(token.chainKey) ? token.chainKey : CASH_SUPPORTED_CHAINS[0];
+    setPayOrigin({chainKey: best ? best.chainKey : fallbackChain});
   }, [token, cashPortfolio]);
 
-  // paySymbol reflects payOrigin's own choice on Buy (the token's own
-  // chain and native asset on Sell — unchanged, no origin to pick there).
-  // CASH_ASSET_BY_CHAIN[payOrigin.chainKey] is only ever undefined for a
-  // chainKey the cash picker below never offers, so the 'USDC' fallback
-  // here is purely a type-narrowing safety net, not a real guess.
-  const paySymbol = isBuySide ? (payOrigin.asset === 'native' ? NATIVE_SYMBOL[payOrigin.chainKey] : (CASH_ASSET_BY_CHAIN[payOrigin.chainKey] ?? 'USDC')) : token.symbol;
-  const receiveSymbol = isBuySide ? token.symbol : receiveAsset === 'cash' ? (CASH_ASSET_BY_CHAIN[token.chainKey] ?? 'USDC') : NATIVE_SYMBOL[token.chainKey];
+  // Always the literal, user-facing label "USDC" on Buy — per the
+  // product decision above, the user never sees which real asset (USDC,
+  // or USDG on Robinhood) or which chain actually backs it; that's
+  // Mango's own routing concern, not a second currency shown to the
+  // user. Execution still resolves the REAL asset via
+  // CASH_ASSET_BY_CHAIN[payOrigin.chainKey] wherever it actually moves
+  // funds — this is a display-only simplification, not a change to what
+  // gets signed.
+  const paySymbol = isBuySide ? 'USDC' : token.symbol;
+  const receiveSymbol = isBuySide ? token.symbol : receiveAsset === 'cash' ? 'USDC' : NATIVE_SYMBOL[token.chainKey];
   const amtNum = Number(amount) || 0;
 
   // Real USD value of what's actually being paid on Buy — cash (USDC or
-  // USDG, both real 1:1 pegs) is trivially 1:1 (a real stablecoin peg,
-  // not an approximation); the
-  // native asset needs a live price lookup, scoped to whichever chain
-  // payOrigin actually points at now, not always the token's own chain.
-  // The searched token itself has no reliable price source on Sell
-  // (walletPrices.ts only covers a small, conservative set of
-  // established assets), so this stays undefined there, same "nothing
-  // to cap without a real number" rule appFeeBps's own doc comment
-  // states. Feeds getRelayQuote's own originAmountUsd below (activating
-  // the large-trade fee cap that was otherwise dormant with nothing to
-  // compute it against) and the fallback-DEX path's fee cap/sweep.
-  const [nativeUsdPrice, setNativeUsdPrice] = useState<number | null>(null);
-  useEffect(() => {
-    if (!(isBuySide && payOrigin.asset === 'native')) {
-      setNativeUsdPrice(null);
-      return;
-    }
-    const nativeSymbol = NATIVE_SYMBOL[payOrigin.chainKey];
-    let cancelled = false;
-    fetchWalletPrices('usd')
-      .then(prices => {
-        if (!cancelled) setNativeUsdPrice(prices?.[nativeSymbol] ?? null);
-      })
-      .catch(() => {
-        if (!cancelled) setNativeUsdPrice(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [isBuySide, payOrigin]);
-  const originAmountUsd = !isBuySide ? undefined : payOrigin.asset === 'cash' ? amtNum : nativeUsdPrice != null ? amtNum * nativeUsdPrice : undefined;
+  // USDG, both real 1:1 pegs) is trivially 1:1, no price lookup needed.
+  // Feeds getRelayQuote's own originAmountUsd (the large-trade fee cap)
+  // and the fallback-DEX path's fee cap/sweep.
+  const originAmountUsd = isBuySide ? amtNum : undefined;
 
   // The searched token's own decimals — not carried by DexScreener's
   // search response, so Sell (which spends this token) needs a live
@@ -414,34 +359,47 @@ export function TokenTradeScreen({
   const originIsSolana = isBuySide ? payOrigin.chainKey === 'solana' : solana;
 
   // The real "how much can I spend" answer the quick-percent row below
-  // needs — payOrigin's own chain/asset for Buy (USDC reuses the
-  // portfolio this screen already fetches below, no extra RPC call; the
-  // picker itself only offers a chain once that fetch has resolved, so
-  // this never races an unresolved portfolio), the searched token itself
-  // for Sell (tokenDecimals, resolved above; unresolved yet just means
-  // no balance to report, same reasoning the quote effect below already
-  // applies).
+  // needs. Buy: the WHOLE wallet's USDC balance across every chain
+  // (cashPortfolio.totalUsd — the exact same aggregate ProfileScreen's
+  // own Total Cash shows), never just the one chain payOrigin happens to
+  // be auto-routing from right now — see this file's own header on why
+  // the user thinks in one balance, not per-chain ones. Sell: the
+  // searched token itself (tokenDecimals, resolved above; unresolved yet
+  // just means no balance to report, same reasoning the quote effect
+  // below already applies).
   const fetchPayBalance = useCallback((): Promise<number> => {
     if (!session) return Promise.resolve(0);
     if (isBuySide) {
-      if (payOrigin.asset === 'cash') {
-        const result = cashPortfolio?.results.find(r => r.chainKey === payOrigin.chainKey);
-        return Promise.resolve(result?.status === 'ok' ? result.balance : 0);
-      }
-      return originIsSolana ? fetchWalletSolanaBalance(session.solana.address) : fetchWalletNativeBalance(payOrigin.chainKey, session.evm.address);
+      return Promise.resolve(cashPortfolio?.totalUsd ?? 0);
     }
     if (tokenDecimals === null) return Promise.resolve(0);
     return solana
       ? fetchWalletSplTokenBalance(token.address, tokenDecimals, session.solana.address)
       : fetchWalletTokenBalance(token.chainKey, token.address, tokenDecimals, session.evm.address);
-  }, [session, isBuySide, solana, originIsSolana, token, tokenDecimals, payOrigin, cashPortfolio]);
+  }, [session, isBuySide, solana, token, tokenDecimals, cashPortfolio]);
 
   // Bumped by the "Couldn't load balance" retry tap below — useAvailableBalance
   // only refetches when one of its deps changes, and none of the real deps
   // (session/side/token) change on a retry tap, so this is a dedicated one.
   const [balanceRetryToken, setBalanceRetryToken] = useState(0);
-  const {balance, loading: balanceLoading} = useAvailableBalance(session ? fetchPayBalance : null, [session, isBuySide, solana, token, tokenDecimals, balanceRetryToken, payOrigin, cashPortfolio]);
+  const {balance, loading: balanceLoading} = useAvailableBalance(session ? fetchPayBalance : null, [session, isBuySide, solana, token, tokenDecimals, balanceRetryToken, cashPortfolio]);
   const insufficientBalance = amtNum > 0 && balance !== null && amtNum > balance;
+  // Real, disclosed execution-layer gap: Relay's own quote API takes one
+  // concrete origin chain per call, so today's execution can only ever
+  // pull from the SINGLE chain payOrigin auto-picked (the biggest
+  // holding) — it can't yet split one trade across several chains at
+  // once. The aggregate total above is real and correct as a BALANCE,
+  // but if the typed amount fits in that total only by combining chains
+  // (e.g. $10 on Solana + $10 on Arbitrum, spending $15), executing it
+  // right now would fail on-chain against whichever single chain
+  // payOrigin points at. Caught here, before signing, with an honest
+  // explanation — not silently let through and left to fail downstream,
+  // and not silently narrowed to "insufficient balance" when the user's
+  // real total says otherwise. True multi-chain splitting/consolidation
+  // is real, separate follow-up engineering.
+  const payOriginResult = isBuySide ? cashPortfolio?.results.find(r => r.chainKey === payOrigin.chainKey) : undefined;
+  const payOriginChainBalance = payOriginResult?.status === 'ok' ? payOriginResult.balance : 0;
+  const needsConsolidation = isBuySide && amtNum > 0 && !insufficientBalance && amtNum > payOriginChainBalance;
   // A resolved balance of 0 is real (an empty wallet) and looks
   // identical to a null balance in `balance !== null` checks — this
   // specifically catches the OTHER case, where the fetch itself failed
@@ -473,7 +431,6 @@ export function TokenTradeScreen({
   // toggles a real background shade on top of it, same idea requested
   // for this exact row.
   const [pressedPct, setPressedPct] = useState<number | null>(null);
-  const [maxLoading, setMaxLoading] = useState(false);
 
   function handleQuickPct(pct: number) {
     if (balance === null) return;
@@ -485,31 +442,14 @@ export function TokenTradeScreen({
     setAmount(formatAmountForInput(balance * pct));
   }
 
-  async function handleMax() {
+  function handleMax() {
+    // Buy always spends cash, Sell always spends the searched token —
+    // gas is paid separately in the origin chain's native asset either
+    // way, so the full balance is always spendable. No native-asset MAX
+    // path remains reachable now that Buy never pays in native currency
+    // (see this file's own header on the USDC-first product decision).
     if (balance === null) return;
-    if (!isBuySide || payOrigin.asset === 'cash') {
-      // Sell side pays the searched token, or Buy paying cash — either
-      // way gas is paid separately in the origin chain's native asset,
-      // so the full balance is spendable (same computeMaxAmount branch
-      // a non-native asset always takes).
-      setAmount(formatAmountForInput(balance));
-      return;
-    }
-    setMaxLoading(true);
-    try {
-      const feeReserve = originIsSolana ? await estimateSolanaMaxReserveSol() : await estimateEvmNativeFeeReserve(payOrigin.chainKey);
-      setAmount(formatAmountForInput(computeMaxAmount({balance, isNativeAsset: true, feeNative: feeReserve})));
-    } catch {
-      // The live fee estimate itself failed — fall back to the full
-      // balance rather than blocking Max entirely. executeRelayQuote's
-      // own pre-flight simulate+balance check (sendRelayEvmStep) still
-      // catches a genuinely insufficient result with a clear message
-      // before anything signs, so this fallback is never the last line
-      // of defense.
-      setAmount(formatAmountForInput(balance));
-    } finally {
-      setMaxLoading(false);
-    }
+    setAmount(formatAmountForInput(balance));
   }
 
   useEffect(() => {
@@ -535,17 +475,12 @@ export function TokenTradeScreen({
       setQuoteLoading(false);
       return;
     }
-    // Buy spends whatever payOrigin points at (native or USDC, on
-    // whichever chain was picked — decimals known statically either
-    // way, chainData.ts's own per-chain overrides included); Sell
-    // spends the searched token (decimals only known once the live
-    // lookup above resolves) — either way, this is the "You pay" side's
-    // decimals.
-    const payDecimals = isBuySide
-      ? payOrigin.asset === 'native'
-        ? assetDecimalsForChain(payOrigin.chainKey, NATIVE_SYMBOL[payOrigin.chainKey])
-        : assetDecimalsForChain(payOrigin.chainKey, CASH_ASSET_BY_CHAIN[payOrigin.chainKey] ?? 'USDC')
-      : tokenDecimals;
+    // Buy always spends cash on whichever chain payOrigin auto-picked
+    // (decimals known statically, chainData.ts's own per-chain overrides
+    // included); Sell spends the searched token (decimals only known
+    // once the live lookup above resolves) — either way, this is the
+    // "You pay" side's decimals.
+    const payDecimals = isBuySide ? assetDecimalsForChain(payOrigin.chainKey, CASH_ASSET_BY_CHAIN[payOrigin.chainKey] ?? 'USDC') : tokenDecimals;
     if (payDecimals === undefined || payDecimals === null) {
       setQuote(null);
       rawQuoteRef.current = null;
@@ -584,11 +519,7 @@ export function TokenTradeScreen({
       // for why this never bridges chains the way a cross-chain Buy's
       // payOrigin can.
       const sellReceiveCurrency = receiveAsset === 'cash' ? currencyAddress(token.chainKey, CASH_ASSET_BY_CHAIN[token.chainKey] ?? 'USDC') : nativeCurrency;
-      const originCurrency = isBuySide
-        ? payOrigin.asset === 'native'
-          ? currencyAddress(payOrigin.chainKey, NATIVE_SYMBOL[payOrigin.chainKey])
-          : currencyAddress(payOrigin.chainKey, CASH_ASSET_BY_CHAIN[payOrigin.chainKey] ?? 'USDC')
-        : token.address;
+      const originCurrency = isBuySide ? currencyAddress(payOrigin.chainKey, CASH_ASSET_BY_CHAIN[payOrigin.chainKey] ?? 'USDC') : token.address;
       getRelayQuote({
         fromChainKey: isBuySide ? payOrigin.chainKey : token.chainKey,
         toChainKey: token.chainKey,
@@ -798,7 +729,12 @@ export function TokenTradeScreen({
     }
   }
 
-  const canTrade = (Boolean(rawQuoteRef.current) || Boolean(fallbackParamsRef.current)) && Boolean(session) && !insufficientBalance && (executeState === 'idle' || executeState === 'error');
+  const canTrade =
+    (Boolean(rawQuoteRef.current) || Boolean(fallbackParamsRef.current)) &&
+    Boolean(session) &&
+    !insufficientBalance &&
+    !needsConsolidation &&
+    (executeState === 'idle' || executeState === 'error');
   const isExecuting = executeState !== 'idle' && executeState !== 'error' && executeState !== 'success';
 
   // Same real bug both DexScreen.tsx's own pillHint and the site's own
@@ -823,8 +759,6 @@ export function TokenTradeScreen({
         : quoteLoading
           ? 'Finding the best route…'
           : null;
-
-  const chainHasCash = CASH_SUPPORTED_CHAINS.includes(token.chainKey);
 
   return (
     <View style={styles.screen}>
@@ -936,9 +870,9 @@ export function TokenTradeScreen({
             }}
             onPressIn={() => setPressedPct(pct)}
             onPressOut={() => setPressedPct(null)}
-            disabled={balanceLoading || maxLoading}
+            disabled={balanceLoading}
             activeOpacity={0.7}>
-            <Text style={[styles.quickPctText, selectedPercent === pct && styles.quickPctTextActive]}>{pct === 1 ? (maxLoading ? '…' : 'MAX') : `${pct * 100}%`}</Text>
+            <Text style={[styles.quickPctText, selectedPercent === pct && styles.quickPctTextActive]}>{pct === 1 ? 'MAX' : `${pct * 100}%`}</Text>
           </TouchableOpacity>
         ))}
         <View style={[styles.quickPctPill, selectedPercent === null && amtNum > 0 && styles.quickPctPillActive]}>
@@ -949,29 +883,26 @@ export function TokenTradeScreen({
       <View style={styles.payReceiveRow}>
         <View style={[styles.card, styles.payReceiveCard]}>
           <Text style={styles.cardLabel}>You pay</Text>
-          {isBuySide && (
-            <TouchableOpacity style={styles.payOriginRow} onPress={() => setShowPayOriginPicker(true)} activeOpacity={0.7}>
-              <NetworkIcon chainKey={payOrigin.chainKey} size={13} />
-              <Text style={styles.payOriginText} numberOfLines={1}>
-                {crossChainPay ? `via ${CHAIN_LABEL[payOrigin.chainKey]}` : 'Pay from'}
-              </Text>
-              <Text style={styles.payOriginChevron}>⌄</Text>
-            </TouchableOpacity>
-          )}
+          {/* Real product decision: Buy always spends this wallet's one
+              USDC balance, auto-sourced from wherever it actually holds
+              it (payOrigin, still tracked internally for Relay's own
+              quote — see this file's header) — no "Pay from" chain
+              picker, no per-chain badge, nothing to tap here. The
+              searched TOKEN is what's pickable on this screen, via
+              onOpenSearch on the You Receive side below, not this card. */}
           <View style={styles.prMainRow}>
-            <TouchableOpacity style={styles.assetSelector} onPress={onOpenSearch} activeOpacity={0.7} disabled={!onOpenSearch}>
-              {isBuySide ? (
-                payOrigin.asset === 'native' ? (
-                  <NetworkIcon chainKey={payOrigin.chainKey} size={16} />
-                ) : (
-                  <CashBadge chainKey={payOrigin.chainKey} size={16} />
-                )
-              ) : (
+            {isBuySide ? (
+              <View style={styles.assetSelector}>
+                <CashBadge chainKey={payOrigin.chainKey} size={16} />
+                <Text style={styles.assetSelectorText}>{paySymbol}</Text>
+              </View>
+            ) : (
+              <TouchableOpacity style={styles.assetSelector} onPress={onOpenSearch} activeOpacity={0.7} disabled={!onOpenSearch}>
                 <AssetIcon symbol={token.symbol} imageUrl={token.imageUrl} size={16} />
-              )}
-              <Text style={styles.assetSelectorText}>{paySymbol}</Text>
-              <Text style={styles.assetSelectorChevron}>⌄</Text>
-            </TouchableOpacity>
+                <Text style={styles.assetSelectorText}>{paySymbol}</Text>
+                <Text style={styles.assetSelectorChevron}>⌄</Text>
+              </TouchableOpacity>
+            )}
             <TextInput
               value={amount}
               onChangeText={text => {
@@ -1013,21 +944,23 @@ export function TokenTradeScreen({
         <View style={[styles.card, styles.payReceiveCard]}>
           <Text style={styles.cardLabel}>You receive</Text>
           <View style={styles.prMainRow}>
-            <TouchableOpacity
-              style={styles.assetSelector}
-              onPress={isBuySide ? onOpenSearch : () => setShowReceiveAssetPicker(true)}
-              activeOpacity={0.7}
-              disabled={isBuySide ? !onOpenSearch : !chainHasCash}>
-              {isBuySide ? (
+            {isBuySide ? (
+              <TouchableOpacity style={styles.assetSelector} onPress={onOpenSearch} activeOpacity={0.7} disabled={!onOpenSearch}>
                 <AssetIcon symbol={token.symbol} imageUrl={token.imageUrl} size={16} />
-              ) : receiveAsset === 'cash' ? (
-                <CashBadge chainKey={token.chainKey} size={16} />
-              ) : (
-                <NetworkIcon chainKey={token.chainKey} size={16} />
-              )}
-              <Text style={styles.assetSelectorText}>{receiveSymbol}</Text>
-              {(isBuySide || chainHasCash) && <Text style={styles.assetSelectorChevron}>⌄</Text>}
-            </TouchableOpacity>
+                <Text style={styles.assetSelectorText}>{receiveSymbol}</Text>
+                <Text style={styles.assetSelectorChevron}>⌄</Text>
+              </TouchableOpacity>
+            ) : (
+              // Sell always delivers proceeds as this wallet's one USDC
+              // balance — no "Receive as" toggle. The native-asset branch
+              // is the one real, disclosed gap: a chain with no verified
+              // cash address at all (receiveAsset's own declaration)
+              // still lands as native, honestly, not offered as a choice.
+              <View style={styles.assetSelector}>
+                {receiveAsset === 'cash' ? <CashBadge chainKey={token.chainKey} size={16} /> : <NetworkIcon chainKey={token.chainKey} size={16} />}
+                <Text style={styles.assetSelectorText}>{receiveSymbol}</Text>
+              </View>
+            )}
             {quoteLoading ? (
               <ActivityIndicator color={colors.textMuted} size="small" />
             ) : (
@@ -1043,6 +976,11 @@ export function TokenTradeScreen({
       {!isBuySide && tokenDecimalsError && <Text style={styles.errorText}>{tokenDecimalsError}</Text>}
       {!isBuySide && !tokenDecimalsError && tokenDecimals === null && amtNum > 0 && <Text style={styles.noteText}>Verifying this token…</Text>}
       {insufficientBalance && <Text style={styles.errorText}>Insufficient {paySymbol} balance</Text>}
+      {needsConsolidation && (
+        <Text style={styles.errorText}>
+          ${amtNum.toFixed(2)} needs more than one chain — you have ${payOriginChainBalance.toFixed(2)} available in a single transaction right now.
+        </Text>
+      )}
       {quoteError && <Text style={styles.errorText}>{quoteError}</Text>}
 
       <View style={styles.feeRow}>
@@ -1083,118 +1021,6 @@ export function TokenTradeScreen({
       {executeError && <Text style={styles.errorText}>{executeError}</Text>}
 
       <TradeSettingsSheet visible={settingsOpen} onClose={() => setSettingsOpen(false)} slippageBps={slippageBps} onSave={setSlippageBps} />
-
-      <Modal visible={showPayOriginPicker} transparent animationType="fade" onRequestClose={() => setShowPayOriginPicker(false)}>
-        <View style={styles.pickerBackdrop}>
-          <View style={styles.pickerCard}>
-            <View style={styles.pickerHeaderRow}>
-              <Text style={styles.pickerTitle}>Pay with</Text>
-              <TouchableOpacity onPress={() => setShowPayOriginPicker(false)} hitSlop={8}>
-                <Text style={styles.pickerClose}>Close</Text>
-              </TouchableOpacity>
-            </View>
-            <TouchableOpacity
-              style={styles.pickerRow}
-              activeOpacity={0.7}
-              onPress={() => {
-                manualPayOriginRef.current = true;
-                setPayOrigin({chainKey: token.chainKey, asset: 'native'});
-                setShowPayOriginPicker(false);
-              }}>
-              <NetworkIcon chainKey={token.chainKey} size={22} />
-              <Text style={styles.pickerRowText}>
-                {NATIVE_SYMBOL[token.chainKey]} on {CHAIN_LABEL[token.chainKey]}
-              </Text>
-              {payOrigin.chainKey === token.chainKey && payOrigin.asset === 'native' && <Text style={styles.pickerCheck}>✓</Text>}
-            </TouchableOpacity>
-
-            {/* Real cross-chain pay: same cash balances ProfileScreen's
-                own Deposit/Withdraw already fetches (cashPortfolio,
-                shared via this screen's own effect above) — pick any
-                chain actually holding cash (USDC almost everywhere,
-                USDG on Robinhood Chain — its own real stablecoin, not a
-                fabricated substitute) and Relay bridges+swaps it to the
-                token's own chain as part of the same quote. This is the
-                real fix for a wallet whose only funds are USDG on
-                Robinhood: before this, that balance couldn't fund a buy
-                on any other chain at all, even though Total Cash on
-                Profile already counted it as real spendable dollars.
-                Rows with nothing to spend stay visible (never hidden —
-                same "always show real state" rule this app holds to
-                elsewhere) but disabled, since picking one would just
-                fail on "insufficient balance" a moment later. */}
-            <Text style={styles.pickerSectionLabel}>Cash — pay from any chain you hold it on</Text>
-            {!cashPortfolio ? (
-              <ActivityIndicator color={colors.textMuted} style={styles.pickerLoading} />
-            ) : (
-              CASH_SUPPORTED_CHAINS.map(chainKey => {
-                const result = cashPortfolio.results.find(r => r.chainKey === chainKey);
-                const chainBalance = result?.status === 'ok' ? result.balance : 0;
-                const disabled = chainBalance <= 0;
-                const selected = payOrigin.chainKey === chainKey && payOrigin.asset === 'cash';
-                return (
-                  <TouchableOpacity
-                    key={chainKey}
-                    style={[styles.pickerRow, disabled && styles.pickerRowDisabled]}
-                    activeOpacity={0.7}
-                    disabled={disabled}
-                    onPress={() => {
-                      manualPayOriginRef.current = true;
-                      setPayOrigin({chainKey, asset: 'cash'});
-                      setShowPayOriginPicker(false);
-                    }}>
-                    <NetworkIcon chainKey={chainKey} size={22} />
-                    <Text style={styles.pickerRowText}>
-                      {CASH_ASSET_BY_CHAIN[chainKey] ?? 'USDC'} on {CHAIN_LABEL[chainKey]}
-                    </Text>
-                    <Text style={styles.pickerRowBalance}>${chainBalance.toFixed(2)}</Text>
-                    {selected && <Text style={styles.pickerCheck}>✓</Text>}
-                  </TouchableOpacity>
-                );
-              })
-            )}
-          </View>
-        </View>
-      </Modal>
-
-      <Modal visible={showReceiveAssetPicker} transparent animationType="fade" onRequestClose={() => setShowReceiveAssetPicker(false)}>
-        <View style={styles.pickerBackdrop}>
-          <View style={styles.pickerCard}>
-            <View style={styles.pickerHeaderRow}>
-              <Text style={styles.pickerTitle}>Receive as</Text>
-              <TouchableOpacity onPress={() => setShowReceiveAssetPicker(false)} hitSlop={8}>
-                <Text style={styles.pickerClose}>Close</Text>
-              </TouchableOpacity>
-            </View>
-            <TouchableOpacity
-              style={styles.pickerRow}
-              activeOpacity={0.7}
-              onPress={() => {
-                setReceiveAsset('native');
-                setShowReceiveAssetPicker(false);
-              }}>
-              <NetworkIcon chainKey={token.chainKey} size={22} />
-              <Text style={styles.pickerRowText}>
-                {NATIVE_SYMBOL[token.chainKey]} on {CHAIN_LABEL[token.chainKey]}
-              </Text>
-              {receiveAsset === 'native' && <Text style={styles.pickerCheck}>✓</Text>}
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.pickerRow}
-              activeOpacity={0.7}
-              onPress={() => {
-                setReceiveAsset('cash');
-                setShowReceiveAssetPicker(false);
-              }}>
-              <CashBadge chainKey={token.chainKey} size={22} />
-              <Text style={styles.pickerRowText}>
-                {CASH_ASSET_BY_CHAIN[token.chainKey] ?? 'USDC'} on {CHAIN_LABEL[token.chainKey]}
-              </Text>
-              {receiveAsset === 'cash' && <Text style={styles.pickerCheck}>✓</Text>}
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 }
@@ -1257,9 +1083,6 @@ function makeStyles(colors: Colors) {
       padding: 14,
     },
     cardLabel: {color: colors.textMuted, fontSize: 10, fontWeight: '700', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.6},
-    payOriginRow: {flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 8, marginTop: -4},
-    payOriginText: {color: colors.textSecondary, fontSize: 10.5, fontWeight: '600', flexShrink: 1},
-    payOriginChevron: {color: colors.textMuted, fontSize: 10, fontWeight: '700'},
     payReceiveRow: {flexDirection: 'row', gap: 8, marginTop: 12},
     payReceiveCard: {flex: 1, padding: 12},
     prMainRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6},
@@ -1343,26 +1166,5 @@ function makeStyles(colors: Colors) {
     executeHashText: {color: colors.textMuted, fontSize: 11, fontFamily: 'monospace'},
     executeWarningText: {color: colors.warning, fontSize: 10.5, textAlign: 'center', marginTop: 2},
 
-    pickerBackdrop: {flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)'},
-    pickerCard: {backgroundColor: colors.bg, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: 36, maxHeight: '75%'},
-    pickerHeaderRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14},
-    pickerTitle: {color: colors.textPrimary, fontSize: 18, fontWeight: '800'},
-    pickerClose: {color: colors.textMuted, fontSize: 13, fontWeight: '600'},
-    pickerSectionLabel: {color: colors.textMuted, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 14, marginBottom: 8},
-    pickerRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 10,
-      backgroundColor: colors.panel,
-      borderRadius: 14,
-      paddingHorizontal: 14,
-      paddingVertical: 12,
-      marginBottom: 8,
-    },
-    pickerRowDisabled: {opacity: 0.4},
-    pickerRowText: {flex: 1, color: colors.textPrimary, fontSize: 14, fontWeight: '700'},
-    pickerRowBalance: {color: colors.textMuted, fontSize: 12.5, fontWeight: '600'},
-    pickerCheck: {color: colors.navActive, fontSize: 15, fontWeight: '800', marginLeft: 4},
-    pickerLoading: {marginVertical: 14},
   });
 }
