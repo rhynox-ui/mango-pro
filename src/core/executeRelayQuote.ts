@@ -33,6 +33,7 @@ import {createPublicClient, createWalletClient} from 'viem';
 import {privateKeyToAccount} from 'viem/accounts';
 import {transportFor, viemChainForChainId} from './chainRegistry.ts';
 import {assertQuoteSafeToSign} from './txIntentFirewall.ts';
+import {assertSolanaTransactionMatchesIntent} from './solanaTxIntent.ts';
 import {intentForQuote, type RelayQuote, type RelayTransactionStepItem} from './relayQuote.ts';
 import type {DerivedAccounts} from '../wallet/keys';
 
@@ -192,7 +193,7 @@ async function sendRelayEvmStepViaParticle(evmAddress: `0x${string}`, publicClie
  * direct landed-check) for the well-documented case where a public
  * RPC's own simulation snapshot lags the real cluster by a moment.
  */
-async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secretKeyBase58: string): Promise<string> {
+async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secretKeyBase58: string): Promise<{signature: string; warnings: string[]}> {
   const [{Connection, Keypair, PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction}, bs58Module] = await Promise.all([import('@solana/web3.js'), import('bs58')]);
   const bs58 = bs58Module.default;
   const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
@@ -213,6 +214,16 @@ async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secret
   const {blockhash} = await connection.getLatestBlockhash('confirmed');
   const message = new TransactionMessage({payerKey: keypair.publicKey, instructions, recentBlockhash: blockhash}).compileToV0Message(lookupTables);
   const transaction = new VersionedTransaction(message);
+
+  // Real Solana pre-sign check (solanaTxIntent.ts) — was ported into
+  // this repo but never actually called from the live signing path
+  // (confirmed while auditing this file: no import of it existed here
+  // at all). Runs on the exact object about to be signed, so a fee
+  // payer that somehow isn't this wallet, or a hidden SPL Approve/
+  // SetAuthority/CloseAccount instruction bundled into the swap, is
+  // caught here instead of silently signed.
+  const solanaWarnings = assertSolanaTransactionMatchesIntent(transaction, {expectedSigner: keypair.publicKey.toBase58()});
+
   transaction.sign([keypair]);
   const signature = bs58.encode(transaction.signatures[0]);
 
@@ -246,7 +257,8 @@ async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secret
     }
     try {
       await connection.sendRawTransaction(transaction.serialize(), {skipPreflight: true});
-      return await confirmOrTagError();
+      const confirmedSignature = await confirmOrTagError();
+      return {signature: confirmedSignature, warnings: solanaWarnings};
     } catch {
       // The retry itself failed to submit — fall through to a direct
       // landed-check rather than trusting the simulation's rejection.
@@ -263,7 +275,7 @@ async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secret
       throw err;
     }
   }
-  return confirmOrTagError();
+  return {signature: await confirmOrTagError(), warnings: solanaWarnings};
 }
 
 /**
@@ -275,7 +287,7 @@ async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secret
  * separate from the local-signing function above — zero risk of this
  * path changing behavior for the existing, already-relied-on one.
  */
-async function signAndSendRelaySolanaStepViaParticle(item: RelayTransactionStepItem, solanaAddress: string): Promise<string> {
+async function signAndSendRelaySolanaStepViaParticle(item: RelayTransactionStepItem, solanaAddress: string): Promise<{signature: string; warnings: string[]}> {
   const {Connection, PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction} = await import('@solana/web3.js');
   const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
   const payerKey = new PublicKey(solanaAddress);
@@ -295,6 +307,11 @@ async function signAndSendRelaySolanaStepViaParticle(item: RelayTransactionStepI
   const {blockhash} = await connection.getLatestBlockhash('confirmed');
   const message = new TransactionMessage({payerKey, instructions, recentBlockhash: blockhash}).compileToV0Message(lookupTables);
   const transaction = new VersionedTransaction(message);
+
+  // Same real pre-sign check as the local-signing path above, run on
+  // the exact object about to be serialized and handed to Particle.
+  const solanaWarnings = assertSolanaTransactionMatchesIntent(transaction, {expectedSigner: solanaAddress});
+
   const serialized = transaction.serialize();
 
   // Dynamic import, not a static one — see sendRelayEvmStepViaParticle's
@@ -313,7 +330,7 @@ async function signAndSendRelaySolanaStepViaParticle(item: RelayTransactionStepI
         (error as {signature?: string}).signature = signature;
         throw error;
       }
-      if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') return signature;
+      if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') return {signature, warnings: solanaWarnings};
     }
     if (Date.now() >= deadline) throw new Error(`Timed out waiting for transaction ${signature} to confirm.`);
     await new Promise(r => setTimeout(r, 1200));
@@ -367,10 +384,14 @@ export async function executeRelayQuote(quote: RelayQuote, session: DerivedAccou
 
   for (const item of pendingItems) {
     if (isSolanaShaped(item)) {
-      const signature = isGoogleSession
+      const {signature, warnings: solanaStepWarnings} = isGoogleSession
         ? await signAndSendRelaySolanaStepViaParticle(item, session.solana.address)
         : await signAndSendRelaySolanaStep(item, session.solana.privateKey);
       txHashes.push(signature);
+      for (const warning of solanaStepWarnings) {
+        console.warn(`[solanaTxIntent] ${warning}`);
+      }
+      warnings.push(...solanaStepWarnings);
       continue;
     }
     const chainId = item.data?.chainId;
