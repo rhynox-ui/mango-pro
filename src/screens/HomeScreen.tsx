@@ -31,11 +31,12 @@
 
 import {useEffect, useMemo, useRef, useState} from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {ActivityIndicator, FlatList, Image, Keyboard, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {ActivityIndicator, FlatList, Image, Keyboard, Linking, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import {FilterIcon, GearIcon, StarIcon} from '../components/icons';
 import {FloatingMangoDecor} from '../components/FloatingMangoDecor';
 import {fetchGraduatedTokens, fetchBondingTokens, fetchTrendingTokens, type DiscoveryToken} from '../core/discoveryFeed';
 import {CHAIN_LABEL, type ChainKey} from '../core/chainData';
+import {fetchNewsFeed, type NewsArticle} from '../core/newsFeed';
 import {fetchUsdcPortfolio, type UsdcPortfolio} from '../core/usdcBalances';
 import {getWatchlist, subscribeWatchlist, toggleWatchlist} from '../wallet/watchlist';
 import {useSession} from '../wallet/SessionContext';
@@ -52,7 +53,8 @@ const MANGO_MARK = require('../assets/mango-mark.png');
 
 const TOKEN_FILTERS = ['Trending', 'Most held', 'Graduated', 'Bonding'] as const;
 type TokenFilter = (typeof TOKEN_FILTERS)[number];
-type DiscoveryTab = 'watchlist' | 'tokens';
+type DiscoveryTab = 'watchlist' | 'tokens' | 'news';
+type HomeListItem = {kind: 'token'; token: DiscoveryToken} | {kind: 'article'; article: NewsArticle};
 
 // Real client-side sort over whichever list is already on screen — every
 // field here (marketCapUsd, change24h) is real data discoveryFeed.ts
@@ -254,6 +256,10 @@ export function HomeScreen({
   // nothing to write back before there's anything real to save).
   const [filterPrefsHydrated, setFilterPrefsHydrated] = useState(false);
   const prevFilterRef = useRef<TokenFilter | null>(null);
+  const [newsArticles, setNewsArticles] = useState<NewsArticle[]>([]);
+  const [newsLoading, setNewsLoading] = useState(true);
+  const [newsError, setNewsError] = useState<string | null>(null);
+  const [newsRefreshToken, setNewsRefreshToken] = useState(0);
 
   useEffect(() => subscribeWatchlist(setWatchlist), []);
 
@@ -344,6 +350,37 @@ export function HomeScreen({
     };
   }, [filter, refreshToken]);
 
+  // Fetched lazily (only once the News tab is actually opened, not on
+  // every Home mount) — three RSS feeds is real bandwidth a user who
+  // never taps News shouldn't pay for. "Automatic" means no manual
+  // configuration or API key, and a live re-fetch every 5 minutes while
+  // the tab stays open (matching newsFeed.ts's own cache TTL, so this
+  // never fetches more often than the cache would actually serve
+  // anything new) — not a one-time load that goes stale.
+  useEffect(() => {
+    if (tab !== 'news') return;
+    let cancelled = false;
+    setNewsLoading(true);
+    setNewsError(null);
+    fetchNewsFeed().then(result => {
+      if (cancelled) return;
+      setNewsArticles(result.articles);
+      setNewsError(result.error);
+      setNewsLoading(false);
+    });
+    const interval = setInterval(() => {
+      fetchNewsFeed().then(result => {
+        if (cancelled) return;
+        setNewsArticles(result.articles);
+        setNewsError(result.error);
+      });
+    }, 5 * 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [tab, newsRefreshToken]);
+
   const unsortedListData = tab === 'watchlist' ? watchlist : tokens;
 
   // Real counts per chain actually present in this list right now — never
@@ -377,17 +414,31 @@ export function HomeScreen({
   // one-time snapshot.
   const watchlistKeys = useMemo(() => new Set(watchlist.map(t => `${t.chainKey}:${t.tokenAddress.toLowerCase()}`)), [watchlist]);
 
+  // One FlatList for all three tabs (keeps the shared portfolio header +
+  // tab row in a single ListHeaderComponent instead of duplicating it
+  // across separate lists) — News rows are structurally nothing like a
+  // DiscoveryToken, so this switches the whole list's data/rendering by
+  // kind rather than pretending an article is a token.
+  const homeListData: HomeListItem[] = useMemo(
+    () => (tab === 'news' ? newsArticles.map(article => ({kind: 'article' as const, article})) : listData.map(token => ({kind: 'token' as const, token}))),
+    [tab, newsArticles, listData],
+  );
+
   return (
     <>
     <FlatList
       style={styles.screen}
       contentContainerStyle={styles.listContent}
-      data={listData}
+      data={homeListData}
       extraData={watchlistKeys}
-      keyExtractor={item => `${item.chainKey}:${item.tokenAddress}`}
-      renderItem={({item}) => (
-        <TokenRow token={item} colors={colors} onPress={onSelectToken} starred={watchlistKeys.has(`${item.chainKey}:${item.tokenAddress.toLowerCase()}`)} />
-      )}
+      keyExtractor={item => (item.kind === 'token' ? `${item.token.chainKey}:${item.token.tokenAddress}` : `article:${item.article.id}`)}
+      renderItem={({item}) =>
+        item.kind === 'token' ? (
+          <TokenRow token={item.token} colors={colors} onPress={onSelectToken} starred={watchlistKeys.has(`${item.token.chainKey}:${item.token.tokenAddress.toLowerCase()}`)} />
+        ) : (
+          <NewsRow article={item.article} colors={colors} />
+        )
+      }
       ListHeaderComponent={
         <>
           <View style={styles.portfolioHeader}>
@@ -410,6 +461,10 @@ export function HomeScreen({
               <TouchableOpacity style={styles.discoveryTab} onPress={() => setTab('tokens')} activeOpacity={0.7}>
                 <Text style={[styles.discoveryTabText, tab === 'tokens' && styles.discoveryTabTextActive]}>Tokens</Text>
                 {tab === 'tokens' && <View style={styles.discoveryTabIndicator} />}
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.discoveryTab} onPress={() => setTab('news')} activeOpacity={0.7}>
+                <Text style={[styles.discoveryTabText, tab === 'news' && styles.discoveryTabTextActive]}>News</Text>
+                {tab === 'news' && <View style={styles.discoveryTabIndicator} />}
               </TouchableOpacity>
             </View>
             {onOpenDeposit && (
@@ -509,6 +564,27 @@ export function HomeScreen({
             <View style={styles.stateBlock}>
               <FloatingMangoDecor />
               <Text style={styles.stateText}>Nothing on your watchlist yet — tap the star on any token to add it.</Text>
+            </View>
+          )}
+
+          {tab === 'news' && newsLoading && (
+            <View style={styles.stateBlock}>
+              <ActivityIndicator color={colors.textMuted} />
+            </View>
+          )}
+          {tab === 'news' && !newsLoading && newsError && newsArticles.length === 0 && (
+            <View style={styles.stateBlock}>
+              <FloatingMangoDecor />
+              <Text style={styles.stateText}>Couldn't load news — {newsError}</Text>
+              <TouchableOpacity onPress={() => setNewsRefreshToken(t => t + 1)} activeOpacity={0.7}>
+                <Text style={styles.stateRetry}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          {tab === 'news' && !newsLoading && !newsError && newsArticles.length === 0 && (
+            <View style={styles.stateBlock}>
+              <FloatingMangoDecor />
+              <Text style={styles.stateText}>No news right now — check back shortly.</Text>
             </View>
           )}
         </>
@@ -676,6 +752,48 @@ function TokenRow({
   );
 }
 
+// Same relative-time convention HistoryScreen.tsx's own formatWhen uses
+// — kept as its own small local copy rather than importing across
+// screens for one function, same reasoning already established
+// elsewhere in this codebase (see ProfileScreen.tsx's own formatWhen).
+function formatNewsTime(timestamp: number | null): string {
+  if (timestamp == null) return '';
+  const diffMs = Date.now() - timestamp;
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function NewsRow({article, colors}: {article: NewsArticle; colors: Colors}) {
+  const styles = makeStyles(colors);
+  const [imageFailed, setImageFailed] = useState(false);
+
+  return (
+    <TouchableOpacity style={styles.newsRow} activeOpacity={0.6} onPress={() => Linking.openURL(article.link)}>
+      {article.imageUrl && !imageFailed ? (
+        <Image source={{uri: article.imageUrl}} style={styles.newsThumb} onError={() => setImageFailed(true)} />
+      ) : (
+        <View style={styles.newsThumbFallback}>
+          <Image source={MANGO_MARK} style={styles.newsThumbFallbackImage} resizeMode="contain" />
+        </View>
+      )}
+      <View style={styles.newsInfo}>
+        <Text style={styles.newsTitle} numberOfLines={2}>
+          {article.title}
+        </Text>
+        <Text style={styles.newsMeta}>
+          {article.source}
+          {article.publishedAt != null ? ` · ${formatNewsTime(article.publishedAt)}` : ''}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
 function makeStyles(colors: Colors) {
   return StyleSheet.create({
     screen: {flex: 1},
@@ -797,6 +915,22 @@ function makeStyles(colors: Colors) {
     tokenPrice: {color: colors.textPrimary, fontSize: 15.5, fontWeight: '700'},
     tokenChange: {fontSize: 12.5, fontWeight: '700'},
     starButton: {paddingLeft: 4},
+
+    newsRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingHorizontal: 16,
+      paddingVertical: 14,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.divider,
+    },
+    newsThumb: {width: 64, height: 64, borderRadius: 10, backgroundColor: colors.pillBg},
+    newsThumbFallback: {width: 64, height: 64, borderRadius: 10, backgroundColor: colors.pillBg, alignItems: 'center', justifyContent: 'center'},
+    newsThumbFallbackImage: {width: 28, height: 28, opacity: 0.5},
+    newsInfo: {flex: 1, minWidth: 0, gap: 4},
+    newsTitle: {color: colors.textPrimary, fontSize: 14.5, fontWeight: '700', lineHeight: 19},
+    newsMeta: {color: colors.textMuted, fontSize: 12},
 
     sortBackdrop: {flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 24},
     sortCard: {

@@ -36,6 +36,7 @@
     "bn.js": "^5.2.5",
     "bs58": "^6.0.0",
     "buffer": "^6.0.3",
+    "fast-xml-parser": "^5.11.1",
     "react": "19.2.3",
     "react-native": "0.87.0",
     "react-native-get-random-values": "^2.0.0",
