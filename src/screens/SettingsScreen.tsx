@@ -160,21 +160,25 @@ export function SettingsScreen({
     // Diagnostic only, only meaningful for a Google-login session (see
     // this row's own destination screen for why) — a local seed-phrase
     // session already signs Solana transactions directly and has
-    // nothing to prove here. __DEV__-gated on top of that: this is real
-    // developer tooling for an unverified path (particleSigning.ts's own
-    // header — Google-session Solana signing shipped ahead of a
-    // real-device proof), not something an end user on a release build
-    // should see in their own Settings. Kept, not deleted, so it's still
-    // reachable from a debug build if that verification is ever done.
-    ...(__DEV__ && session?.authMethod === 'google'
+    // nothing to prove here. NOT __DEV__-gated: this repo's own CI
+    // (android-debug-apk.yml) only ever builds the release variant —
+    // its JS bundle always has __DEV__ === false, so a __DEV__ gate here
+    // would make this permanently unreachable on the one kind of build
+    // this project's pipeline actually produces. The workflow's own
+    // header already frames every one of its APKs as "a sideloaded test
+    // build," so keeping real diagnostic tooling reachable there is the
+    // point, not a leak into a polished consumer release that doesn't
+    // exist yet.
+    ...(session?.authMethod === 'google'
       ? [{key: 'solana-devnet-test', label: 'Solana signing test (devnet)', Icon: RepeatIcon, onPress: () => setShowSolanaDevnetTest(true)}]
       : []),
     // Diagnostic only — proves the EIP-7702/Pimlico gasless-trading path
     // (smartAccount.ts) on Base Sepolia before it's trusted with real
     // trades. Seed-phrase sessions only for now: the test signs a real
     // 7702 authorization, which smartAccount.ts doesn't yet support for
-    // Google/Particle sessions.
-    ...(__DEV__ && session && session.evm.privateKey.length > 0
+    // Google/Particle sessions. Same not-__DEV__-gated reasoning as the
+    // Solana test row above.
+    ...(session && session.evm.privateKey.length > 0
       ? [{key: 'eip7702-test', label: 'Gasless trading test (testnet)', Icon: RepeatIcon, onPress: () => setShowEip7702Test(true)}]
       : []),
     {key: 'legal', label: 'Legal and Privacy', Icon: ScaleIcon, onPress: () => Linking.openURL(PRIVACY_POLICY_URL)},
