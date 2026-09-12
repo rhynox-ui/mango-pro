@@ -242,6 +242,25 @@ export function TokenTradeScreen({
   }, [token]);
   const crossChainPay = isBuySide && (payOrigin.chainKey !== token.chainKey || payOrigin.asset !== 'native');
 
+  // Sell-side counterpart to payOrigin: what a sell's proceeds land as.
+  // Real gap this closes — Buy already defaults to spending USDC
+  // wherever this wallet holds it (the effect above), but Sell always
+  // converted to the chain's native asset with no way to choose
+  // otherwise, so a sale's proceeds never actually joined the "one USDC
+  // balance across chains" this app's own Profile screen is built
+  // around. Defaults to USDC when the token's own chain actually has a
+  // verified USDC address (USDC_SUPPORTED_CHAINS) — same honesty rule
+  // as everywhere else this app checks that list — and to native
+  // otherwise (no fabricated option on a chain with no real USDC).
+  // Always same-chain (token.chainKey): unlike a cross-chain Buy, there
+  // is no reason to receive a sale's proceeds on a DIFFERENT chain than
+  // the token was sold on.
+  const [receiveAsset, setReceiveAsset] = useState<'native' | 'USDC'>(USDC_SUPPORTED_CHAINS.includes(token.chainKey) ? 'USDC' : 'native');
+  const [showReceiveAssetPicker, setShowReceiveAssetPicker] = useState(false);
+  useEffect(() => {
+    setReceiveAsset(USDC_SUPPORTED_CHAINS.includes(token.chainKey) ? 'USDC' : 'native');
+  }, [token]);
+
   // Same real, live aggregator ProfileScreen's own "Total Cash" already
   // uses — reused here rather than re-derived, so this screen's own
   // portfolio figure can never quietly drift from the one on Profile.
@@ -285,7 +304,7 @@ export function TokenTradeScreen({
   // paySymbol reflects payOrigin's own choice on Buy (the token's own
   // chain and native asset on Sell — unchanged, no origin to pick there).
   const paySymbol = isBuySide ? (payOrigin.asset === 'native' ? NATIVE_SYMBOL[payOrigin.chainKey] : 'USDC') : token.symbol;
-  const receiveSymbol = isBuySide ? token.symbol : NATIVE_SYMBOL[token.chainKey];
+  const receiveSymbol = isBuySide ? token.symbol : receiveAsset === 'USDC' ? 'USDC' : NATIVE_SYMBOL[token.chainKey];
   const amtNum = Number(amount) || 0;
 
   // Real USD value of what's actually being paid on Buy — USDC is
@@ -509,6 +528,13 @@ export function TokenTradeScreen({
       const userAddress = originIsSolana ? session.solana.address : session.evm.address;
       const recipientAddress = solana ? session.solana.address : session.evm.address;
       const nativeCurrency = currencyAddress(token.chainKey, NATIVE_SYMBOL[token.chainKey]);
+      // Sell's own receive-asset choice — USDC when the user picked it
+      // (and this chain actually has a verified USDC address; see
+      // receiveAsset's own declaration for why the default already
+      // guarantees that), native otherwise. Always the token's own
+      // chain — see receiveAsset's own comment for why this never
+      // bridges chains the way a cross-chain Buy's payOrigin can.
+      const sellReceiveCurrency = receiveAsset === 'USDC' ? currencyAddress(token.chainKey, 'USDC') : nativeCurrency;
       const originCurrency = isBuySide
         ? payOrigin.asset === 'native'
           ? currencyAddress(payOrigin.chainKey, NATIVE_SYMBOL[payOrigin.chainKey])
@@ -518,7 +544,7 @@ export function TokenTradeScreen({
         fromChainKey: isBuySide ? payOrigin.chainKey : token.chainKey,
         toChainKey: token.chainKey,
         originCurrency,
-        destinationCurrency: isBuySide ? token.address : nativeCurrency,
+        destinationCurrency: isBuySide ? token.address : sellReceiveCurrency,
         amountBaseUnits,
         userAddress,
         recipientAddress,
@@ -534,9 +560,12 @@ export function TokenTradeScreen({
           // Only used if Relay's own response omits currency.decimals on
           // the receiving side (summarizeQuote's own doc comment) — the
           // receiving side is the token on Buy (tokenDecimals, already
-          // fetched above) or the chain's native asset on Sell (known
-          // statically), so this fallback is real either way, not a guess.
-          const receiveDecimalsFallback = isBuySide ? (tokenDecimals ?? 18) : (assetDecimalsForChain(token.chainKey, NATIVE_SYMBOL[token.chainKey]) ?? 18);
+          // fetched above) or whichever asset receiveAsset points at on
+          // Sell (known statically either way), so this fallback is real
+          // either way, not a guess.
+          const receiveDecimalsFallback = isBuySide
+            ? (tokenDecimals ?? 18)
+            : (assetDecimalsForChain(token.chainKey, receiveAsset === 'USDC' ? 'USDC' : NATIVE_SYMBOL[token.chainKey]) ?? 18);
           setQuote(summarizeQuote(q, receiveDecimalsFallback));
           setQuoteLoading(false);
         })
@@ -569,11 +598,13 @@ export function TokenTradeScreen({
             setQuoteError(relayErrorMessage);
             return;
           }
-          const receiveDecimalsFallback = isBuySide ? (tokenDecimals ?? 18) : (assetDecimalsForChain(token.chainKey, NATIVE_SYMBOL[token.chainKey]) ?? 18);
+          const receiveDecimalsFallback = isBuySide
+            ? (tokenDecimals ?? 18)
+            : (assetDecimalsForChain(token.chainKey, receiveAsset === 'USDC' ? 'USDC' : NATIVE_SYMBOL[token.chainKey]) ?? 18);
           const fallbackParams: FallbackRouteParams = {
             chainKey: token.chainKey,
             sellToken: originCurrency,
-            buyToken: isBuySide ? token.address : nativeCurrency,
+            buyToken: isBuySide ? token.address : sellReceiveCurrency,
             sellAmount: amountBaseUnits,
             takerAddress: userAddress,
             originAmountUsd,
@@ -612,7 +643,7 @@ export function TokenTradeScreen({
         });
     }, QUOTE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [isBuySide, amount, amtNum, session, token, tokenDecimals, slippageBps, originAmountUsd, payOrigin, originIsSolana, solana]);
+  }, [isBuySide, amount, amtNum, session, token, tokenDecimals, slippageBps, originAmountUsd, payOrigin, originIsSolana, solana, receiveAsset]);
 
   // Flipping side changes which balance the pay card is even reading
   // (native vs. the searched token) — any preset percentage of the OLD
@@ -743,6 +774,8 @@ export function TokenTradeScreen({
         : quoteLoading
           ? 'Finding the best route…'
           : null;
+
+  const chainHasUsdc = USDC_SUPPORTED_CHAINS.includes(token.chainKey);
 
   return (
     <View style={styles.screen}>
@@ -904,10 +937,20 @@ export function TokenTradeScreen({
         <View style={[styles.card, styles.payReceiveCard]}>
           <Text style={styles.cardLabel}>You receive</Text>
           <View style={styles.prMainRow}>
-            <TouchableOpacity style={styles.assetSelector} onPress={onOpenSearch} activeOpacity={0.7} disabled={!onOpenSearch}>
-              {isBuySide ? <AssetIcon symbol={token.symbol} imageUrl={token.imageUrl} size={16} /> : <NetworkIcon chainKey={token.chainKey} size={16} />}
+            <TouchableOpacity
+              style={styles.assetSelector}
+              onPress={isBuySide ? onOpenSearch : () => setShowReceiveAssetPicker(true)}
+              activeOpacity={0.7}
+              disabled={isBuySide ? !onOpenSearch : !chainHasUsdc}>
+              {isBuySide ? (
+                <AssetIcon symbol={token.symbol} imageUrl={token.imageUrl} size={16} />
+              ) : receiveAsset === 'USDC' ? (
+                <UsdcBadge size={16} />
+              ) : (
+                <NetworkIcon chainKey={token.chainKey} size={16} />
+              )}
               <Text style={styles.assetSelectorText}>{receiveSymbol}</Text>
-              <Text style={styles.assetSelectorChevron}>⌄</Text>
+              {(isBuySide || chainHasUsdc) && <Text style={styles.assetSelectorChevron}>⌄</Text>}
             </TouchableOpacity>
             {quoteLoading ? (
               <ActivityIndicator color={colors.textMuted} size="small" />
@@ -1026,6 +1069,43 @@ export function TokenTradeScreen({
                 );
               })
             )}
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showReceiveAssetPicker} transparent animationType="fade" onRequestClose={() => setShowReceiveAssetPicker(false)}>
+        <View style={styles.pickerBackdrop}>
+          <View style={styles.pickerCard}>
+            <View style={styles.pickerHeaderRow}>
+              <Text style={styles.pickerTitle}>Receive as</Text>
+              <TouchableOpacity onPress={() => setShowReceiveAssetPicker(false)} hitSlop={8}>
+                <Text style={styles.pickerClose}>Close</Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              style={styles.pickerRow}
+              activeOpacity={0.7}
+              onPress={() => {
+                setReceiveAsset('native');
+                setShowReceiveAssetPicker(false);
+              }}>
+              <NetworkIcon chainKey={token.chainKey} size={22} />
+              <Text style={styles.pickerRowText}>
+                {NATIVE_SYMBOL[token.chainKey]} on {CHAIN_LABEL[token.chainKey]}
+              </Text>
+              {receiveAsset === 'native' && <Text style={styles.pickerCheck}>✓</Text>}
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.pickerRow}
+              activeOpacity={0.7}
+              onPress={() => {
+                setReceiveAsset('USDC');
+                setShowReceiveAssetPicker(false);
+              }}>
+              <UsdcBadge size={22} />
+              <Text style={styles.pickerRowText}>USDC on {CHAIN_LABEL[token.chainKey]}</Text>
+              {receiveAsset === 'USDC' && <Text style={styles.pickerCheck}>✓</Text>}
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
