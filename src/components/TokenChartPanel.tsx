@@ -21,13 +21,20 @@
 // theme) so it matches whichever mode the app is in.
 
 import {useEffect, useMemo, useState} from 'react';
-import {ActivityIndicator, Modal, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
+import {ActivityIndicator, Linking, Modal, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {WebView} from 'react-native-webview';
 import type {ShouldStartLoadRequest} from 'react-native-webview/lib/WebViewTypes';
 import {MAINNET_CHAIN_IDS, type ChainKey} from '../core/chainData';
-import {dexScreenerEmbedUrl, resolveDexScreenerPair} from '../core/dexScreener';
+import {dexScreenerEmbedUrl, resolveDexScreenerPair, type TokenSocialLink} from '../core/dexScreener';
 import {checkSolanaTokenSecurity, checkTokenSecurity, type TokenSecuritySummary} from '../core/goplusTokenSecurity';
+import {GlobeIcon, TelegramIcon, XIcon, type IconComponent} from './icons';
 import {useTheme, type Colors} from '../theme/ThemeContext';
+
+const SOCIAL_ICON_BY_KIND: Record<TokenSocialLink['kind'], IconComponent> = {
+  x: XIcon,
+  telegram: TelegramIcon,
+  website: GlobeIcon,
+};
 
 const CHART_BG = '#0B0B0D';
 const CHART_AXIS_TEXT = '#7A7A80';
@@ -42,7 +49,7 @@ export function TokenChartPanel({chainKey, tokenAddress}: {chainKey: ChainKey; t
   const {colors} = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
 
-  const [pair, setPair] = useState<{chainId: string; pairAddress: string} | null>(null);
+  const [pair, setPair] = useState<{chainId: string; pairAddress: string; socialLinks: TokenSocialLink[]} | null>(null);
   const [resolving, setResolving] = useState(true);
   const [security, setSecurity] = useState<TokenSecuritySummary | null>(null);
   const [holdersOpen, setHoldersOpen] = useState(false);
@@ -100,13 +107,33 @@ export function TokenChartPanel({chainKey, tokenAddress}: {chainKey: ChainKey; t
     return /^https:\/\/([a-z0-9-]+\.)*dexscreener\.com\//i.test(request.url);
   }
 
+  const socialLinks = pair?.socialLinks ?? [];
+
   return (
     <View style={styles.wrap}>
-      {(holderCount != null || hasHolders) && (
+      {(holderCount != null || hasHolders || socialLinks.length > 0) && (
         <View style={styles.holdersRow}>
-          <TouchableOpacity style={styles.holdersButton} onPress={() => setHoldersOpen(true)} activeOpacity={0.7}>
-            <Text style={styles.holdersButtonText}>{holderCount != null ? `Holders ${fmtCompact(holderCount)}` : 'Top holders'} ▾</Text>
-          </TouchableOpacity>
+          <View style={styles.socialLinksRow}>
+            {/* Real DexScreener data (info.socials/websites off the same
+                highest-liquidity pair already trusted for the chart) —
+                never a guessed or fabricated link. Only kinds this app
+                has an icon for (X, Telegram, one website) show up; a
+                token with none renders an empty row, same as having no
+                Holders data. */}
+            {socialLinks.map(link => {
+              const Icon = SOCIAL_ICON_BY_KIND[link.kind];
+              return (
+                <TouchableOpacity key={link.kind} style={styles.socialIconButton} onPress={() => Linking.openURL(link.url)} activeOpacity={0.7}>
+                  <Icon color={colors.textSecondary} size={15} />
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          {(holderCount != null || hasHolders) && (
+            <TouchableOpacity style={styles.holdersButton} onPress={() => setHoldersOpen(true)} activeOpacity={0.7}>
+              <Text style={styles.holdersButtonText}>{holderCount != null ? `Holders ${fmtCompact(holderCount)}` : 'Top holders'} ▾</Text>
+            </TouchableOpacity>
+          )}
         </View>
       )}
 
@@ -188,7 +215,9 @@ export function TokenChartPanel({chainKey, tokenAddress}: {chainKey: ChainKey; t
 function makeStyles(colors: Colors) {
   return StyleSheet.create({
     wrap: {flex: 1, minHeight: 390, overflow: 'hidden'},
-    holdersRow: {flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 6},
+    holdersRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6},
+    socialLinksRow: {flexDirection: 'row', alignItems: 'center', gap: 6},
+    socialIconButton: {backgroundColor: colors.pillBg, borderRadius: 999, width: 26, height: 26, alignItems: 'center', justifyContent: 'center'},
     holdersButton: {backgroundColor: colors.pillBg, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5},
     holdersButtonText: {color: colors.textPrimary, fontSize: 10.5, fontWeight: '700'},
     chartArea: {

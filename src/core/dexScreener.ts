@@ -48,7 +48,7 @@ export function chainKeyForDexScreenerChainId(dexScreenerChainId: string): Chain
   return reverseChainIds.get(dexScreenerChainId) ?? null;
 }
 
-export type ResolvedPair = {chainId: string; pairAddress: string};
+export type ResolvedPair = {chainId: string; pairAddress: string; socialLinks: TokenSocialLink[]};
 
 // The handful of fields this app actually reads off a DexScreener API
 // pair object — not the full response shape, just enough to type-check
@@ -67,7 +67,35 @@ export type DexScreenerPair = {
   txns?: {h24?: {buys?: number; sells?: number}};
   /** Unix ms — DexScreener's own "when this pair was created" field, used as this token's listed age. */
   pairCreatedAt?: number;
+  info?: {imageUrl?: string; websites?: {label?: string; url?: string}[]; socials?: {type?: string; url?: string}[]};
 };
+
+export type TokenSocialLink = {kind: 'x' | 'telegram' | 'website'; url: string};
+
+/** DexScreener's own info.socials `type` strings, as actually seen on real pairs — 'twitter' still (never renamed to 'x' in their API despite the platform rename). Anything else (discord, medium, ...) has no icon in this row and is left out rather than guessed into the wrong bucket. */
+function socialKindFor(type: string | undefined): 'x' | 'telegram' | null {
+  if (type === 'twitter' || type === 'x') return 'x';
+  if (type === 'telegram') return 'telegram';
+  return null;
+}
+
+/** One link per kind, first-seen-wins — DexScreener can list more than one of the same social type on a fake/duplicate submission, and a dedicated row here has room for one icon per kind, not a scrollable list. Never fabricates a link a pair doesn't actually carry. */
+function extractSocialLinks(pair: DexScreenerPair | undefined): TokenSocialLink[] {
+  const links: TokenSocialLink[] = [];
+  const seen = new Set<string>();
+  const add = (kind: TokenSocialLink['kind'], url: string | undefined) => {
+    if (!url || seen.has(kind)) return;
+    seen.add(kind);
+    links.push({kind, url});
+  };
+  for (const social of pair?.info?.socials ?? []) {
+    const kind = socialKindFor(social?.type);
+    if (kind) add(kind, social?.url);
+  }
+  const website = pair?.info?.websites?.find(w => typeof w?.url === 'string' && w.url);
+  add('website', website?.url);
+  return links;
+}
 
 /**
  * Finds the deepest real DexScreener pair for a token on one chain.
@@ -86,7 +114,7 @@ export async function resolveDexScreenerPair({chainKey, tokenAddress}: {chainKey
     if (!response.ok) return null;
     const body = (await response.json()) as {pairs?: DexScreenerPair[]};
     const pairs = Array.isArray(body?.pairs) ? body.pairs : [];
-    let best: string | null = null;
+    let best: DexScreenerPair | null = null;
     let bestLiquidity = -1;
     for (const pair of pairs) {
       if (pair?.chainId !== chainId) continue;
@@ -95,10 +123,14 @@ export async function resolveDexScreenerPair({chainKey, tokenAddress}: {chainKey
       const ranked = Number.isFinite(liquidity) ? liquidity : 0;
       if (ranked > bestLiquidity) {
         bestLiquidity = ranked;
-        best = pair.pairAddress;
+        best = pair;
       }
     }
-    return best ? {chainId, pairAddress: best} : null;
+    // Social links come off this SAME winning pair, not a second lookup —
+    // the highest-liquidity pair is already the one this app trusts for
+    // price/chart data, so its own info.socials/websites is the same
+    // trust boundary, not a new one.
+    return best ? {chainId, pairAddress: best.pairAddress as string, socialLinks: extractSocialLinks(best)} : null;
   } catch {
     return null;
   }
