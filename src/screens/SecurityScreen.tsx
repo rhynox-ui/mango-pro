@@ -13,7 +13,7 @@
 // session has no local password/vault for biometricAuth.ts's own gate
 // to protect at all; see that file's own header).
 
-import {useState} from 'react';
+import {useEffect, useState} from 'react';
 import {ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View} from 'react-native';
 import {ChevronLeftIcon} from '../components/icons';
 import {useTheme, type Colors} from '../theme/ThemeContext';
@@ -24,6 +24,8 @@ import {useBiometric} from '../settings/BiometricContext';
 import {disableBiometricUnlock} from '../wallet/biometricAuth';
 import {enableAppLock, disableAppLock} from '../wallet/appLockAuth';
 import {EnableBiometricModal} from '../wallet/EnableBiometricModal';
+import {loadGaslessTradingEnabled, setGaslessTradingEnabled} from '../settings/gaslessTradingPrefs';
+import {isSmartAccountSponsorshipConfigured} from '../wallet/smartAccount';
 
 export function SecurityScreen({onBack}: {onBack: () => void}) {
   const {colors} = useTheme();
@@ -33,7 +35,17 @@ export function SecurityScreen({onBack}: {onBack: () => void}) {
   const {biometricAvailable, biometricEnabled, biometryLabel, setBiometricEnabled, appLockEnabled, setAppLockEnabled} = useBiometric();
   const [showEnableBiometric, setShowEnableBiometric] = useState(false);
   const [appLockBusy, setAppLockBusy] = useState(false);
+  const [gaslessEnabled, setGaslessEnabledState] = useState(false);
   const isSeedSession = session?.authMethod !== 'google';
+
+  useEffect(() => {
+    loadGaslessTradingEnabled().then(setGaslessEnabledState);
+  }, []);
+
+  async function handleGaslessToggle(next: boolean) {
+    setGaslessEnabledState(next);
+    await setGaslessTradingEnabled(next);
+  }
 
   async function handleBiometricToggle(next: boolean) {
     if (next) {
@@ -97,6 +109,26 @@ export function SecurityScreen({onBack}: {onBack: () => void}) {
               value={appLockEnabled}
               onValueChange={handleAppLockToggle}
               disabled={!biometricAvailable || appLockBusy}
+              trackColor={{false: colors.panelBorder, true: colors.navActive}}
+              thumbColor={colors.ctaText}
+            />
+          </View>
+        </>
+      )}
+      {isSeedSession && isSmartAccountSponsorshipConfigured() && (
+        <>
+          <Text style={styles.sectionLabel}>Gasless trading (beta)</Text>
+          <View style={styles.switchRow}>
+            <View style={styles.switchLabelWrap}>
+              <Text style={styles.rowLabel}>Sponsor my trade gas</Text>
+              <Text style={styles.sectionHint}>
+                Delegates this wallet to a smart-account via EIP-7702 so Pimlico covers origin-chain gas on your trades — no
+                native ETH/BNB/etc. needed to trade. Off by default; trades exactly as before if you leave this off.
+              </Text>
+            </View>
+            <Switch
+              value={gaslessEnabled}
+              onValueChange={handleGaslessToggle}
               trackColor={{false: colors.panelBorder, true: colors.navActive}}
               thumbColor={colors.ctaText}
             />

@@ -54,6 +54,7 @@ import {CHAIN_LABEL, NATIVE_SYMBOL, assetDecimalsForChain, currencyAddress, type
 import {DEV_FEE_PCT} from '../core/fees';
 import {getRelayQuote, summarizeQuote, type QuoteSummary, type RelayQuote} from '../core/relayQuote';
 import {executeRelayQuote, type ExecuteStep} from '../core/executeRelayQuote';
+import {loadGaslessTradingEnabled} from '../settings/gaslessTradingPrefs';
 import {checkFallbackRoute, sweepFallbackFeeFromNativeBalance, tryFallbackProviders, type FallbackRouteParams} from '../core/fallbackDex';
 import {TransactionIntentError} from '../core/txIntentFirewall';
 import {fetchErc20TokenMetadata, fetchSplMintDecimals, fetchWalletSplTokenBalance, fetchWalletTokenBalance} from '../wallet/walletRpc';
@@ -211,6 +212,13 @@ export function TokenTradeScreen({
   // false = Sell (paying the token, receiving native) — same isNativeAsset
   // convention DexScreen.tsx already uses for which side is "from".
   const [isBuySide, setIsBuySide] = useState(true);
+  // Security screen's own opt-in toggle (gaslessTradingPrefs.ts) —
+  // loaded once here so handleTrade below always reads the latest
+  // saved preference without re-hitting AsyncStorage on every trade.
+  const [gaslessTradingEnabled, setGaslessTradingEnabled] = useState(false);
+  useEffect(() => {
+    loadGaslessTradingEnabled().then(setGaslessTradingEnabled);
+  }, []);
   const [amount, setAmount] = useState('');
   const [quote, setQuote] = useState<QuoteSummary | null>(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
@@ -651,7 +659,7 @@ export function TokenTradeScreen({
       let warnings: string[];
       let receivedAmountFormatted: string | null;
       if (quoteToExecute) {
-        const result = await executeRelayQuote(quoteToExecute, session, step => setExecuteState(step));
+        const result = await executeRelayQuote(quoteToExecute, session, step => setExecuteState(step), {useGaslessTrading: gaslessTradingEnabled});
         txHashes = result.txHashes;
         warnings = result.warnings;
         receivedAmountFormatted = quote?.receivedAmountFormatted ?? null;

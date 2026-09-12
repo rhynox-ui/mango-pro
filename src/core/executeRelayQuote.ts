@@ -35,6 +35,7 @@ import {transportFor, viemChainForChainId} from './chainRegistry.ts';
 import {assertQuoteSafeToSign} from './txIntentFirewall.ts';
 import {assertSolanaTransactionMatchesIntent} from './solanaTxIntent.ts';
 import {intentForQuote, type RelayQuote, type RelayTransactionStepItem} from './relayQuote.ts';
+import {getSponsoredSmartAccountClient, isSmartAccountSponsorshipConfigured} from '../wallet/smartAccount.ts';
 import type {DerivedAccounts} from '../wallet/keys';
 
 const RELAY_STATUS_URL = 'https://api.relay.link/intents/status/v3';
@@ -181,6 +182,38 @@ async function sendRelayEvmStepViaParticle(evmAddress: `0x${string}`, publicClie
   // plain-Node offline checks, which never exercises this branch.
   const {sendEvmTransactionViaParticle} = await import('../wallet/particleSigning.ts');
   const hash = await sendEvmTransactionViaParticle(evmAddress, {chainId, to: tx.to, data: tx.data, value: tx.value});
+  await publicClient.waitForTransactionReceipt({hash});
+  return hash;
+}
+
+/**
+ * Same shape as sendRelayEvmStep above (simulate first, then broadcast)
+ * but through a Pimlico-sponsored EIP-7702 smart-account client
+ * (smartAccount.ts) instead of a plain wallet transaction — origin-chain
+ * gas comes from Pimlico's paymaster, not this wallet's native balance,
+ * so there's no balance-covers-gas check to run here at all; removing
+ * that requirement is the entire point of this path (ARCHITECTURE.md
+ * §1's gasless-trading opt-in).
+ */
+async function sendRelayEvmStepSponsored(
+  client: Awaited<ReturnType<typeof getSponsoredSmartAccountClient>>,
+  publicClient: ReturnType<typeof createPublicClient>,
+  item: RelayTransactionStepItem,
+): Promise<string> {
+  const {to, data, value} = item.data ?? {};
+  if (!to) throw new Error('The routing service returned a transaction with no destination address.');
+  const tx = {to: to as `0x${string}`, data: (data || undefined) as `0x${string}` | undefined, value: value ? BigInt(value) : 0n};
+
+  try {
+    await publicClient.call({account: client.account.address, to: tx.to, data: tx.data, value: tx.value});
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message && !/timeout|network|fetch|429|403/i.test(message)) {
+      throw new Error(`This transaction would revert: ${message}`);
+    }
+  }
+
+  const hash = await client.sendTransaction({to: tx.to, data: tx.data, value: tx.value});
   await publicClient.waitForTransactionReceipt({hash});
   return hash;
 }
@@ -348,8 +381,20 @@ export type ExecuteRelayQuoteResult = {txHashes: string[]; warnings: string[]};
  * reported complete. Throws TransactionIntentError (from
  * txIntentFirewall.ts) if the firewall blocks; throws a plain Error for
  * anything else (network, insufficient balance, on-chain revert).
+ *
+ * `options.useGaslessTrading` (default false, per the caller's own
+ * gaslessTradingPrefs.ts read) routes EVM steps through the
+ * Pimlico-sponsored smart-account path instead of a plain wallet
+ * transaction — silently ignored for a Google session (no local key to
+ * sign a 7702 delegation with yet) or if Pimlico isn't configured, so a
+ * stale "on" preference can never break plain trading.
  */
-export async function executeRelayQuote(quote: RelayQuote, session: DerivedAccounts, onStep?: (step: ExecuteStep) => void): Promise<ExecuteRelayQuoteResult> {
+export async function executeRelayQuote(
+  quote: RelayQuote,
+  session: DerivedAccounts,
+  onStep?: (step: ExecuteStep) => void,
+  options?: {useGaslessTrading?: boolean},
+): Promise<ExecuteRelayQuoteResult> {
   const tagged = intentForQuote(quote);
   if (!tagged) {
     throw new Error('This quote has no recorded intent to check against — refusing to sign.');
@@ -379,8 +424,18 @@ export async function executeRelayQuote(quote: RelayQuote, session: DerivedAccou
 
   onStep?.('signing');
   const isGoogleSession = session.authMethod === 'google';
+  // A Google session has no local key to sign a 7702 delegation with
+  // yet (smartAccount.ts isn't wired to Particle signing) — silently
+  // falls back to the existing Particle path rather than erroring, so a
+  // stale "on" preference from a since-switched-to-Google session can
+  // never break trading.
+  const useGasless = Boolean(options?.useGaslessTrading) && !isGoogleSession && isSmartAccountSponsorshipConfigured();
   const txHashes: string[] = [];
-  let evmClients: {walletClient: ReturnType<typeof createWalletClient> | null; publicClient: ReturnType<typeof createPublicClient>} | null = null;
+  let evmClients: {
+    walletClient: ReturnType<typeof createWalletClient> | null;
+    publicClient: ReturnType<typeof createPublicClient>;
+    sponsoredClient: Awaited<ReturnType<typeof getSponsoredSmartAccountClient>> | null;
+  } | null = null;
 
   for (const item of pendingItems) {
     if (isSolanaShaped(item)) {
@@ -401,12 +456,16 @@ export async function executeRelayQuote(quote: RelayQuote, session: DerivedAccou
       if (!viemChain) throw new Error(`No EVM chain configured for chain id ${chainId}.`);
       const transport = transportFor(chainId);
       const publicClient = createPublicClient({chain: viemChain, transport});
-      const walletClient = isGoogleSession ? null : createWalletClient({account: privateKeyToAccount(session.evm.privateKey as `0x${string}`), chain: viemChain, transport});
-      evmClients = {walletClient, publicClient};
+      const owner = isGoogleSession ? null : privateKeyToAccount(session.evm.privateKey as `0x${string}`);
+      const walletClient = owner && !useGasless ? createWalletClient({account: owner, chain: viemChain, transport}) : null;
+      const sponsoredClient = owner && useGasless ? await getSponsoredSmartAccountClient({chain: viemChain, owner}) : null;
+      evmClients = {walletClient, publicClient, sponsoredClient};
     }
     const hash = isGoogleSession
       ? await sendRelayEvmStepViaParticle(session.evm.address as `0x${string}`, evmClients.publicClient, chainId, item)
-      : await sendRelayEvmStep(evmClients.walletClient!, evmClients.publicClient, item);
+      : useGasless
+        ? await sendRelayEvmStepSponsored(evmClients.sponsoredClient!, evmClients.publicClient, item)
+        : await sendRelayEvmStep(evmClients.walletClient!, evmClients.publicClient, item);
     txHashes.push(hash);
   }
 
