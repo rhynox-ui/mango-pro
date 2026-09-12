@@ -121,7 +121,7 @@ export function LockedScreen({
             Unlock
           </PrimaryButton>
           {biometricEnabled && (
-            <TouchableOpacity onPress={handleBiometricPress} disabled={busy || biometricBusy} style={styles.biometricLink} hitSlop={8}>
+            <TouchableOpacity onPress={handleBiometricPress} disabled={busy || biometricBusy || lockoutMs > 0} style={styles.biometricLink} hitSlop={8}>
               <Text style={styles.biometricLinkText}>{biometricBusy ? 'Waiting…' : `Unlock with ${biometryLabel ?? 'biometric'}`}</Text>
             </TouchableOpacity>
           )}
