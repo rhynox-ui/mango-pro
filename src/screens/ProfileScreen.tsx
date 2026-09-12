@@ -36,10 +36,6 @@ import {ReferralModal} from '../referral/ReferralModal';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {useSession} from '../wallet/SessionContext';
 
-function truncateAddress(address: string): string {
-  return `${address.slice(0, 6)}…${address.slice(-4)}`;
-}
-
 function formatUsd(n: number): string {
   return n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 }
@@ -389,11 +385,18 @@ export function ProfileScreen({
       <TouchableOpacity onPress={openUsernameEditor}>
         <Text style={styles.name}>{username ? `@${username}` : 'Your Profile'}</Text>
       </TouchableOpacity>
-      {/* Once a real username is set, it's the identity shown — the raw
-          address drops out of this spot (still shown in full in the
-          Deposit modal, never actually hidden, just not repeated here).
-          Before a username exists, the address is what's real to show. */}
-      {!username && <Text style={styles.handle}>{session ? truncateAddress(session.evm.address) : '—'}</Text>}
+      {/* Real, explicit product decision: the raw wallet address never
+          shows here at all, even as a before-you-set-one fallback — a
+          wallet address isn't an identity anyone chose, and showing it
+          only trained people to treat it as one. It's still shown in
+          full where it's actually needed (the Deposit modal); this spot
+          is purely "how you're identified," so before a username
+          exists it prompts for one instead of leaking the address. */}
+      {!username && (
+        <TouchableOpacity onPress={openUsernameEditor}>
+          <Text style={styles.addBio}>+ Set a username</Text>
+        </TouchableOpacity>
+      )}
       <TouchableOpacity onPress={openBioEditor}>
         {bio ? <Text style={styles.bioText}>{bio}</Text> : <Text style={styles.addBio}>+ Add a bio</Text>}
       </TouchableOpacity>
