@@ -33,6 +33,7 @@ import {useMemo, useEffect, useState} from 'react';
 import {ActivityIndicator, FlatList, Image, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {FilterIcon, GearIcon, StarIcon} from '../components/icons';
 import {fetchGraduatedTokens, fetchBondingTokens, fetchTrendingTokens, type DiscoveryToken} from '../core/discoveryFeed';
+import {CHAIN_LABEL, type ChainKey} from '../core/chainData';
 import {getWatchlist, subscribeWatchlist, toggleWatchlist} from '../wallet/watchlist';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 
@@ -135,8 +136,25 @@ export function HomeScreen({
   const [refreshToken, setRefreshToken] = useState(0);
   const [sort, setSort] = useState<SortKey>('default');
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
+  // 'all' by default — a real per-launchpad platform filter (Four.meme,
+  // Flap, Long.xyz, StonkFun...) isn't honestly buildable yet: none of
+  // those platforms has a free public API, and Graduated/Bonding is
+  // pump.fun-only today, so there's no real "platform" field to filter
+  // by (see discoveryFeed.ts's own header). chainKey IS real on every
+  // token already fetched, so a chain filter ships now without
+  // fabricating anything; it's the honest slice of "fewer, more relevant
+  // tokens" available today, with true platform filtering tracked
+  // separately for once more real launchpad sources exist.
+  const [chainFilter, setChainFilter] = useState<ChainKey | 'all'>('all');
 
   useEffect(() => subscribeWatchlist(setWatchlist), []);
+
+  // Switching discovery filter can move to a chain the previous
+  // selection doesn't cover (e.g. Graduated/Bonding is Solana-only) —
+  // reset rather than silently show an empty list.
+  useEffect(() => {
+    setChainFilter('all');
+  }, [filter]);
 
   useEffect(() => {
     if (filter === 'Most held') {
@@ -163,7 +181,25 @@ export function HomeScreen({
   }, [filter, refreshToken]);
 
   const unsortedListData = tab === 'watchlist' ? watchlist : tokens;
-  const listData = useMemo(() => sortTokens(unsortedListData, sort), [unsortedListData, sort]);
+
+  // Real counts per chain actually present in this list right now — never
+  // a static "every chain this app supports" list, so a chip only ever
+  // offers a chain that genuinely has tokens to show.
+  const chainCounts = useMemo(() => {
+    const counts = new Map<ChainKey, number>();
+    for (const t of unsortedListData) counts.set(t.chainKey, (counts.get(t.chainKey) ?? 0) + 1);
+    return counts;
+  }, [unsortedListData]);
+  const chainChipOptions = useMemo(
+    () => Array.from(chainCounts.entries()).sort((a, b) => b[1] - a[1]),
+    [chainCounts],
+  );
+
+  const chainFilteredData = useMemo(
+    () => (chainFilter === 'all' ? unsortedListData : unsortedListData.filter(t => t.chainKey === chainFilter)),
+    [unsortedListData, chainFilter],
+  );
+  const listData = useMemo(() => sortTokens(chainFilteredData, sort), [chainFilteredData, sort]);
   const showingLiveList = tab === 'tokens' && filter !== 'Most held';
   // Real bug this closes: TokenRow used to freeze its own "starred" look
   // in local state the moment it mounted (`useState(isWatchlisted(token))`),
@@ -238,6 +274,32 @@ export function HomeScreen({
             </View>
           )}
 
+          {/* Real per-launchpad platform filter isn't honestly buildable
+              yet (see chainFilter's own comment above) — a chain filter
+              is the real, immediately-available slice, and only shown
+              once this list actually spans more than one chain. */}
+          {tab === 'tokens' && chainChipOptions.length > 1 && (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chainChipRow} contentContainerStyle={styles.chainChipRowContent}>
+              <TouchableOpacity
+                style={[styles.chainChip, chainFilter === 'all' && styles.chainChipActive]}
+                onPress={() => setChainFilter('all')}
+                activeOpacity={0.7}>
+                <Text style={[styles.chainChipText, chainFilter === 'all' && styles.chainChipTextActive]}>All chains</Text>
+              </TouchableOpacity>
+              {chainChipOptions.map(([chainKey, count]) => (
+                <TouchableOpacity
+                  key={chainKey}
+                  style={[styles.chainChip, chainFilter === chainKey && styles.chainChipActive]}
+                  onPress={() => setChainFilter(chainKey)}
+                  activeOpacity={0.7}>
+                  <Text style={[styles.chainChipText, chainFilter === chainKey && styles.chainChipTextActive]}>
+                    {CHAIN_LABEL[chainKey] ?? chainKey} ({count})
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
+
           {showingLiveList && loading && (
             <View style={styles.stateBlock}>
               <ActivityIndicator color={colors.textMuted} />
@@ -248,6 +310,14 @@ export function HomeScreen({
               <Text style={styles.stateText}>Couldn't load {filter.toLowerCase()} — {error}</Text>
               <TouchableOpacity onPress={() => setRefreshToken(t => t + 1)} activeOpacity={0.7}>
                 <Text style={styles.stateRetry}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          {showingLiveList && !loading && !error && chainFilter !== 'all' && listData.length === 0 && (
+            <View style={styles.stateBlock}>
+              <Text style={styles.stateText}>No {filter.toLowerCase()} tokens on {CHAIN_LABEL[chainFilter] ?? chainFilter} right now.</Text>
+              <TouchableOpacity onPress={() => setChainFilter('all')} activeOpacity={0.7}>
+                <Text style={styles.stateRetry}>Show all chains</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -415,6 +485,20 @@ function makeStyles(colors: Colors) {
     filterPillActive: {backgroundColor: colors.ctaBg, borderColor: colors.ctaBg},
     filterPillText: {color: colors.textSecondary, fontSize: 13, fontWeight: '600'},
     filterPillTextActive: {color: colors.ctaText},
+
+    chainChipRow: {marginTop: -4, marginBottom: 4},
+    chainChipRowContent: {paddingHorizontal: 16, gap: 6},
+    chainChip: {
+      paddingHorizontal: 11,
+      paddingVertical: 6,
+      borderRadius: 999,
+      backgroundColor: colors.panel,
+      borderWidth: 1,
+      borderColor: colors.panelBorder,
+    },
+    chainChipActive: {backgroundColor: colors.ctaBg, borderColor: colors.ctaBg},
+    chainChipText: {color: colors.textMuted, fontSize: 12, fontWeight: '600'},
+    chainChipTextActive: {color: colors.ctaText},
 
     stateBlock: {paddingHorizontal: 16, paddingVertical: 24, alignItems: 'center', gap: 8},
     stateText: {color: colors.textMuted, fontSize: 13, textAlign: 'center', lineHeight: 18},
