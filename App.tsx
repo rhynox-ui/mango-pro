@@ -48,11 +48,12 @@ import {TokenTradeScreen, type DemoToken} from './src/screens/TokenTradeScreen';
 import {ProfileScreen} from './src/screens/ProfileScreen';
 import {SettingsScreen} from './src/screens/SettingsScreen';
 import {HistoryScreen} from './src/screens/HistoryScreen';
+import {NewsScreen} from './src/screens/NewsScreen';
 import type {TokenSearchResult} from './src/core/tokenSearch';
 import type {DiscoveryToken} from './src/core/discoveryFeed';
 
 type Tab = 'home' | 'search' | 'swap' | 'profile';
-type Screen = 'tabs' | 'settings' | 'history';
+type Screen = 'tabs' | 'settings' | 'history' | 'news';
 type AuthState = 'loading' | 'welcome' | 'create' | 'import' | 'locked' | 'app-locked' | 'unlocked';
 
 const TABS: {key: Tab; label: string; icon: TabIconName}[] = [
@@ -412,9 +413,11 @@ function AppInner(): React.JSX.Element {
 
   const showingSettings = screen === 'settings';
   const showingHistory = screen === 'history';
-  const showingPushedScreen = showingSettings || showingHistory;
+  const showingNews = screen === 'news';
+  const showingPushedScreen = showingSettings || showingHistory || showingNews;
   const openSettings = () => setScreen('settings');
   const openHistory = () => setScreen('history');
+  const openNews = () => setScreen('news');
   // Settings' own "Deposit and Withdraw" row has no dedicated screen of
   // its own — Profile already IS that real destination (the totalCash
   // row's +/- buttons), so this takes the user there AND tells it to
@@ -479,8 +482,10 @@ function AppInner(): React.JSX.Element {
                   <SettingsScreen onBack={() => setScreen('tabs')} onOpenDepositWithdraw={goToWalletActions} onOpenProfile={goToProfile} />
                 ) : showingHistory ? (
                   <HistoryScreen onBack={() => setScreen('tabs')} />
+                ) : showingNews ? (
+                  <NewsScreen onBack={() => setScreen('tabs')} />
                 ) : tab === 'home' ? (
-                  <HomeScreen onOpenSettings={openSettings} onSelectToken={selectDiscoveryToken} onOpenDeposit={goToDeposit} />
+                  <HomeScreen onOpenSettings={openSettings} onSelectToken={selectDiscoveryToken} onOpenDeposit={goToDeposit} onOpenNews={openNews} />
                 ) : tab === 'search' ? (
                   <SearchScreen onSelectToken={selectSearchResult} />
                 ) : tab === 'swap' ? (
