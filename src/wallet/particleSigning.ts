@@ -107,3 +107,20 @@ export async function signAndSendSolanaTransactionViaParticle(serializedTransact
   const base58Transaction = bs58.encode(serializedTransaction);
   return solana.signAndSendTransaction(base58Transaction);
 }
+
+/**
+ * Signs a plain-text message through Particle's MPC signer (standard
+ * EIP-191 personal_sign) — used for the referral system's claim/daily/
+ * set-handle messages (referralApi.ts), which previously only worked for
+ * seed-phrase wallets. Confirmed real from the SDK's own source
+ * (evm.ts's personalSign, wired to the native evmPersonalSign call and
+ * to the EIP-1193 provider's own 'personal_sign' handler the same way),
+ * not guessed: personalSign hex-encodes a plain string internally before
+ * handing it to the native signer, so callers pass the exact same
+ * message string used everywhere else (viem's signMessage included) and
+ * get back a standard signature the server's viem.verifyMessage() can
+ * recover against — no extra encoding needed at the call site.
+ */
+export async function signMessageViaParticle(message: string): Promise<string> {
+  return evm.personalSign(message);
+}

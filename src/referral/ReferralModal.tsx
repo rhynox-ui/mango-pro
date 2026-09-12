@@ -8,23 +8,19 @@
 // Withdraw/Bio/Username modals) rather than a full screen, since Mango
 // Pro has no push-navigation stack the way mobile's ScreenHeader assumes.
 //
-// Google/Particle sessions (privateKeyHex === '') can view real stats
-// (a GET, no signature needed) but can't claim/set a handle here yet:
-// that needs EIP-191 personal_sign through Particle's MPC signer
-// (@particle-network/rn-auth-core's evm.personalSign), which nothing in
-// this app has used or verified the wire format for yet — unlike
-// sendTransaction/signAndSendTransaction (particleSigning.ts), whose
-// formats were confirmed from multiple independent real sources before
-// being wired into live trading. Guessing personalSign's exact payload
-// shape here risks a signature the server silently rejects or, worse,
-// one subtly wrong in a way that isn't caught until a real claim fails —
-// so this is honestly gated instead, not guessed.
+// Both seed-phrase and Google/Particle sessions can claim/set a handle
+// here: a seed-phrase session signs locally via viem, a Particle session
+// signs through Particle's MPC signer (signMessageViaParticle,
+// particleSigning.ts — confirmed real EIP-191 personal_sign from the
+// SDK's own source, not guessed).
 
 import React, {useCallback, useEffect, useState} from 'react';
 import {ActivityIndicator, Modal, Share, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import Clipboard from '@react-native-clipboard/clipboard';
+import {privateKeyToAccount} from 'viem/accounts';
 import {useTheme, type Colors} from '../theme/ThemeContext';
-import {claimDailyPoints, getReferralStats, isValidReferralHandle, setReferralHandle, type ReferralStats} from './referralApi';
+import {signMessageViaParticle} from '../wallet/particleSigning';
+import {claimDailyPoints, getReferralStats, isValidReferralHandle, setReferralHandle, type ReferralSigner, type ReferralStats} from './referralApi';
 
 const SITE_URL = 'https://mangoprotocol.site';
 
@@ -55,7 +51,10 @@ export function ReferralModal({
 }) {
   const {colors} = useTheme();
   const styles = makeStyles(colors);
-  const canSign = privateKeyHex.length > 0;
+  const sign: ReferralSigner = useCallback(
+    message => (privateKeyHex ? privateKeyToAccount(privateKeyHex as `0x${string}`).signMessage({message}) : signMessageViaParticle(message)),
+    [privateKeyHex],
+  );
 
   const [stats, setStats] = useState<ReferralStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -91,7 +90,7 @@ export function ReferralModal({
     setError('');
     setClaiming(true);
     try {
-      const result = await claimDailyPoints({address, privateKeyHex: privateKeyHex as `0x${string}`});
+      const result = await claimDailyPoints({address, sign});
       setStats(s => (s ? {...s, points: s.points + result.pointsAwarded} : s));
       setCooldown(24 * 60 * 60);
     } catch (err) {
@@ -112,7 +111,7 @@ export function ReferralModal({
     }
     setClaimingHandle(true);
     try {
-      await setReferralHandle({address, handle, privateKeyHex: privateKeyHex as `0x${string}`});
+      await setReferralHandle({address, handle, sign});
       setStats(s => (s ? {...s, handle} : s));
       setHandleInput('');
     } catch (err) {
@@ -155,73 +154,64 @@ export function ReferralModal({
             </Text>
           </View>
 
-          {canSign ? (
-            <>
-              <Text style={styles.sectionLabel}>Daily check-in</Text>
-              <View style={styles.card}>
-                <Text style={styles.cardBody}>Come back every day to claim 150 points.</Text>
-                <TouchableOpacity
-                  style={[styles.claimButton, (claiming || cooldown > 0) && styles.claimButtonDisabled]}
-                  onPress={handleDailyClaim}
-                  disabled={claiming || cooldown > 0}
-                  activeOpacity={0.85}>
-                  {claiming ? (
-                    <ActivityIndicator color={colors.ctaText} />
-                  ) : (
-                    <Text style={styles.claimButtonText}>{cooldown > 0 ? `Claim in ${formatCooldown(cooldown)}` : 'Claim 150 points'}</Text>
-                  )}
-                </TouchableOpacity>
-                {!!error && <Text style={styles.errorText}>{error}</Text>}
-              </View>
+          <Text style={styles.sectionLabel}>Daily check-in</Text>
+          <View style={styles.card}>
+            <Text style={styles.cardBody}>Come back every day to claim 150 points.</Text>
+            <TouchableOpacity
+              style={[styles.claimButton, (claiming || cooldown > 0) && styles.claimButtonDisabled]}
+              onPress={handleDailyClaim}
+              disabled={claiming || cooldown > 0}
+              activeOpacity={0.85}>
+              {claiming ? (
+                <ActivityIndicator color={colors.ctaText} />
+              ) : (
+                <Text style={styles.claimButtonText}>{cooldown > 0 ? `Claim in ${formatCooldown(cooldown)}` : 'Claim 150 points'}</Text>
+              )}
+            </TouchableOpacity>
+            {!!error && <Text style={styles.errorText}>{error}</Text>}
+          </View>
 
-              <Text style={styles.sectionLabel}>Referral handle</Text>
-              <View style={styles.card}>
-                {stats?.handle ? (
-                  <>
-                    <Text style={styles.cardBody}>Your invite link uses your handle instead of a raw wallet address.</Text>
-                    <View style={styles.handleBadge}>
-                      <Text style={styles.handleBadgeText}>@{stats.handle}</Text>
-                    </View>
-                  </>
-                ) : (
-                  <>
-                    <Text style={styles.cardBody}>
-                      Claim a handle so friends see something memorable instead of your raw wallet address — one per wallet, and it can't be
-                      changed once set.
-                    </Text>
-                    <View style={styles.handleClaimRow}>
-                      <TextInput
-                        value={handleInput}
-                        onChangeText={t => {
-                          setHandleInput(t);
-                          setHandleError('');
-                        }}
-                        placeholder="Mangoli"
-                        placeholderTextColor={colors.textMuted}
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                        maxLength={20}
-                        style={styles.handleInput}
-                      />
-                      <TouchableOpacity
-                        style={[styles.handleClaimButton, (claimingHandle || !handleInput.trim()) && styles.claimButtonDisabled]}
-                        onPress={handleClaimHandle}
-                        disabled={claimingHandle || !handleInput.trim()}
-                        activeOpacity={0.85}>
-                        {claimingHandle ? <ActivityIndicator color={colors.ctaText} /> : <Text style={styles.claimButtonText}>Claim</Text>}
-                      </TouchableOpacity>
-                    </View>
-                    {!!handleError && <Text style={styles.errorText}>{handleError}</Text>}
-                  </>
-                )}
-              </View>
-            </>
-          ) : (
-            <Text style={styles.modalHint}>
-              Daily check-in and claiming a handle need your wallet's signing key directly — not yet available for Google sign-in accounts.
-              Inviting friends with your link still works below.
-            </Text>
-          )}
+          <Text style={styles.sectionLabel}>Referral handle</Text>
+          <View style={styles.card}>
+            {stats?.handle ? (
+              <>
+                <Text style={styles.cardBody}>Your invite link uses your handle instead of a raw wallet address.</Text>
+                <View style={styles.handleBadge}>
+                  <Text style={styles.handleBadgeText}>@{stats.handle}</Text>
+                </View>
+              </>
+            ) : (
+              <>
+                <Text style={styles.cardBody}>
+                  Claim a handle so friends see something memorable instead of your raw wallet address — one per wallet, and it can't be
+                  changed once set.
+                </Text>
+                <View style={styles.handleClaimRow}>
+                  <TextInput
+                    value={handleInput}
+                    onChangeText={t => {
+                      setHandleInput(t);
+                      setHandleError('');
+                    }}
+                    placeholder="Mangoli"
+                    placeholderTextColor={colors.textMuted}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    maxLength={20}
+                    style={styles.handleInput}
+                  />
+                  <TouchableOpacity
+                    style={[styles.handleClaimButton, (claimingHandle || !handleInput.trim()) && styles.claimButtonDisabled]}
+                    onPress={handleClaimHandle}
+                    disabled={claimingHandle || !handleInput.trim()}
+                    activeOpacity={0.85}>
+                    {claimingHandle ? <ActivityIndicator color={colors.ctaText} /> : <Text style={styles.claimButtonText}>Claim</Text>}
+                  </TouchableOpacity>
+                </View>
+                {!!handleError && <Text style={styles.errorText}>{handleError}</Text>}
+              </>
+            )}
+          </View>
 
           <Text style={styles.sectionLabel}>Invite friends</Text>
           <View style={styles.card}>
@@ -251,7 +241,6 @@ function makeStyles(colors: Colors) {
     modalHeaderRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16},
     modalTitle: {color: colors.textPrimary, fontSize: 18, fontWeight: '800'},
     modalClose: {color: colors.textMuted, fontSize: 13, fontWeight: '600'},
-    modalHint: {color: colors.textMuted, fontSize: 11.5, lineHeight: 16, marginTop: 4, marginBottom: 4},
 
     pointsCard: {
       backgroundColor: colors.panel,

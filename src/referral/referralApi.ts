@@ -12,11 +12,14 @@
 // server rejects any message that doesn't match exactly, and there's no
 // shared package between these repos to enforce that at build time.
 //
-// Only wired for seed-phrase sessions (a real privateKeyHex) — see
-// ReferralModal.tsx's own header for why Google/Particle sessions don't
-// get message-signing here yet.
-
-import {privateKeyToAccount} from 'viem/accounts';
+// Wallet-agnostic: every claim/daily/set-handle call takes a `sign`
+// function instead of a raw private key, so this file doesn't need to
+// know whether the caller is a seed-phrase wallet (viem's
+// privateKeyToAccount().signMessage) or a Google/Particle session
+// (signMessageViaParticle, particleSigning.ts — confirmed real EIP-191
+// personal_sign via evm.personalSign, see that file's own header) —
+// both produce the same standard EIP-191 signature the server's
+// viem.verifyMessage() checks, so either signer plugs in identically.
 
 const API_BASE = 'https://mangoprotocol.site/api/v1/referral';
 
@@ -66,10 +69,12 @@ export async function getReferralStats(address: string): Promise<ReferralStats> 
   return parseJsonResponse<ReferralStats>(res);
 }
 
-export async function claimReferral({address, referrer, privateKeyHex}: {address: string; referrer: string; privateKeyHex: `0x${string}`}) {
-  const account = privateKeyToAccount(privateKeyHex);
+/** A signer plugged in by the caller — either a local viem account's signMessage, or signMessageViaParticle for a Google/Particle session. */
+export type ReferralSigner = (message: string) => Promise<string>;
+
+export async function claimReferral({address, referrer, sign}: {address: string; referrer: string; sign: ReferralSigner}) {
   const message = buildReferralClaimMessage(address, referrer);
-  const signature = await account.signMessage({message});
+  const signature = await sign(message);
   const res = await fetch(`${API_BASE}/claim`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -78,10 +83,9 @@ export async function claimReferral({address, referrer, privateKeyHex}: {address
   return parseJsonResponse<{pointsAwarded: number}>(res);
 }
 
-export async function claimDailyPoints({address, privateKeyHex}: {address: string; privateKeyHex: `0x${string}`}): Promise<{pointsAwarded: number}> {
-  const account = privateKeyToAccount(privateKeyHex);
+export async function claimDailyPoints({address, sign}: {address: string; sign: ReferralSigner}): Promise<{pointsAwarded: number}> {
   const message = buildDailyClaimMessage(address);
-  const signature = await account.signMessage({message});
+  const signature = await sign(message);
   const res = await fetch(`${API_BASE}/daily`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -91,10 +95,9 @@ export async function claimDailyPoints({address, privateKeyHex}: {address: strin
 }
 
 /** Real, signed claim of a custom referral handle for this wallet — strictly 1-to-1 and immutable once set. A 409 means either this wallet already has one, or the handle is taken. */
-export async function setReferralHandle({address, handle, privateKeyHex}: {address: string; handle: string; privateKeyHex: `0x${string}`}) {
-  const account = privateKeyToAccount(privateKeyHex);
+export async function setReferralHandle({address, handle, sign}: {address: string; handle: string; sign: ReferralSigner}) {
   const message = buildSetHandleMessage(address, handle);
-  const signature = await account.signMessage({message});
+  const signature = await sign(message);
   const res = await fetch(`${API_BASE}/set-handle`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},

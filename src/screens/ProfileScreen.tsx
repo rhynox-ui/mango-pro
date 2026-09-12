@@ -32,8 +32,10 @@ import {sendUsdc, isValidRecipientAddress} from '../wallet/sendUsdc';
 import {explorerUrlFor, filterTxHistoryForAccount, getTxHistory, subscribeTxHistory, type TxHistoryEntry} from '../wallet/txHistory';
 import {getAvatarUri, getBio, getUsername, isValidUsername, setAvatarUri as saveAvatarUri, setBio as saveBio, setUsername as saveUsername} from '../wallet/profileLocal';
 import {computePortfolioChange, filterHistoryByRange, getPortfolioHistory, recordPortfolioSnapshot, type PortfolioSnapshot} from '../wallet/portfolioHistory';
+import {privateKeyToAccount} from 'viem/accounts';
 import {ReferralModal} from '../referral/ReferralModal';
-import {getReferralStats, setReferralHandle} from '../referral/referralApi';
+import {getReferralStats, setReferralHandle, type ReferralSigner} from '../referral/referralApi';
+import {signMessageViaParticle} from '../wallet/particleSigning';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {useSession} from '../wallet/SessionContext';
 
@@ -148,18 +150,18 @@ export function ProfileScreen({
   // actually hidden, just not repeated where a username now does that
   // job.
   //
-  // A signing-key wallet's username IS its real referral handle — the
-  // same server-verified, unique, immutable-once-set identity
-  // ReferralModal's own "Referral & points" claim flow uses, same one
-  // shared identity mango-mobile's own referral system already is,
-  // rather than a second, disconnected local-only concept that could
-  // silently show something different from the handle your invite link
-  // actually uses. referralHandle wins the moment it resolves and gets
-  // mirrored into local storage so it's what's shown instantly on next
-  // launch too, before this fetch has had a chance to run. A Google/
-  // Particle session (no private key — see ReferralModal.tsx's own
-  // header) can't claim a handle yet, so it keeps the plain local-only
-  // username as its only option, same as before.
+  // Every wallet's username IS its real referral handle — the same
+  // server-verified, unique, immutable-once-set identity ReferralModal's
+  // own "Referral & points" claim flow uses, same one shared identity
+  // mango-mobile's own referral system already is, rather than a second,
+  // disconnected local-only concept that could silently show something
+  // different from the handle your invite link actually uses.
+  // referralHandle wins the moment it resolves and gets mirrored into
+  // local storage so it's what's shown instantly on next launch too,
+  // before this fetch has had a chance to run. A seed-phrase wallet
+  // signs the claim locally (viem); a Google/Particle session signs
+  // through signMessageViaParticle (particleSigning.ts) — same claim
+  // either way, see handleSaveUsername below.
   const [username, setUsernameValue] = useState('');
   const [referralHandle, setReferralHandleValue] = useState<string | null>(null);
   const [showReferral, setShowReferral] = useState(false);
@@ -222,19 +224,23 @@ export function ProfileScreen({
       setUsernameError('3-20 characters, starting with a letter — letters, numbers, and underscore only.');
       return;
     }
-    const canSign = session.evm.privateKey.length > 0;
-    if (canSign && trimmed) {
+    if (trimmed) {
       // Real, one-time, server-signed claim — the same referral handle
       // ReferralModal's own "Referral & points" claim flow sets, so
       // setting a username HERE is claiming that same one identity, not
       // filling in a second, disconnected local field. isValidUsername's
       // pattern (must start with a letter) is a strict subset of the
       // handle's own server-side shape, so anything that passes it here
-      // is always accepted there too.
+      // is always accepted there too. Works for every wallet type now —
+      // a seed-phrase wallet signs locally via viem, a Google/Particle
+      // session signs through signMessageViaParticle (particleSigning.ts).
+      const canSignLocally = session.evm.privateKey.length > 0;
+      const sign: ReferralSigner = message =>
+        canSignLocally ? privateKeyToAccount(session.evm.privateKey as `0x${string}`).signMessage({message}) : signMessageViaParticle(message);
       setUsernameSaving(true);
       setUsernameError('');
       try {
-        const {handle} = await setReferralHandle({address: session.evm.address, handle: trimmed, privateKeyHex: session.evm.privateKey as `0x${string}`});
+        const {handle} = await setReferralHandle({address: session.evm.address, handle: trimmed, sign});
         setReferralHandleValue(handle);
         setUsernameValue(handle);
         await saveUsername(session.evm.address, handle);
@@ -246,9 +252,7 @@ export function ProfileScreen({
       }
       return;
     }
-    // A Google/Particle session (no private key to sign a claim with
-    // yet — see ReferralModal.tsx's own header) or clearing back to no
-    // username at all: the local-only fallback, same as before.
+    // Clearing back to no username at all: the local-only fallback, same as before.
     await saveUsername(session.evm.address, trimmed);
     setUsernameValue(trimmed);
     setUsernameEditing(false);
@@ -921,8 +925,8 @@ export function ProfileScreen({
               <Text style={styles.modalWarning}>{usernameError}</Text>
             ) : (
               <Text style={styles.modalHint}>
-                3-20 characters. Letters, numbers, and underscore only — shown instead of your address.
-                {session && session.evm.privateKey.length > 0 ? ' This also claims your referral handle — one per wallet, permanent once set.' : ''}
+                3-20 characters. Letters, numbers, and underscore only — shown instead of your address. This also claims your referral handle —
+                one per wallet, permanent once set.
               </Text>
             )}
             <TouchableOpacity
