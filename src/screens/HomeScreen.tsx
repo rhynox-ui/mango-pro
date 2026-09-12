@@ -422,7 +422,13 @@ export function HomeScreen({
           </View>
 
           {tab === 'tokens' && (
-            <View style={styles.filterRow}>
+            // Real bug fix: this was a plain, non-scrolling row — once the
+            // filter icon + TOKEN_FILTERS pills + News ran wider than the
+            // screen, whatever didn't fit (News, being last) was silently
+            // clipped off-screen with no way to reach it, rather than
+            // scrollable — exactly like chainChipRow directly below this,
+            // which already gets this right. Same ScrollView pattern here.
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterRow} contentContainerStyle={styles.filterRowContent}>
               <TouchableOpacity
                 style={[styles.filterIconButton, (sort !== 'default' || mcapFilter) && styles.filterIconButtonActive]}
                 activeOpacity={0.7}
@@ -449,7 +455,7 @@ export function HomeScreen({
                   <Text style={styles.filterPillText}>News</Text>
                 </TouchableOpacity>
               )}
-            </View>
+            </ScrollView>
           )}
 
           {/* Real per-launchpad platform filter isn't honestly buildable
@@ -742,7 +748,8 @@ function makeStyles(colors: Colors) {
       borderRadius: 2,
       backgroundColor: colors.ctaBg,
     },
-    filterRow: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 12},
+    filterRow: {flexGrow: 0},
+    filterRowContent: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 12},
     filterIconButton: {
       width: 38,
       height: 38,
