@@ -14,8 +14,10 @@ class MainApplication : Application(), ReactApplication {
       context = applicationContext,
       packageList =
         PackageList(this).packages.apply {
-          // Packages that cannot be autolinked yet can be added manually here, for example:
-          // add(MyReactNativePackage())
+          // Native PBKDF2 acceleration (see Pbkdf2Module.kt) — not
+          // autolinkable since it's a plain module in this app's own
+          // source tree, not an installed RN package.
+          add(Pbkdf2Package())
         },
     )
   }

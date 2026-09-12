@@ -1,14 +1,19 @@
 // src/wallet/walletCipher.ts
 //
 // Ported (typed) from mango-mobile's own src/wallet/walletCipher.js —
-// the pure-crypto half of vault.ts: encryptSecret/decryptSecret, zero
-// dependency on AsyncStorage or anything else RN-specific. One real
-// difference from mobile's version: mobile also tries a native-
-// accelerated PBKDF2 path (a custom Kotlin module) before falling back
-// to the pure-JS one here — that native module isn't ported yet, so
-// vault.ts calls derivePureJsAesKeyBytes directly. Same algorithm either
-// way (PBKDF2-HMAC-SHA256, 600k iterations, AES-256-GCM); a native
-// speedup is a real, worthwhile follow-up, not a correctness gap.
+// the pure-crypto half of vault.ts, zero dependency on AsyncStorage or
+// anything else RN-specific (so it stays resolvable under plain Node
+// for offline verification). The functions here
+// (derivePureJsAesKeyBytes/encryptWithKeyBytes/decryptWithKeyBytes) are
+// the pure-JS fallback path: vault.ts tries a native-accelerated PBKDF2
+// module first (see nativePbkdf2.ts / Pbkdf2Module.kt) and only falls
+// back to derivePureJsAesKeyBytes if that's unavailable. vault.ts's own
+// encryptSecret/decryptSecret (not the ones exported below, which are
+// the pure-JS-only versions kept for offline verification and as the
+// fallback primitive) are what every real call site uses. Same
+// algorithm either way (PBKDF2-HMAC-SHA256, 600k iterations,
+// AES-256-GCM) — the native path is a pure speed win, not a different
+// derivation.
 
 import {pbkdf2Async} from '@noble/hashes/pbkdf2.js';
 import {sha256} from '@noble/hashes/sha2.js';

@@ -9,10 +9,18 @@
 // mobile's fuller shape is a mechanical follow-up once multi-account
 // support is an actual feature, not a reason to build it now.
 //
-// encryptSecret/decryptSecret call straight into walletCipher.ts's
-// pure-JS PBKDF2 path — mobile also tries a native-accelerated PBKDF2
-// module first; that hasn't been ported here yet (see walletCipher.ts's
-// own header), so unlock is correct but not yet as fast as it could be.
+// encryptSecret/decryptSecret below are NOT a plain re-export of
+// walletCipher.ts anymore: they try nativePbkdf2.ts's native-
+// accelerated PBKDF2 first (Android's own javax.crypto instead of
+// pure-JS on Hermes — see Pbkdf2Module.kt for the full rationale and
+// the cross-check proving identical output) and only fall back to
+// walletCipher.ts's pure-JS derivePureJsAesKeyBytes if that's
+// unavailable. Same public names, same contract, so every existing
+// call site gets the speed gain automatically. This file is where that
+// native import lives rather than walletCipher.ts: vault.ts already
+// only ever runs under Metro/Hermes (it imports AsyncStorage), so
+// importing 'react-native' here carries none of walletCipher.ts's
+// Node-resolvability risk.
 //
 // Storage uses @react-native-async-storage/async-storage — on-device
 // only, nothing ever transmitted. Own storage key (not mobile's), so the
@@ -20,10 +28,53 @@
 // same device.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {decryptSecret as cipherDecrypt, encryptSecret as cipherEncrypt, type SecretRecord} from './walletCipher.ts';
+import {
+  PBKDF2_ITERATIONS,
+  assertValidSecretRecord,
+  derivePureJsAesKeyBytes,
+  encryptWithKeyBytes,
+  decryptWithKeyBytes,
+  type SecretRecord,
+} from './walletCipher.ts';
+import {tryNativePbkdf2Sha256} from './nativePbkdf2.ts';
 import {getLockoutStatus, recordFailedAttempt, recordSuccessfulUnlock} from './unlockAttempts';
 
-export {decryptSecret, encryptSecret} from './walletCipher.ts';
+function toBase64(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString('base64');
+}
+function fromBase64(b64: string): Uint8Array {
+  return new Uint8Array(Buffer.from(b64, 'base64'));
+}
+
+/** Same contract as walletCipher.ts's encryptSecret: returns the record to persist, does not write to storage itself. */
+export async function encryptSecret(secret: string, password: string): Promise<SecretRecord> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const keyBytes =
+    (await tryNativePbkdf2Sha256(password, salt, PBKDF2_ITERATIONS, 32)) ??
+    (await derivePureJsAesKeyBytes(password, salt, PBKDF2_ITERATIONS));
+  const ciphertext = encryptWithKeyBytes(secret, keyBytes, iv);
+  return {
+    iterations: PBKDF2_ITERATIONS,
+    salt: toBase64(salt),
+    iv: toBase64(iv),
+    ciphertext: toBase64(ciphertext),
+  };
+}
+
+/** Same contract as walletCipher.ts's decryptSecret: throws "Incorrect password." on a wrong password or corrupt record. */
+export async function decryptSecret(record: SecretRecord, password: string): Promise<string> {
+  // Validated before ANY derivation runs — see assertValidSecretRecord's
+  // own comment. This path matters most of the two: it is the one the
+  // app actually unlocks through, and it feeds record.iterations to a
+  // native module as well as the JS fallback.
+  assertValidSecretRecord(record);
+  const saltBytes = fromBase64(record.salt);
+  const keyBytes =
+    (await tryNativePbkdf2Sha256(password, saltBytes, record.iterations, 32)) ??
+    (await derivePureJsAesKeyBytes(password, saltBytes, record.iterations));
+  return decryptWithKeyBytes(fromBase64(record.ciphertext), keyBytes, fromBase64(record.iv));
+}
 
 /** Thrown by unlockVaultMnemonic when the attempt lockout (unlockAttempts.ts) is active. Carries remainingMs so a UI can show a countdown without a second getLockoutStatus() read. */
 export class VaultLockedError extends Error {
@@ -88,7 +139,7 @@ export async function unlockVaultMnemonic(vault: StoredVault, password: string):
     throw new VaultLockedError(status.remainingMs);
   }
   try {
-    const mnemonic = await cipherDecrypt(vault.mnemonicRecord, password);
+    const mnemonic = await decryptSecret(vault.mnemonicRecord, password);
     await recordSuccessfulUnlock();
     return mnemonic;
   } catch (err) {
@@ -100,6 +151,6 @@ export async function unlockVaultMnemonic(vault: StoredVault, password: string):
 
 /** Encrypts a fresh mnemonic under a password and persists it as the vault. */
 export async function createVault(mnemonic: string, password: string): Promise<void> {
-  const mnemonicRecord = await cipherEncrypt(mnemonic, password);
+  const mnemonicRecord = await encryptSecret(mnemonic, password);
   await saveVault(mnemonicRecord);
 }
