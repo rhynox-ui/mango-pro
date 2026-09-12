@@ -232,7 +232,12 @@ export function TokenTradeScreen({
   // a payment origin that doesn't make sense for the new one.
   const [payOrigin, setPayOrigin] = useState<PayOrigin>({chainKey: token.chainKey, asset: 'native'});
   const [showPayOriginPicker, setShowPayOriginPicker] = useState(false);
+  // True once the user has actually picked a "Pay from" option themselves
+  // — the auto-default effect below never overrides a deliberate choice,
+  // only ever fills in a sane default before one exists.
+  const manualPayOriginRef = useRef(false);
   useEffect(() => {
+    manualPayOriginRef.current = false;
     setPayOrigin({chainKey: token.chainKey, asset: 'native'});
   }, [token]);
   const crossChainPay = isBuySide && (payOrigin.chainKey !== token.chainKey || payOrigin.asset !== 'native');
@@ -254,6 +259,28 @@ export function TokenTradeScreen({
       cancelled = true;
     };
   }, [session]);
+
+  // Real fix: default "Pay from" to wherever this wallet actually holds
+  // USDC, not always the token's own chain's native asset — which a
+  // fresh or lightly-funded wallet often holds none of, landing the
+  // Buy flow on a real "0 avail." balance by default. usdcPortfolio is
+  // the same real, already-fetched aggregator the picker below already
+  // uses; this just applies its answer as the starting pick instead of
+  // requiring the user to open the picker and choose it manually every
+  // time. Only ever fires once usdcPortfolio actually resolves, only
+  // when a real non-zero balance exists somewhere, and never after a
+  // manual pick — a wallet with no USDC anywhere simply keeps the
+  // existing native-asset default, which is still the more honest
+  // choice than auto-selecting an empty USDC chain.
+  useEffect(() => {
+    if (manualPayOriginRef.current || !usdcPortfolio) return;
+    let best: {chainKey: ChainKey; balance: number} | null = null;
+    for (const result of usdcPortfolio.results) {
+      if (result.status !== 'ok' || result.balance <= 0) continue;
+      if (!best || result.balance > best.balance) best = {chainKey: result.chainKey, balance: result.balance};
+    }
+    if (best) setPayOrigin({chainKey: best.chainKey, asset: 'USDC'});
+  }, [usdcPortfolio]);
 
   // paySymbol reflects payOrigin's own choice on Buy (the token's own
   // chain and native asset on Sell — unchanged, no origin to pick there).
@@ -940,6 +967,7 @@ export function TokenTradeScreen({
               style={styles.pickerRow}
               activeOpacity={0.7}
               onPress={() => {
+                manualPayOriginRef.current = true;
                 setPayOrigin({chainKey: token.chainKey, asset: 'native'});
                 setShowPayOriginPicker(false);
               }}>
@@ -975,6 +1003,7 @@ export function TokenTradeScreen({
                     activeOpacity={0.7}
                     disabled={disabled}
                     onPress={() => {
+                      manualPayOriginRef.current = true;
                       setPayOrigin({chainKey, asset: 'USDC'});
                       setShowPayOriginPicker(false);
                     }}>
