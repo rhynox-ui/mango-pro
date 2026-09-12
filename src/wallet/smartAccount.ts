@@ -30,13 +30,14 @@
 // exposing getPaymasterData/getPaymasterStubData, which the Pimlico
 // client returned by createPimlicoClient satisfies structurally.
 //
-// PIMLICO_API_KEY below is a real placeholder, not a working key — get
-// one free at dashboard.pimlico.io (free tier: 250k sponsored
-// UserOperations/month) before anything here can actually submit a
-// sponsored UserOperation on any network, testnet included. Until then,
-// every function here fails loudly at the network call, never silently
-// — same discipline RELAY_API_KEY's own history in this codebase holds
-// itself to.
+// PIMLICO_API_KEY below is real (the account owner's own "Mango-protocol"
+// key from dashboard.pimlico.io, free tier) — same plain-constant
+// pattern RELAY_API_KEY already uses in relayQuote.ts, since this
+// codebase has no build-time env-var system. Still unproven end-to-end:
+// having a real key means the network call can now actually be made,
+// not that a sponsored UserOperation has been confirmed to land — that
+// still needs the isolated test screen this file's own header calls
+// for, before executeRelayQuote.ts touches any of this.
 
 import {createPublicClient, http, type Chain, type LocalAccount} from 'viem';
 import {entryPoint08Address} from 'viem/account-abstraction';
@@ -44,7 +45,7 @@ import {to7702SimpleSmartAccount} from 'permissionless/accounts';
 import {createPimlicoClient} from 'permissionless/clients/pimlico';
 import {createSmartAccountClient} from 'permissionless';
 
-const PIMLICO_API_KEY = '';
+const PIMLICO_API_KEY = 'pim_N9WghP1RNn1eZ5nnFrFyKi';
 
 const ENTRY_POINT = {address: entryPoint08Address, version: '0.8'} as const;
 

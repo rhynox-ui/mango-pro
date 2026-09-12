@@ -39,6 +39,7 @@ import {clearVault} from '../wallet/vault';
 import {SecurityScreen} from './SecurityScreen';
 import {AppearanceScreen} from './AppearanceScreen';
 import {SolanaDevnetTestScreen} from './SolanaDevnetTestScreen';
+import {Eip7702TestScreen} from './Eip7702TestScreen';
 import {DocumentationScreen} from './DocumentationScreen';
 
 // Same real URLs as mango-mobile's own src/settings/AboutModal.tsx —
@@ -92,6 +93,7 @@ export function SettingsScreen({
   const [showAppearance, setShowAppearance] = useState(false);
   const [showDocumentation, setShowDocumentation] = useState(false);
   const [showSolanaDevnetTest, setShowSolanaDevnetTest] = useState(false);
+  const [showEip7702Test, setShowEip7702Test] = useState(false);
   const [showDeleteWallet, setShowDeleteWallet] = useState(false);
   const [backupConfirmed, setBackupConfirmed] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
@@ -167,6 +169,14 @@ export function SettingsScreen({
     ...(__DEV__ && session?.authMethod === 'google'
       ? [{key: 'solana-devnet-test', label: 'Solana signing test (devnet)', Icon: RepeatIcon, onPress: () => setShowSolanaDevnetTest(true)}]
       : []),
+    // Diagnostic only — proves the EIP-7702/Pimlico gasless-trading path
+    // (smartAccount.ts) on Base Sepolia before it's trusted with real
+    // trades. Seed-phrase sessions only for now: the test signs a real
+    // 7702 authorization, which smartAccount.ts doesn't yet support for
+    // Google/Particle sessions.
+    ...(__DEV__ && session && session.evm.privateKey.length > 0
+      ? [{key: 'eip7702-test', label: 'Gasless trading test (testnet)', Icon: RepeatIcon, onPress: () => setShowEip7702Test(true)}]
+      : []),
     {key: 'legal', label: 'Legal and Privacy', Icon: ScaleIcon, onPress: () => Linking.openURL(PRIVACY_POLICY_URL)},
     // Real export of this account's own trade history as CSV — no
     // fabricated cost-basis/gain-loss math (this app tracks neither), so
@@ -211,6 +221,9 @@ export function SettingsScreen({
   }
   if (showSolanaDevnetTest) {
     return <SolanaDevnetTestScreen onBack={() => setShowSolanaDevnetTest(false)} />;
+  }
+  if (showEip7702Test) {
+    return <Eip7702TestScreen onBack={() => setShowEip7702Test(false)} />;
   }
   if (showDocumentation) {
     return <DocumentationScreen onBack={() => setShowDocumentation(false)} />;
