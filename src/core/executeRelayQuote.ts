@@ -457,15 +457,37 @@ export async function executeRelayQuote(
       const transport = transportFor(chainId);
       const publicClient = createPublicClient({chain: viemChain, transport});
       const owner = isGoogleSession ? null : privateKeyToAccount(session.evm.privateKey as `0x${string}`);
-      const walletClient = owner && !useGasless ? createWalletClient({account: owner, chain: viemChain, transport}) : null;
+      // Built unconditionally, not just when gasless trading is off — the
+      // sponsored path below always needs a plain-transaction fallback to
+      // drop back to. Gasless trading is still an opt-in beta
+      // (ARCHITECTURE.md §1, never end-to-end proven before this shipped)
+      // and a bundler/paymaster rejection must never strand an otherwise-
+      // tradeable quote.
+      const walletClient = owner ? createWalletClient({account: owner, chain: viemChain, transport}) : null;
       const sponsoredClient = owner && useGasless ? await getSponsoredSmartAccountClient({chain: viemChain, owner}) : null;
       evmClients = {walletClient, publicClient, sponsoredClient};
     }
-    const hash = isGoogleSession
-      ? await sendRelayEvmStepViaParticle(session.evm.address as `0x${string}`, evmClients.publicClient, chainId, item)
-      : useGasless
-        ? await sendRelayEvmStepSponsored(evmClients.sponsoredClient!, evmClients.publicClient, item)
-        : await sendRelayEvmStep(evmClients.walletClient!, evmClients.publicClient, item);
+    let hash: string;
+    if (isGoogleSession) {
+      hash = await sendRelayEvmStepViaParticle(session.evm.address as `0x${string}`, evmClients.publicClient, chainId, item);
+    } else if (useGasless && evmClients.sponsoredClient) {
+      try {
+        hash = await sendRelayEvmStepSponsored(evmClients.sponsoredClient, evmClients.publicClient, item);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        // Only fall back on a rejection that happened BEFORE anything was
+        // broadcast (the bundler's own field validation, or our own
+        // pre-flight simulate) — never on an ambiguous failure after the
+        // UserOperation may already have been accepted, where retrying
+        // with a plain transaction could double-execute it.
+        const isPreBroadcastRejection = /invalid fields set on user operation|invalid useroperation|\baa[0-9]{2}\b|this transaction would revert/i.test(message);
+        if (!isPreBroadcastRejection) throw err;
+        console.warn('[smartAccount] Sponsored UserOperation rejected before broadcast, falling back to a plain transaction:', message);
+        hash = await sendRelayEvmStep(evmClients.walletClient!, evmClients.publicClient, item);
+      }
+    } else {
+      hash = await sendRelayEvmStep(evmClients.walletClient!, evmClients.publicClient, item);
+    }
     txHashes.push(hash);
   }
 

@@ -57,6 +57,7 @@ import {executeRelayQuote, type ExecuteStep} from '../core/executeRelayQuote';
 import {loadGaslessTradingEnabled} from '../settings/gaslessTradingPrefs';
 import {checkFallbackRoute, sweepFallbackFeeFromNativeBalance, tryFallbackProviders, type FallbackRouteParams} from '../core/fallbackDex';
 import {TransactionIntentError} from '../core/txIntentFirewall';
+import {describeTradeError} from '../core/tradeErrors';
 import {fetchErc20TokenMetadata, fetchSplMintDecimals, fetchWalletSplTokenBalance, fetchWalletTokenBalance} from '../wallet/walletRpc';
 import {formatAmountForInput, useAvailableBalance} from '../wallet/useAvailableBalance';
 import {addTxHistoryEntry} from '../wallet/txHistory';
@@ -717,8 +718,12 @@ export function TokenTradeScreen({
       // explanation (txIntentFirewall.ts's own fail() message) — shown
       // exactly as thrown, not re-wrapped, since re-wrapping it would
       // just be a worse paraphrase of a message already written for
-      // this exact screen.
-      const message = err instanceof TransactionIntentError ? err.message : err instanceof Error ? err.message : 'The trade failed. Nothing left this wallet unless a status above says otherwise.';
+      // this exact screen. Anything else (a raw viem/permissionless
+      // error, e.g. a rejected UserOperation) goes through
+      // describeTradeError so a multi-hundred-character hex dump never
+      // renders straight onto the screen — see tradeErrors.ts's header
+      // for the real trade that motivated this.
+      const message = err instanceof TransactionIntentError ? err.message : describeTradeError(err).message;
       setExecuteError(message);
       setExecuteState('error');
       addTxHistoryEntry({

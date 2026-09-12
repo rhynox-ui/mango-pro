@@ -12,10 +12,17 @@
 // implementation so Pimlico can batch those two calls into one
 // sponsored UserOperation instead.
 //
-// This is additive and opt-in: nothing here is wired into live trading
-// yet (see executeRelayQuote.ts). A user who never opts in keeps
-// trading exactly as today, holding native gas on whichever chain they
-// spend from.
+// This is additive and opt-in (Security settings' "Gasless trading
+// (beta)" toggle, gaslessTradingPrefs.ts): a user who never opts in
+// keeps trading exactly as today, holding native gas on whichever chain
+// they spend from. It IS wired into live trading now
+// (executeRelayQuote.ts), but a real trade hit Pimlico's bundler
+// rejecting a UserOperation ("Invalid fields set on User Operation")
+// before this had ever been confirmed end-to-end — so
+// executeRelayQuote.ts treats any pre-broadcast rejection here as a
+// signal to fall back to a plain transaction, never as a reason to fail
+// an otherwise-tradeable quote. Getting a real sponsored UserOperation
+// to actually land (this file's own original TODO) is still open.
 //
 // Verified against the actually-installed permissionless@0.4.1 types
 // (node_modules/permissionless/_types), not copied from docs that may
