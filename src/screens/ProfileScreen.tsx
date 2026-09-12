@@ -11,7 +11,7 @@
 import {useEffect, useMemo, useState} from 'react';
 import {ActivityIndicator, Alert, Image, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import {launchImageLibrary} from 'react-native-image-picker';
-import Svg, {Line as SvgLine} from 'react-native-svg';
+import Svg, {Defs, LinearGradient, Line as SvgLine, Path as SvgPath, Stop} from 'react-native-svg';
 import {
   ArrowUpIcon,
   CalendarIcon,
@@ -30,6 +30,7 @@ import {NetworkIcon} from '../wallet/NetworkIcon';
 import {sendUsdc, isValidRecipientAddress} from '../wallet/sendUsdc';
 import {filterTxHistoryForAccount, getTxHistory, subscribeTxHistory, type TxHistoryEntry} from '../wallet/txHistory';
 import {getAvatarUri, getBio, getUsername, isValidUsername, setAvatarUri as saveAvatarUri, setBio as saveBio, setUsername as saveUsername} from '../wallet/profileLocal';
+import {computePortfolioChange, filterHistoryByRange, getPortfolioHistory, recordPortfolioSnapshot, type PortfolioSnapshot} from '../wallet/portfolioHistory';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {useSession} from '../wallet/SessionContext';
 
@@ -114,6 +115,7 @@ export function ProfileScreen({
   const [withdrawError, setWithdrawError] = useState<string | null>(null);
   const [withdrawTxId, setWithdrawTxId] = useState<string | null>(null);
   const [usdcPortfolio, setUsdcPortfolio] = useState<UsdcPortfolio | null>(null);
+  const [portfolioHistory, setPortfolioHistory] = useState<PortfolioSnapshot[]>([]);
   const [usdcLoading, setUsdcLoading] = useState(false);
   const [timeRange, setTimeRange] = useState<TimeRange>('24h');
   const [positionTab, setPositionTab] = useState<PositionTab>('Open');
@@ -231,11 +233,25 @@ export function ProfileScreen({
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
+    // Show whatever history already exists on disk immediately, rather
+    // than leaving the chart empty until the network fetch below
+    // resolves — the fetch only ever appends to this, never replaces it.
+    getPortfolioHistory(session.evm.address).then(history => {
+      if (!cancelled) setPortfolioHistory(history);
+    });
     setUsdcLoading(true);
     fetchUsdcPortfolio(session).then(portfolio => {
       if (cancelled) return;
       setUsdcPortfolio(portfolio);
       setUsdcLoading(false);
+      // Only record a snapshot from a COMPLETE fetch — one chain's RPC
+      // hiccup would otherwise write a real but artificially low total
+      // into history as a fake dip that never actually happened.
+      if (portfolio.complete) {
+        recordPortfolioSnapshot(session.evm.address, portfolio.totalUsd).then(history => {
+          if (!cancelled) setPortfolioHistory(history);
+        });
+      }
     });
     return () => {
       cancelled = true;
@@ -258,7 +274,12 @@ export function ProfileScreen({
 
   function refreshUsdcPortfolio() {
     if (!session) return;
-    fetchUsdcPortfolio(session).then(setUsdcPortfolio);
+    fetchUsdcPortfolio(session).then(portfolio => {
+      setUsdcPortfolio(portfolio);
+      if (portfolio.complete) {
+        recordPortfolioSnapshot(session.evm.address, portfolio.totalUsd).then(setPortfolioHistory);
+      }
+    });
   }
 
   function balanceForChain(chainKey: ChainKey | null): number {
@@ -266,6 +287,31 @@ export function ProfileScreen({
     const result = usdcPortfolio.results.find(r => r.chainKey === chainKey);
     return result?.status === 'ok' ? result.balance : 0;
   }
+
+  const rangedHistory = useMemo(() => filterHistoryByRange(portfolioHistory, timeRange), [portfolioHistory, timeRange]);
+  const portfolioChange = useMemo(() => computePortfolioChange(rangedHistory), [rangedHistory]);
+  const chartColor = portfolioChange && !portfolioChange.isPositive ? colors.danger : colors.gain;
+
+  // Straight-segment sparkline over the already range-filtered points —
+  // no smoothing library needed for a handful of real data points, and
+  // straight segments never invent a curve the real numbers didn't have.
+  const chartPaths = useMemo(() => {
+    if (rangedHistory.length < 2) return null;
+    const values = rangedHistory.map(p => p.totalUsd);
+    const minVal = Math.min(...values);
+    const maxVal = Math.max(...values);
+    const span = maxVal - minVal || 1;
+    const padTop = 8;
+    const plotHeight = 90 - padTop * 2;
+    const coords = rangedHistory.map((point, i) => {
+      const x = (i / (rangedHistory.length - 1)) * 300;
+      const y = padTop + (1 - (point.totalUsd - minVal) / span) * plotHeight;
+      return {x, y};
+    });
+    const line = coords.map((c, i) => `${i === 0 ? 'M' : 'L'}${c.x.toFixed(2)},${c.y.toFixed(2)}`).join(' ');
+    const area = `${line} L${coords[coords.length - 1].x.toFixed(2)},90 L${coords[0].x.toFixed(2)},90 Z`;
+    return {line, area};
+  }, [rangedHistory]);
 
   function resetWithdraw() {
     setWithdrawStep(null);
@@ -369,7 +415,13 @@ export function ProfileScreen({
 
       <View style={styles.portfolioHeader}>
         <View>
-          <Text style={styles.portfolioValue}>$0.00</Text>
+          <Text style={styles.portfolioValue}>${usdcPortfolio ? formatUsd(usdcPortfolio.totalUsd) : '0.00'}</Text>
+          {portfolioChange && (
+            <Text style={[styles.portfolioChange, portfolioChange.isPositive ? styles.portfolioChangePositive : styles.portfolioChangeNegative]}>
+              {portfolioChange.isPositive ? '+' : '-'}${formatUsd(Math.abs(portfolioChange.absolute))} ({portfolioChange.isPositive ? '+' : '-'}
+              {Math.abs(portfolioChange.percent).toFixed(2)}%)
+            </Text>
+          )}
         </View>
         <View style={styles.rangeRow}>
           {TIME_RANGES.map(r => (
@@ -385,10 +437,27 @@ export function ProfileScreen({
       </View>
 
       <View style={styles.chartArea}>
-        <Svg width="100%" height={90} viewBox="0 0 300 90" preserveAspectRatio="none">
-          <SvgLine x1="0" y1="45" x2="300" y2="45" stroke={colors.panelBorder} strokeWidth={2} />
-        </Svg>
-        <Text style={styles.chartCaption}>No portfolio history yet — trade to start your chart.</Text>
+        {chartPaths ? (
+          <Svg width="100%" height={90} viewBox="0 0 300 90" preserveAspectRatio="none">
+            <Defs>
+              <LinearGradient id="portfolioGradient" x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0" stopColor={chartColor} stopOpacity={0.22} />
+                <Stop offset="1" stopColor={chartColor} stopOpacity={0} />
+              </LinearGradient>
+            </Defs>
+            <SvgPath d={chartPaths.area} fill="url(#portfolioGradient)" stroke="none" />
+            <SvgPath d={chartPaths.line} stroke={chartColor} strokeWidth={2} fill="none" />
+          </Svg>
+        ) : (
+          <>
+            <Svg width="100%" height={90} viewBox="0 0 300 90" preserveAspectRatio="none">
+              <SvgLine x1="0" y1="45" x2="300" y2="45" stroke={colors.panelBorder} strokeWidth={2} />
+            </Svg>
+            <Text style={styles.chartCaption}>
+              {portfolioHistory.length >= 2 ? `Not enough history yet for ${timeRange}.` : 'No portfolio history yet — trade to start your chart.'}
+            </Text>
+          </>
+        )}
       </View>
 
       <View style={styles.totalCashRow}>
@@ -793,6 +862,9 @@ function makeStyles(colors: Colors) {
       marginTop: 18,
     },
     portfolioValue: {color: colors.textPrimary, fontSize: 30, fontWeight: '700'},
+    portfolioChange: {fontSize: 12.5, fontWeight: '600', marginTop: 2},
+    portfolioChangePositive: {color: colors.gain},
+    portfolioChangeNegative: {color: colors.danger},
     rangeRow: {flexDirection: 'row', gap: 4},
     rangePill: {paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999},
     rangePillActive: {backgroundColor: colors.pillBg},
