@@ -61,7 +61,7 @@ import {addTxHistoryEntry} from '../wallet/txHistory';
 import {useSession} from '../wallet/SessionContext';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {TradeSettingsSheet} from '../components/TradeSettingsSheet';
-import {fetchUsdcPortfolio, USDC_SUPPORTED_CHAINS, type UsdcPortfolio} from '../core/usdcBalances';
+import {fetchCashPortfolio, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
 
 /**
  * Buy-side only — what chain/asset "You pay" actually spends from. Sell
@@ -69,8 +69,15 @@ import {fetchUsdcPortfolio, USDC_SUPPORTED_CHAINS, type UsdcPortfolio} from '../
  * actually held on, there's no "origin" to pick. Defaults to the
  * token's own chain's native asset (today's only option before this),
  * so nothing changes until a user actively picks something else.
+ *
+ * 'cash' means whichever real asset CASH_ASSET_BY_CHAIN names for that
+ * chain — USDC almost everywhere, USDG on Robinhood Chain. Without
+ * this, a wallet whose only funds are USDG on Robinhood had no way to
+ * spend them on a token living on any OTHER chain — the exact "stuck
+ * cash" gap Total Cash/Deposit/Withdraw already closed for viewing and
+ * moving that balance, just not yet for trading with it.
  */
-type PayOrigin = {chainKey: ChainKey; asset: 'native' | 'USDC'};
+type PayOrigin = {chainKey: ChainKey; asset: 'native' | 'cash'};
 
 export type DemoToken = {
   chainKey: ChainKey;
@@ -132,7 +139,7 @@ function AssetIcon({symbol, imageUrl, size = 16}: {symbol: string; imageUrl?: st
 }
 
 /** USDC has no per-chain logo of its own in this app (NetworkIcon renders the CHAIN's icon, which would be wrong for a stablecoin riding on top of it) — a plain "$" badge, same honest-generic treatment ProfileScreen's own Total-cash icon already uses, not a fabricated brand mark. */
-function UsdcBadge({size = 16}: {size?: number}) {
+function CashBadge({size = 16}: {size?: number}) {
   const {colors} = useTheme();
   const s = StyleSheet.create({
     circle: {width: size, height: size, borderRadius: size / 2, backgroundColor: colors.pillBg, alignItems: 'center', justifyContent: 'center'},
@@ -243,36 +250,39 @@ export function TokenTradeScreen({
   const crossChainPay = isBuySide && (payOrigin.chainKey !== token.chainKey || payOrigin.asset !== 'native');
 
   // Sell-side counterpart to payOrigin: what a sell's proceeds land as.
-  // Real gap this closes — Buy already defaults to spending USDC
+  // Real gap this closes — Buy already defaults to spending cash
   // wherever this wallet holds it (the effect above), but Sell always
   // converted to the chain's native asset with no way to choose
-  // otherwise, so a sale's proceeds never actually joined the "one USDC
+  // otherwise, so a sale's proceeds never actually joined the "one cash
   // balance across chains" this app's own Profile screen is built
-  // around. Defaults to USDC when the token's own chain actually has a
-  // verified USDC address (USDC_SUPPORTED_CHAINS) — same honesty rule
+  // around. Defaults to cash when the token's own chain actually has a
+  // verified cash address (CASH_SUPPORTED_CHAINS) — same honesty rule
   // as everywhere else this app checks that list — and to native
-  // otherwise (no fabricated option on a chain with no real USDC).
+  // otherwise (no fabricated option on a chain with no real cash asset).
   // Always same-chain (token.chainKey): unlike a cross-chain Buy, there
   // is no reason to receive a sale's proceeds on a DIFFERENT chain than
-  // the token was sold on.
-  const [receiveAsset, setReceiveAsset] = useState<'native' | 'USDC'>(USDC_SUPPORTED_CHAINS.includes(token.chainKey) ? 'USDC' : 'native');
+  // the token was sold on. 'cash' resolves to CASH_ASSET_BY_CHAIN's real
+  // asset for that chain (USDC almost everywhere, USDG on Robinhood) —
+  // selling a Robinhood-chain token can land its proceeds as real USDG
+  // now, the same way selling anywhere else already lands USDC.
+  const [receiveAsset, setReceiveAsset] = useState<'native' | 'cash'>(CASH_SUPPORTED_CHAINS.includes(token.chainKey) ? 'cash' : 'native');
   const [showReceiveAssetPicker, setShowReceiveAssetPicker] = useState(false);
   useEffect(() => {
-    setReceiveAsset(USDC_SUPPORTED_CHAINS.includes(token.chainKey) ? 'USDC' : 'native');
+    setReceiveAsset(CASH_SUPPORTED_CHAINS.includes(token.chainKey) ? 'cash' : 'native');
   }, [token]);
 
   // Same real, live aggregator ProfileScreen's own "Total Cash" already
   // uses — reused here rather than re-derived, so this screen's own
   // portfolio figure can never quietly drift from the one on Profile.
-  const [usdcPortfolio, setUsdcPortfolio] = useState<UsdcPortfolio | null>(null);
+  const [cashPortfolio, setCashPortfolio] = useState<CashPortfolio | null>(null);
   useEffect(() => {
     if (!session) {
-      setUsdcPortfolio(null);
+      setCashPortfolio(null);
       return;
     }
     let cancelled = false;
-    fetchUsdcPortfolio(session).then(portfolio => {
-      if (!cancelled) setUsdcPortfolio(portfolio);
+    fetchCashPortfolio(session).then(portfolio => {
+      if (!cancelled) setCashPortfolio(portfolio);
     });
     return () => {
       cancelled = true;
@@ -280,35 +290,39 @@ export function TokenTradeScreen({
   }, [session]);
 
   // Real fix: default "Pay from" to wherever this wallet actually holds
-  // USDC, not always the token's own chain's native asset — which a
-  // fresh or lightly-funded wallet often holds none of, landing the
-  // Buy flow on a real "0 avail." balance by default. usdcPortfolio is
-  // the same real, already-fetched aggregator the picker below already
-  // uses; this just applies its answer as the starting pick instead of
-  // requiring the user to open the picker and choose it manually every
-  // time. Only ever fires once usdcPortfolio actually resolves, only
-  // when a real non-zero balance exists somewhere, and never after a
-  // manual pick — a wallet with no USDC anywhere simply keeps the
-  // existing native-asset default, which is still the more honest
-  // choice than auto-selecting an empty USDC chain.
+  // cash (USDC or, on Robinhood, USDG), not always the token's own
+  // chain's native asset — which a fresh or lightly-funded wallet often
+  // holds none of, landing the Buy flow on a real "0 avail." balance by
+  // default. cashPortfolio is the same real, already-fetched aggregator
+  // the picker below already uses; this just applies its answer as the
+  // starting pick instead of requiring the user to open the picker and
+  // choose it manually every time. Only ever fires once cashPortfolio
+  // actually resolves, only when a real non-zero balance exists
+  // somewhere, and never after a manual pick — a wallet with no cash
+  // anywhere simply keeps the existing native-asset default, which is
+  // still the more honest choice than auto-selecting an empty chain.
   useEffect(() => {
-    if (manualPayOriginRef.current || !usdcPortfolio) return;
+    if (manualPayOriginRef.current || !cashPortfolio) return;
     let best: {chainKey: ChainKey; balance: number} | null = null;
-    for (const result of usdcPortfolio.results) {
+    for (const result of cashPortfolio.results) {
       if (result.status !== 'ok' || result.balance <= 0) continue;
       if (!best || result.balance > best.balance) best = {chainKey: result.chainKey, balance: result.balance};
     }
-    if (best) setPayOrigin({chainKey: best.chainKey, asset: 'USDC'});
-  }, [usdcPortfolio]);
+    if (best) setPayOrigin({chainKey: best.chainKey, asset: 'cash'});
+  }, [cashPortfolio]);
 
   // paySymbol reflects payOrigin's own choice on Buy (the token's own
   // chain and native asset on Sell — unchanged, no origin to pick there).
-  const paySymbol = isBuySide ? (payOrigin.asset === 'native' ? NATIVE_SYMBOL[payOrigin.chainKey] : 'USDC') : token.symbol;
-  const receiveSymbol = isBuySide ? token.symbol : receiveAsset === 'USDC' ? 'USDC' : NATIVE_SYMBOL[token.chainKey];
+  // CASH_ASSET_BY_CHAIN[payOrigin.chainKey] is only ever undefined for a
+  // chainKey the cash picker below never offers, so the 'USDC' fallback
+  // here is purely a type-narrowing safety net, not a real guess.
+  const paySymbol = isBuySide ? (payOrigin.asset === 'native' ? NATIVE_SYMBOL[payOrigin.chainKey] : (CASH_ASSET_BY_CHAIN[payOrigin.chainKey] ?? 'USDC')) : token.symbol;
+  const receiveSymbol = isBuySide ? token.symbol : receiveAsset === 'cash' ? (CASH_ASSET_BY_CHAIN[token.chainKey] ?? 'USDC') : NATIVE_SYMBOL[token.chainKey];
   const amtNum = Number(amount) || 0;
 
-  // Real USD value of what's actually being paid on Buy — USDC is
-  // trivially 1:1 (a real stablecoin peg, not an approximation); the
+  // Real USD value of what's actually being paid on Buy — cash (USDC or
+  // USDG, both real 1:1 pegs) is trivially 1:1 (a real stablecoin peg,
+  // not an approximation); the
   // native asset needs a live price lookup, scoped to whichever chain
   // payOrigin actually points at now, not always the token's own chain.
   // The searched token itself has no reliable price source on Sell
@@ -337,7 +351,7 @@ export function TokenTradeScreen({
       cancelled = true;
     };
   }, [isBuySide, payOrigin]);
-  const originAmountUsd = !isBuySide ? undefined : payOrigin.asset === 'USDC' ? amtNum : nativeUsdPrice != null ? amtNum * nativeUsdPrice : undefined;
+  const originAmountUsd = !isBuySide ? undefined : payOrigin.asset === 'cash' ? amtNum : nativeUsdPrice != null ? amtNum * nativeUsdPrice : undefined;
 
   // The searched token's own decimals — not carried by DexScreener's
   // search response, so Sell (which spends this token) needs a live
@@ -383,8 +397,8 @@ export function TokenTradeScreen({
   const fetchPayBalance = useCallback((): Promise<number> => {
     if (!session) return Promise.resolve(0);
     if (isBuySide) {
-      if (payOrigin.asset === 'USDC') {
-        const result = usdcPortfolio?.results.find(r => r.chainKey === payOrigin.chainKey);
+      if (payOrigin.asset === 'cash') {
+        const result = cashPortfolio?.results.find(r => r.chainKey === payOrigin.chainKey);
         return Promise.resolve(result?.status === 'ok' ? result.balance : 0);
       }
       return originIsSolana ? fetchWalletSolanaBalance(session.solana.address) : fetchWalletNativeBalance(payOrigin.chainKey, session.evm.address);
@@ -393,13 +407,13 @@ export function TokenTradeScreen({
     return solana
       ? fetchWalletSplTokenBalance(token.address, tokenDecimals, session.solana.address)
       : fetchWalletTokenBalance(token.chainKey, token.address, tokenDecimals, session.evm.address);
-  }, [session, isBuySide, solana, originIsSolana, token, tokenDecimals, payOrigin, usdcPortfolio]);
+  }, [session, isBuySide, solana, originIsSolana, token, tokenDecimals, payOrigin, cashPortfolio]);
 
   // Bumped by the "Couldn't load balance" retry tap below — useAvailableBalance
   // only refetches when one of its deps changes, and none of the real deps
   // (session/side/token) change on a retry tap, so this is a dedicated one.
   const [balanceRetryToken, setBalanceRetryToken] = useState(0);
-  const {balance, loading: balanceLoading} = useAvailableBalance(session ? fetchPayBalance : null, [session, isBuySide, solana, token, tokenDecimals, balanceRetryToken, payOrigin, usdcPortfolio]);
+  const {balance, loading: balanceLoading} = useAvailableBalance(session ? fetchPayBalance : null, [session, isBuySide, solana, token, tokenDecimals, balanceRetryToken, payOrigin, cashPortfolio]);
   const insufficientBalance = amtNum > 0 && balance !== null && amtNum > balance;
   // A resolved balance of 0 is real (an empty wallet) and looks
   // identical to a null balance in `balance !== null` checks — this
@@ -439,8 +453,8 @@ export function TokenTradeScreen({
 
   async function handleMax() {
     if (balance === null) return;
-    if (!isBuySide || payOrigin.asset === 'USDC') {
-      // Sell side pays the searched token, or Buy paying USDC — either
+    if (!isBuySide || payOrigin.asset === 'cash') {
+      // Sell side pays the searched token, or Buy paying cash — either
       // way gas is paid separately in the origin chain's native asset,
       // so the full balance is spendable (same computeMaxAmount branch
       // a non-native asset always takes).
@@ -496,7 +510,7 @@ export function TokenTradeScreen({
     const payDecimals = isBuySide
       ? payOrigin.asset === 'native'
         ? assetDecimalsForChain(payOrigin.chainKey, NATIVE_SYMBOL[payOrigin.chainKey])
-        : assetDecimalsForChain(payOrigin.chainKey, 'USDC')
+        : assetDecimalsForChain(payOrigin.chainKey, CASH_ASSET_BY_CHAIN[payOrigin.chainKey] ?? 'USDC')
       : tokenDecimals;
     if (payDecimals === undefined || payDecimals === null) {
       setQuote(null);
@@ -528,17 +542,18 @@ export function TokenTradeScreen({
       const userAddress = originIsSolana ? session.solana.address : session.evm.address;
       const recipientAddress = solana ? session.solana.address : session.evm.address;
       const nativeCurrency = currencyAddress(token.chainKey, NATIVE_SYMBOL[token.chainKey]);
-      // Sell's own receive-asset choice — USDC when the user picked it
-      // (and this chain actually has a verified USDC address; see
-      // receiveAsset's own declaration for why the default already
-      // guarantees that), native otherwise. Always the token's own
-      // chain — see receiveAsset's own comment for why this never
-      // bridges chains the way a cross-chain Buy's payOrigin can.
-      const sellReceiveCurrency = receiveAsset === 'USDC' ? currencyAddress(token.chainKey, 'USDC') : nativeCurrency;
+      // Sell's own receive-asset choice — cash (USDC, or USDG on
+      // Robinhood) when the user picked it (and this chain actually has
+      // a verified cash address; see receiveAsset's own declaration for
+      // why the default already guarantees that), native otherwise.
+      // Always the token's own chain — see receiveAsset's own comment
+      // for why this never bridges chains the way a cross-chain Buy's
+      // payOrigin can.
+      const sellReceiveCurrency = receiveAsset === 'cash' ? currencyAddress(token.chainKey, CASH_ASSET_BY_CHAIN[token.chainKey] ?? 'USDC') : nativeCurrency;
       const originCurrency = isBuySide
         ? payOrigin.asset === 'native'
           ? currencyAddress(payOrigin.chainKey, NATIVE_SYMBOL[payOrigin.chainKey])
-          : currencyAddress(payOrigin.chainKey, 'USDC')
+          : currencyAddress(payOrigin.chainKey, CASH_ASSET_BY_CHAIN[payOrigin.chainKey] ?? 'USDC')
         : token.address;
       getRelayQuote({
         fromChainKey: isBuySide ? payOrigin.chainKey : token.chainKey,
@@ -565,7 +580,7 @@ export function TokenTradeScreen({
           // either way, not a guess.
           const receiveDecimalsFallback = isBuySide
             ? (tokenDecimals ?? 18)
-            : (assetDecimalsForChain(token.chainKey, receiveAsset === 'USDC' ? 'USDC' : NATIVE_SYMBOL[token.chainKey]) ?? 18);
+            : (assetDecimalsForChain(token.chainKey, receiveAsset === 'cash' ? (CASH_ASSET_BY_CHAIN[token.chainKey] ?? 'USDC') : NATIVE_SYMBOL[token.chainKey]) ?? 18);
           setQuote(summarizeQuote(q, receiveDecimalsFallback));
           setQuoteLoading(false);
         })
@@ -600,7 +615,7 @@ export function TokenTradeScreen({
           }
           const receiveDecimalsFallback = isBuySide
             ? (tokenDecimals ?? 18)
-            : (assetDecimalsForChain(token.chainKey, receiveAsset === 'USDC' ? 'USDC' : NATIVE_SYMBOL[token.chainKey]) ?? 18);
+            : (assetDecimalsForChain(token.chainKey, receiveAsset === 'cash' ? (CASH_ASSET_BY_CHAIN[token.chainKey] ?? 'USDC') : NATIVE_SYMBOL[token.chainKey]) ?? 18);
           const fallbackParams: FallbackRouteParams = {
             chainKey: token.chainKey,
             sellToken: originCurrency,
@@ -775,13 +790,13 @@ export function TokenTradeScreen({
           ? 'Finding the best route…'
           : null;
 
-  const chainHasUsdc = USDC_SUPPORTED_CHAINS.includes(token.chainKey);
+  const chainHasCash = CASH_SUPPORTED_CHAINS.includes(token.chainKey);
 
   return (
     <View style={styles.screen}>
       <View style={styles.portfolioRow}>
         <Text style={styles.portfolioLabel}>Portfolio</Text>
-        <Text style={styles.portfolioValue}>{usdcPortfolio ? `$${formatUsd(usdcPortfolio.totalUsd)}` : '—'}</Text>
+        <Text style={styles.portfolioValue}>{cashPortfolio ? `$${formatUsd(cashPortfolio.totalUsd)}` : '—'}</Text>
       </View>
 
       <View style={styles.chainRow}>
@@ -898,7 +913,7 @@ export function TokenTradeScreen({
                 payOrigin.asset === 'native' ? (
                   <NetworkIcon chainKey={payOrigin.chainKey} size={16} />
                 ) : (
-                  <UsdcBadge size={16} />
+                  <CashBadge size={16} />
                 )
               ) : (
                 <AssetIcon symbol={token.symbol} imageUrl={token.imageUrl} size={16} />
@@ -941,16 +956,16 @@ export function TokenTradeScreen({
               style={styles.assetSelector}
               onPress={isBuySide ? onOpenSearch : () => setShowReceiveAssetPicker(true)}
               activeOpacity={0.7}
-              disabled={isBuySide ? !onOpenSearch : !chainHasUsdc}>
+              disabled={isBuySide ? !onOpenSearch : !chainHasCash}>
               {isBuySide ? (
                 <AssetIcon symbol={token.symbol} imageUrl={token.imageUrl} size={16} />
-              ) : receiveAsset === 'USDC' ? (
-                <UsdcBadge size={16} />
+              ) : receiveAsset === 'cash' ? (
+                <CashBadge size={16} />
               ) : (
                 <NetworkIcon chainKey={token.chainKey} size={16} />
               )}
               <Text style={styles.assetSelectorText}>{receiveSymbol}</Text>
-              {(isBuySide || chainHasUsdc) && <Text style={styles.assetSelectorChevron}>⌄</Text>}
+              {(isBuySide || chainHasCash) && <Text style={styles.assetSelectorChevron}>⌄</Text>}
             </TouchableOpacity>
             {quoteLoading ? (
               <ActivityIndicator color={colors.textMuted} size="small" />
@@ -1032,24 +1047,30 @@ export function TokenTradeScreen({
               {payOrigin.chainKey === token.chainKey && payOrigin.asset === 'native' && <Text style={styles.pickerCheck}>✓</Text>}
             </TouchableOpacity>
 
-            {/* Real cross-chain pay: same USDC balances ProfileScreen's
-                own Deposit/Withdraw already fetches (usdcPortfolio,
+            {/* Real cross-chain pay: same cash balances ProfileScreen's
+                own Deposit/Withdraw already fetches (cashPortfolio,
                 shared via this screen's own effect above) — pick any
-                chain actually holding USDC and Relay bridges it to the
-                token's own chain as part of the same quote. Rows with
-                nothing to spend stay visible (never hidden — same
-                "always show real state" rule this app holds to
+                chain actually holding cash (USDC almost everywhere,
+                USDG on Robinhood Chain — its own real stablecoin, not a
+                fabricated substitute) and Relay bridges+swaps it to the
+                token's own chain as part of the same quote. This is the
+                real fix for a wallet whose only funds are USDG on
+                Robinhood: before this, that balance couldn't fund a buy
+                on any other chain at all, even though Total Cash on
+                Profile already counted it as real spendable dollars.
+                Rows with nothing to spend stay visible (never hidden —
+                same "always show real state" rule this app holds to
                 elsewhere) but disabled, since picking one would just
                 fail on "insufficient balance" a moment later. */}
-            <Text style={styles.pickerSectionLabel}>USDC — pay from any chain you hold it on</Text>
-            {!usdcPortfolio ? (
+            <Text style={styles.pickerSectionLabel}>Cash — pay from any chain you hold it on</Text>
+            {!cashPortfolio ? (
               <ActivityIndicator color={colors.textMuted} style={styles.pickerLoading} />
             ) : (
-              USDC_SUPPORTED_CHAINS.map(chainKey => {
-                const result = usdcPortfolio.results.find(r => r.chainKey === chainKey);
+              CASH_SUPPORTED_CHAINS.map(chainKey => {
+                const result = cashPortfolio.results.find(r => r.chainKey === chainKey);
                 const chainBalance = result?.status === 'ok' ? result.balance : 0;
                 const disabled = chainBalance <= 0;
-                const selected = payOrigin.chainKey === chainKey && payOrigin.asset === 'USDC';
+                const selected = payOrigin.chainKey === chainKey && payOrigin.asset === 'cash';
                 return (
                   <TouchableOpacity
                     key={chainKey}
@@ -1058,11 +1079,13 @@ export function TokenTradeScreen({
                     disabled={disabled}
                     onPress={() => {
                       manualPayOriginRef.current = true;
-                      setPayOrigin({chainKey, asset: 'USDC'});
+                      setPayOrigin({chainKey, asset: 'cash'});
                       setShowPayOriginPicker(false);
                     }}>
                     <NetworkIcon chainKey={chainKey} size={22} />
-                    <Text style={styles.pickerRowText}>USDC on {CHAIN_LABEL[chainKey]}</Text>
+                    <Text style={styles.pickerRowText}>
+                      {CASH_ASSET_BY_CHAIN[chainKey] ?? 'USDC'} on {CHAIN_LABEL[chainKey]}
+                    </Text>
                     <Text style={styles.pickerRowBalance}>${chainBalance.toFixed(2)}</Text>
                     {selected && <Text style={styles.pickerCheck}>✓</Text>}
                   </TouchableOpacity>
@@ -1099,12 +1122,14 @@ export function TokenTradeScreen({
               style={styles.pickerRow}
               activeOpacity={0.7}
               onPress={() => {
-                setReceiveAsset('USDC');
+                setReceiveAsset('cash');
                 setShowReceiveAssetPicker(false);
               }}>
-              <UsdcBadge size={22} />
-              <Text style={styles.pickerRowText}>USDC on {CHAIN_LABEL[token.chainKey]}</Text>
-              {receiveAsset === 'USDC' && <Text style={styles.pickerCheck}>✓</Text>}
+              <CashBadge size={22} />
+              <Text style={styles.pickerRowText}>
+                {CASH_ASSET_BY_CHAIN[token.chainKey] ?? 'USDC'} on {CHAIN_LABEL[token.chainKey]}
+              </Text>
+              {receiveAsset === 'cash' && <Text style={styles.pickerCheck}>✓</Text>}
             </TouchableOpacity>
           </View>
         </View>

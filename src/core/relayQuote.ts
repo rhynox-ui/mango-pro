@@ -106,6 +106,21 @@ export type GetRelayQuoteParams = {
   originAmountUsd?: number | null;
   /** Basis-points string ("50" = 0.5%), or omit entirely for Auto — Relay's own front-running-aware default. Never a client-side guess: when set, this is the literal bound Relay quotes against and the number shown back in details.slippageTolerance.total. */
   slippageTolerance?: string;
+  /**
+   * True for a pure cash-to-cash conversion (ConvertCashScreen's own
+   * USDG-on-Robinhood <-> USDC-elsewhere move, not a token trade) —
+   * sends Relay's own appFees as 0bps instead of fees.ts's normal rate,
+   * and skips requesting destination-gas sponsorship for this call.
+   * Sponsorship's own fee floor (fees.ts's sponsoredFeeFloorUsd) exists
+   * specifically so a sponsored trade's fee always covers what
+   * sponsoring it costs the protocol — a fee-waived call collects
+   * nothing to cover that with, so it simply doesn't ask for
+   * sponsorship rather than silently eating an uncovered cost. Real
+   * Relay/network costs (gas, Relay's own relayer fee) are unaffected
+   * either way and stay visible in the quote — never fabricated as
+   * zero, only Mango's own cut is.
+   */
+  waiveAppFee?: boolean;
 };
 
 /** One transaction Relay needs signed — EVM-shaped (to/data/value/chainId) or Solana-shaped (instructions), per executeRelayQuote.ts's own dispatch. */
@@ -169,7 +184,7 @@ export function intentForQuote(quote: RelayQuote): {intent: TransactionIntent; q
 }
 
 export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQuote> {
-  const {fromChainKey, toChainKey, fromAsset, toAsset, originCurrency, destinationCurrency, amountBaseUnits, userAddress, recipientAddress, originAmountUsd, slippageTolerance} = params;
+  const {fromChainKey, toChainKey, fromAsset, toAsset, originCurrency, destinationCurrency, amountBaseUnits, userAddress, recipientAddress, originAmountUsd, slippageTolerance, waiveAppFee} = params;
 
   const resolvedOriginCurrency = originCurrency ?? (fromAsset ? currencyAddress(fromChainKey, fromAsset) : undefined);
   const resolvedDestinationCurrency = destinationCurrency ?? (toAsset ? currencyAddress(toChainKey, toAsset) : undefined);
@@ -179,8 +194,9 @@ export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQ
 
   // Real sponsorship only exists once a funded Relay API key is
   // configured (see RELAY_API_KEY's own comment above) — this is the
-  // one place that decides it, not the caller.
-  const sponsorshipActive = RELAY_API_KEY.length > 0;
+  // one place that decides it, not the caller. Never active on a
+  // fee-waived call (waiveAppFee's own doc comment explains why).
+  const sponsorshipActive = !waiveAppFee && RELAY_API_KEY.length > 0;
 
   const body = {
     user: userAddress,
@@ -194,7 +210,7 @@ export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQ
     // toChainKey, not fromChainKey — Relay's sponsorship (and the fee
     // floor protecting it) is priced against the chain whose fees
     // actually get sponsored: the destination, per Relay's own docs.
-    appFees: [{recipient: feeRecipientForQuote(), fee: appFeeBpsForSponsoredTrade(toChainKey, originAmountUsd, {sponsoringGasOutright: sponsorshipActive})}],
+    appFees: [{recipient: feeRecipientForQuote(), fee: waiveAppFee ? '0' : appFeeBpsForSponsoredTrade(toChainKey, originAmountUsd, {sponsoringGasOutright: sponsorshipActive})}],
     ...(sponsorshipActive
       ? {
           subsidizeFees: true,

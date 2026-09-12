@@ -25,7 +25,8 @@ import {
   UploadIcon,
 } from '../components/icons';
 import {CHAIN_LABEL, type ChainKey} from '../core/chainData';
-import {fetchUsdcPortfolio, USDC_SUPPORTED_CHAINS, type UsdcPortfolio} from '../core/usdcBalances';
+import {fetchCashPortfolio, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
+import {ConvertCashSheet} from '../components/ConvertCashSheet';
 import {NetworkIcon} from '../wallet/NetworkIcon';
 import {sendUsdc, isValidRecipientAddress} from '../wallet/sendUsdc';
 import {filterTxHistoryForAccount, getTxHistory, subscribeTxHistory, type TxHistoryEntry} from '../wallet/txHistory';
@@ -43,11 +44,11 @@ function formatUsd(n: number): string {
   return n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 }
 
-// Every USDC chain except Solana shares the SAME EVM address — this is
+// Every cash chain except Solana shares the SAME EVM address — this is
 // what "deposit on whichever chain works for you" actually reduces to
 // for a user: one address, valid everywhere in this list, plus a
 // separate Solana address for the one non-EVM chain.
-const EVM_USDC_CHAINS = USDC_SUPPORTED_CHAINS.filter(c => c !== 'solana');
+const EVM_CASH_CHAINS = CASH_SUPPORTED_CHAINS.filter(c => c !== 'solana');
 
 // Adapted from FOMO's own deposit flow shape (pick a network -> show
 // the address for that one network). FOMO's reference also offers a
@@ -109,13 +110,21 @@ export function ProfileScreen({
   const styles = makeStyles(colors);
   const [depositStep, setDepositStep] = useState<DepositStep | null>(null);
   const [depositChain, setDepositChain] = useState<ChainKey | null>(null);
+  // True only for the dedicated "Robinhood Chain — ETH for gas" row —
+  // every other deposit row (including Robinhood's own real cash asset,
+  // USDG, in the main list below) leaves this false and reads its asset
+  // from CASH_ASSET_BY_CHAIN instead. Two genuinely different real
+  // assets on the same chain, so one boolean disambiguates rather than
+  // guessing from chainKey alone.
+  const [depositIsNativeGas, setDepositIsNativeGas] = useState(false);
+  const [convertOpen, setConvertOpen] = useState(false);
   const [withdrawStep, setWithdrawStep] = useState<WithdrawStep | null>(null);
   const [withdrawChain, setWithdrawChain] = useState<ChainKey | null>(null);
   const [withdrawAddress, setWithdrawAddress] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [withdrawError, setWithdrawError] = useState<string | null>(null);
   const [withdrawTxId, setWithdrawTxId] = useState<string | null>(null);
-  const [usdcPortfolio, setUsdcPortfolio] = useState<UsdcPortfolio | null>(null);
+  const [cashPortfolio, setCashPortfolio] = useState<CashPortfolio | null>(null);
   const [portfolioHistory, setPortfolioHistory] = useState<PortfolioSnapshot[]>([]);
   const [usdcLoading, setUsdcLoading] = useState(false);
   const [timeRange, setTimeRange] = useState<TimeRange>('24h');
@@ -242,9 +251,9 @@ export function ProfileScreen({
       if (!cancelled) setPortfolioHistory(history);
     });
     setUsdcLoading(true);
-    fetchUsdcPortfolio(session).then(portfolio => {
+    fetchCashPortfolio(session).then(portfolio => {
       if (cancelled) return;
-      setUsdcPortfolio(portfolio);
+      setCashPortfolio(portfolio);
       setUsdcLoading(false);
       // Only record a snapshot from a COMPLETE fetch — one chain's RPC
       // hiccup would otherwise write a real but artificially low total
@@ -274,10 +283,10 @@ export function ProfileScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingAction]);
 
-  function refreshUsdcPortfolio() {
+  function refreshCashPortfolio() {
     if (!session) return;
-    fetchUsdcPortfolio(session).then(portfolio => {
-      setUsdcPortfolio(portfolio);
+    fetchCashPortfolio(session).then(portfolio => {
+      setCashPortfolio(portfolio);
       if (portfolio.complete) {
         recordPortfolioSnapshot(session.evm.address, portfolio.totalUsd).then(setPortfolioHistory);
       }
@@ -285,8 +294,8 @@ export function ProfileScreen({
   }
 
   function balanceForChain(chainKey: ChainKey | null): number {
-    if (!chainKey || !usdcPortfolio) return 0;
-    const result = usdcPortfolio.results.find(r => r.chainKey === chainKey);
+    if (!chainKey || !cashPortfolio) return 0;
+    const result = cashPortfolio.results.find(r => r.chainKey === chainKey);
     return result?.status === 'ok' ? result.balance : 0;
   }
 
@@ -328,10 +337,10 @@ export function ProfileScreen({
     if (!session || !withdrawChain) return;
     setWithdrawStep('sending');
     try {
-      const {txId} = await sendUsdc(withdrawChain, session, withdrawAddress.trim(), withdrawAmount);
+      const {txId} = await sendUsdc(withdrawChain, session, withdrawAddress.trim(), withdrawAmount, CASH_ASSET_BY_CHAIN[withdrawChain]);
       setWithdrawTxId(txId);
       setWithdrawStep('success');
-      refreshUsdcPortfolio();
+      refreshCashPortfolio();
     } catch (err) {
       setWithdrawError(err instanceof Error ? err.message : 'The send failed. Nothing left this wallet.');
       setWithdrawStep('error');
@@ -417,7 +426,7 @@ export function ProfileScreen({
 
       <View style={styles.portfolioHeader}>
         <View>
-          <Text style={styles.portfolioValue}>${usdcPortfolio ? formatUsd(usdcPortfolio.totalUsd) : '0.00'}</Text>
+          <Text style={styles.portfolioValue}>${cashPortfolio ? formatUsd(cashPortfolio.totalUsd) : '0.00'}</Text>
           {portfolioChange && (
             <Text style={[styles.portfolioChange, portfolioChange.isPositive ? styles.portfolioChangePositive : styles.portfolioChangeNegative]}>
               {portfolioChange.isPositive ? '+' : '-'}${formatUsd(Math.abs(portfolioChange.absolute))} ({portfolioChange.isPositive ? '+' : '-'}
@@ -472,9 +481,9 @@ export function ProfileScreen({
             {usdcLoading ? (
               <ActivityIndicator color={colors.textMuted} size="small" style={styles.totalCashSpinner} />
             ) : (
-              <Text style={styles.totalCashValue}>${usdcPortfolio ? formatUsd(usdcPortfolio.totalUsd) : '0.00'}</Text>
+              <Text style={styles.totalCashValue}>${cashPortfolio ? formatUsd(cashPortfolio.totalUsd) : '0.00'}</Text>
             )}
-            {usdcPortfolio && !usdcPortfolio.complete && (
+            {cashPortfolio && !cashPortfolio.complete && (
               <Text style={styles.totalCashNote}>Some chains didn't respond — this may be incomplete.</Text>
             )}
           </View>
@@ -485,6 +494,17 @@ export function ProfileScreen({
           </TouchableOpacity>
           <TouchableOpacity style={styles.squareButton} hitSlop={4} onPress={() => setWithdrawStep('network')}>
             <ArrowUpIcon color={colors.textPrimary} size={16} />
+          </TouchableOpacity>
+          {/* Real fix for a wallet whose cash sits as USDG on Robinhood
+              Chain: before this, that balance could be seen here and
+              spent on a Robinhood-chain token (TokenTradeScreen's own
+              Pay-from picker) but had no way to become spendable
+              elsewhere. Convert moves it (or any cash chain's balance)
+              into another cash chain's real asset via the same Relay
+              pipeline every trade uses, fee-free (ConvertCashSheet's
+              own header explains why). */}
+          <TouchableOpacity style={styles.squareButton} hitSlop={4} onPress={() => setConvertOpen(true)}>
+            <RepeatIcon color={colors.textPrimary} size={16} />
           </TouchableOpacity>
         </View>
       </View>
@@ -566,13 +586,19 @@ export function ProfileScreen({
                 </View>
                 <Text style={styles.modalSubtitle}>Choose a network to deposit from.</Text>
 
-                {USDC_SUPPORTED_CHAINS.map(chainKey => (
+                {/* Real per-chain cash asset — USDC everywhere except
+                    Robinhood Chain, which has its own real stablecoin
+                    (USDG) instead; CASH_ASSET_BY_CHAIN is the one place
+                    that distinction lives, so this list never needs to
+                    special-case it. */}
+                {CASH_SUPPORTED_CHAINS.map(chainKey => (
                   <TouchableOpacity
                     key={chainKey}
                     style={styles.networkRow}
                     activeOpacity={0.7}
                     onPress={() => {
                       setDepositChain(chainKey);
+                      setDepositIsNativeGas(false);
                       setDepositStep('address');
                     }}>
                     <View style={styles.networkRowLeft}>
@@ -582,6 +608,28 @@ export function ProfileScreen({
                     <ChevronRightIcon color={colors.textMuted} size={16} />
                   </TouchableOpacity>
                 ))}
+
+                {/* Separate from the row above: this is Robinhood
+                    Chain's NATIVE ETH specifically, for paying gas on a
+                    trade there — a genuinely different real asset from
+                    the USDG row already in the list above, not a
+                    duplicate of it. Without this row a user would have
+                    no way to fund gas there directly at all. */}
+                <Text style={styles.modalSectionLabel}>Native asset — for gas</Text>
+                <TouchableOpacity
+                  style={styles.networkRow}
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    setDepositChain('robinhood');
+                    setDepositIsNativeGas(true);
+                    setDepositStep('address');
+                  }}>
+                  <View style={styles.networkRowLeft}>
+                    <NetworkIcon chainKey="robinhood" size={22} />
+                    <Text style={styles.networkRowText}>{CHAIN_LABEL.robinhood} — ETH</Text>
+                  </View>
+                  <ChevronRightIcon color={colors.textMuted} size={16} />
+                </TouchableOpacity>
               </>
             )}
 
@@ -602,11 +650,17 @@ export function ProfileScreen({
                 <Text style={styles.modalHint}>
                   {depositChain === 'solana'
                     ? "A separate address — Solana isn't an EVM chain, so it can't share the address other networks use."
-                    : `The same address also works on: ${EVM_USDC_CHAINS.filter(c => c !== depositChain)
-                        .map(c => CHAIN_LABEL[c])
-                        .join(', ')}.`}
+                    : depositIsNativeGas
+                      ? 'The same address as every other EVM network here — this deposit is for gas specifically, separate from the USDG row above.'
+                      : `The same address also works on: ${EVM_CASH_CHAINS.filter(c => c !== depositChain)
+                          .map(c => CHAIN_LABEL[c])
+                          .join(', ')}.`}
                 </Text>
-                <Text style={styles.modalWarning}>Only send USDC on {CHAIN_LABEL[depositChain]} to this address — anything else may be lost.</Text>
+                <Text style={styles.modalWarning}>
+                  {depositIsNativeGas
+                    ? `Only send ETH on ${CHAIN_LABEL.robinhood} to this address — anything else may be lost.`
+                    : `Only send ${CASH_ASSET_BY_CHAIN[depositChain]} on ${CHAIN_LABEL[depositChain]} to this address — anything else may be lost.`}
+                </Text>
               </>
             )}
 
@@ -618,9 +672,9 @@ export function ProfileScreen({
                     <Text style={styles.modalClose}>Close</Text>
                   </TouchableOpacity>
                 </View>
-                <Text style={styles.modalSubtitle}>Choose a network to withdraw USDC from.</Text>
+                <Text style={styles.modalSubtitle}>Choose a network to withdraw from.</Text>
 
-                {USDC_SUPPORTED_CHAINS.map(chainKey => (
+                {CASH_SUPPORTED_CHAINS.map(chainKey => (
                   <TouchableOpacity
                     key={chainKey}
                     style={styles.networkRow}
@@ -660,7 +714,7 @@ export function ProfileScreen({
                   autoCorrect={false}
                 />
 
-                <Text style={[styles.modalSectionLabel, styles.modalSectionLabelSpaced]}>Amount (USDC)</Text>
+                <Text style={[styles.modalSectionLabel, styles.modalSectionLabelSpaced]}>Amount ({CASH_ASSET_BY_CHAIN[withdrawChain]})</Text>
                 <View style={styles.amountRow}>
                   <TextInput
                     style={[styles.formInput, styles.amountInput]}
@@ -701,7 +755,9 @@ export function ProfileScreen({
             {withdrawStep === 'success' && (
               <View style={styles.resultWrap}>
                 <Text style={styles.resultTitle}>Withdrawal sent</Text>
-                <Text style={styles.resultText}>{withdrawAmount} USDC on {withdrawChain ? CHAIN_LABEL[withdrawChain] : ''}</Text>
+                <Text style={styles.resultText}>
+                  {withdrawAmount} {withdrawChain ? CASH_ASSET_BY_CHAIN[withdrawChain] : 'USDC'} on {withdrawChain ? CHAIN_LABEL[withdrawChain] : ''}
+                </Text>
                 {withdrawTxId && (
                   <Text style={styles.modalAddress} selectable numberOfLines={1} ellipsizeMode="middle">
                     {withdrawTxId}
@@ -798,6 +854,14 @@ export function ProfileScreen({
           privateKeyHex={session.evm.privateKey}
         />
       )}
+
+      <ConvertCashSheet
+        visible={convertOpen}
+        onClose={() => setConvertOpen(false)}
+        session={session}
+        cashPortfolio={cashPortfolio}
+        onConverted={refreshCashPortfolio}
+      />
     </ScrollView>
   );
 }

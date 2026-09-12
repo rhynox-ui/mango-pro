@@ -65,3 +65,69 @@ export async function fetchUsdcPortfolio(session: DerivedAccounts): Promise<Usdc
 
   return {results, totalUsd, complete};
 }
+
+// Real per-chain "cash" asset — USDC everywhere it exists, USDG on
+// Robinhood Chain (its own real, native stablecoin; there is no USDC
+// contract there at all — see chainData.ts's own header on why). This
+// is the deliberate "USDC everywhere, except where the real asset is
+// different" model FOMO's own reference behavior uses (confirmed via
+// research, not guessed: FOMO lets users deposit/withdraw real USDG on
+// Robinhood Chain and folds it into the same one-balance total).
+//
+// USDC_SUPPORTED_CHAINS/fetchUsdcPortfolio above stay UNCHANGED and
+// USDC-only on purpose — nothing should ever claim Robinhood Chain has
+// real USDC, since it doesn't. This CASH_* pair is the separate,
+// additive concept for the general "real spendable dollar balance"
+// idea instead: ProfileScreen's Total cash/Deposit/Withdraw AND
+// TokenTradeScreen's "Pay from"/"Receive as" pickers all switched to
+// this, so a wallet holding USDG on Robinhood can actually spend or
+// receive it — cross-chain via Relay on TokenTradeScreen, same as USDC
+// anywhere else — instead of that balance being trapped on Robinhood
+// with no way to use it for a trade on a different chain.
+export const CASH_ASSET_BY_CHAIN: Partial<Record<ChainKey, 'USDC' | 'USDG'>> = {
+  ...Object.fromEntries(USDC_SUPPORTED_CHAINS.map(c => [c, 'USDC' as const])),
+  robinhood: 'USDG',
+};
+export const CASH_SUPPORTED_CHAINS = Object.keys(CASH_ASSET_BY_CHAIN) as ChainKey[];
+
+export type ChainCashResult =
+  | {chainKey: ChainKey; asset: 'USDC' | 'USDG'; status: 'ok'; balance: number}
+  | {chainKey: ChainKey; asset: 'USDC' | 'USDG'; status: 'error'; error: string};
+
+export type CashPortfolio = {
+  results: ChainCashResult[];
+  totalUsd: number;
+  complete: boolean;
+};
+
+async function fetchOneChainCash(chainKey: ChainKey, session: DerivedAccounts): Promise<number> {
+  const asset = CASH_ASSET_BY_CHAIN[chainKey];
+  if (!asset) throw new Error(`No verified cash asset for ${chainKey}.`);
+  const address = TOKEN_ADDRESSES[asset]?.[chainKey];
+  if (!address) throw new Error(`No verified ${asset} address for ${chainKey}.`);
+  const decimals = assetDecimalsForChain(chainKey, asset) ?? ASSET_ONCHAIN_DECIMALS[asset];
+  if (chainKey === 'solana') {
+    return fetchWalletSplTokenBalance(address, decimals, session.solana.address);
+  }
+  return fetchWalletTokenBalance(chainKey, address, decimals, session.evm.address);
+}
+
+/** Same shape/discipline as fetchUsdcPortfolio above, over CASH_SUPPORTED_CHAINS instead. */
+export async function fetchCashPortfolio(session: DerivedAccounts): Promise<CashPortfolio> {
+  const settled = await Promise.allSettled(CASH_SUPPORTED_CHAINS.map(chainKey => fetchOneChainCash(chainKey, session)));
+
+  const results: ChainCashResult[] = settled.map((outcome, i) => {
+    const chainKey = CASH_SUPPORTED_CHAINS[i];
+    const asset = CASH_ASSET_BY_CHAIN[chainKey] as 'USDC' | 'USDG';
+    if (outcome.status === 'fulfilled') {
+      return {chainKey, asset, status: 'ok', balance: outcome.value};
+    }
+    const error = outcome.reason instanceof Error ? outcome.reason.message : "Could not fetch this chain's balance.";
+    return {chainKey, asset, status: 'error', error};
+  });
+
+  const totalUsd = results.reduce((sum, r) => (r.status === 'ok' ? sum + r.balance : sum), 0);
+  const complete = results.every(r => r.status === 'ok');
+
+  return {results, totalUsd, complete};
+}

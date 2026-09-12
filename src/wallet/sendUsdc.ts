@@ -1,11 +1,18 @@
 // src/wallet/sendUsdc.ts
 //
-// Real, non-custodial USDC send — the "Withdraw -> Crypto wallet" path
+// Real, non-custodial "cash" send — the "Withdraw -> Crypto wallet" path
 // FOMO's own reference screenshot shows ("Withdraw USDC to a supported
 // network"). Scoped port of mango-mobile's src/wallet/sendTransaction.js
-// ERC-20/SPL transfer functions, cut down to exactly USDC (this app's
-// one asset — see usdcBalances.ts's own header for why) rather than the
-// general any-token sender mobile needs.
+// ERC-20/SPL transfer functions, cut down to exactly this app's real
+// per-chain cash asset (see usdcBalances.ts's own CASH_ASSET_BY_CHAIN
+// header) rather than the general any-token sender mobile needs.
+//
+// USDC on every chain except one: Robinhood Chain's own real cash asset
+// is USDG, not USDC (no USDC contract exists there at all), so this
+// file sends whichever one actually applies — the ERC-20 transfer()
+// call is identical either way, only the token contract address and
+// decimals differ. Solana stays USDC-only; there's no USDG there in
+// this app's own verified data.
 //
 // Direct broadcast, same confirmed architecture decision as mobile's own
 // sendTransaction.js: this device signs with the session's own private
@@ -17,10 +24,11 @@ import {createPublicClient, createWalletClient, encodeFunctionData, parseUnits, 
 import {privateKeyToAccount} from 'viem/accounts';
 import bs58 from 'bs58';
 import {getViemChain, transportFor} from '../core/chainRegistry.ts';
-import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, type ChainKey} from '../core/chainData.ts';
+import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, assetDecimalsForChain, type ChainKey} from '../core/chainData.ts';
 import type {DerivedAccounts} from './keys';
 
 const USDC_DECIMALS = ASSET_ONCHAIN_DECIMALS.USDC;
+type CashAsset = 'USDC' | 'USDG';
 
 const ERC20_TRANSFER_ABI = [
   {
@@ -50,15 +58,16 @@ export function isValidRecipientAddress(chainKey: ChainKey, address: string): bo
   return isAddress(address);
 }
 
-async function sendEvmUsdc(chainKey: ChainKey, session: DerivedAccounts, toAddress: string, amountUsdc: string): Promise<{hash: string}> {
-  const tokenAddress = TOKEN_ADDRESSES.USDC[chainKey];
-  if (!tokenAddress) throw new Error(`No verified USDC address for ${chainKey}.`);
+async function sendEvmCashAsset(chainKey: ChainKey, asset: CashAsset, session: DerivedAccounts, toAddress: string, amount: string): Promise<{hash: string}> {
+  const tokenAddress = TOKEN_ADDRESSES[asset]?.[chainKey];
+  if (!tokenAddress) throw new Error(`No verified ${asset} address for ${chainKey}.`);
   const chain = getViemChain(chainKey);
   const transport = transportFor(chain.id);
   const publicClient = createPublicClient({chain, transport});
   const fromAddress = session.evm.address as `0x${string}`;
 
-  const amountRaw = parseUnits(amountUsdc, USDC_DECIMALS);
+  const decimals = assetDecimalsForChain(chainKey, asset) ?? ASSET_ONCHAIN_DECIMALS[asset];
+  const amountRaw = parseUnits(amount, decimals);
   const data = encodeFunctionData({abi: ERC20_TRANSFER_ABI, functionName: 'transfer', args: [toAddress as `0x${string}`, amountRaw]});
 
   // Google-login sessions carry no privateKey to build a viem
@@ -177,15 +186,23 @@ async function sendSolanaUsdcViaParticle(session: DerivedAccounts, toAddress: st
   return {signature};
 }
 
-/** Sends USDC on the given chain from the unlocked session's own account, direct to the chain — see this file's header for why there is no backend step. */
-export async function sendUsdc(chainKey: ChainKey, session: DerivedAccounts, toAddress: string, amountUsdc: string): Promise<{txId: string}> {
+/**
+ * Sends this chain's real cash asset (USDC everywhere, USDG on
+ * Robinhood Chain — see this file's own header) from the unlocked
+ * session's own account, direct to the chain. `asset` defaults to
+ * 'USDC' for every existing call site; pass CASH_ASSET_BY_CHAIN[chainKey]
+ * explicitly to get the real one for chains where that's not USDC.
+ */
+export async function sendUsdc(chainKey: ChainKey, session: DerivedAccounts, toAddress: string, amount: string, asset: CashAsset = 'USDC'): Promise<{txId: string}> {
   if (!isValidRecipientAddress(chainKey, toAddress)) {
     throw new Error(`That doesn't look like a valid ${chainKey === 'solana' ? 'Solana' : 'wallet'} address.`);
   }
   if (chainKey === 'solana') {
-    const {signature} = session.authMethod === 'google' ? await sendSolanaUsdcViaParticle(session, toAddress, amountUsdc) : await sendSolanaUsdc(session, toAddress, amountUsdc);
+    // No USDG on Solana in this app's own verified data — always the
+    // real USDC path here regardless of what's passed.
+    const {signature} = session.authMethod === 'google' ? await sendSolanaUsdcViaParticle(session, toAddress, amount) : await sendSolanaUsdc(session, toAddress, amount);
     return {txId: signature};
   }
-  const {hash} = await sendEvmUsdc(chainKey, session, toAddress, amountUsdc);
+  const {hash} = await sendEvmCashAsset(chainKey, asset, session, toAddress, amount);
   return {txId: hash};
 }

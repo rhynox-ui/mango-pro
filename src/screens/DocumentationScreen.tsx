@@ -12,18 +12,19 @@
 import {ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {ChevronLeftIcon} from '../components/icons';
 import {CHAIN_LABEL, type ChainKey} from '../core/chainData';
-import {USDC_SUPPORTED_CHAINS} from '../core/usdcBalances';
+import {CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS} from '../core/usdcBalances';
 import {DEV_FEE_PCT} from '../core/fees';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 
 type Section = {title: string; body: string};
 
-// Every chain this app trades on but has no verified USDC contract for
-// (Robinhood Chain's own real stablecoin is USDG, not USDC; a few
-// others only have USDT0) — derived the same way USDC_SUPPORTED_CHAINS
+// Every chain this app trades on with no real cash asset at all — no
+// verified USDC contract AND not Robinhood Chain (whose own real
+// stablecoin, USDG, is what CASH_SUPPORTED_CHAINS adds it for; a few
+// others here only have USDT0). Derived the same way CASH_SUPPORTED_CHAINS
 // itself is, so this list can't silently go stale if that changes.
 const ALL_CHAIN_KEYS = Object.keys(CHAIN_LABEL) as ChainKey[];
-const NON_USDC_CHAINS = ALL_CHAIN_KEYS.filter(c => !USDC_SUPPORTED_CHAINS.includes(c));
+const NON_CASH_CHAINS = ALL_CHAIN_KEYS.filter(c => !CASH_SUPPORTED_CHAINS.includes(c));
 
 const SECTIONS: Section[] = [
   {
@@ -49,12 +50,12 @@ const SECTIONS: Section[] = [
   {
     title: 'Buying and selling',
     body:
-      'Every quote on the trade screen is a real, live quote from Relay, not an estimate — slippage (Trade Settings, the gear icon there) is sent straight through to it. Buying isn’t limited to the token’s own chain: tap “Pay from” to fund a buy from a different chain’s native asset or USDC, and Relay routes the bridge and the swap together in one confirmation. Selling works the other way too — tap “Receive as” to take the proceeds as USDC instead of the chain’s native asset, wherever that chain has real USDC. If Relay itself has no route for a thin or very new token, Mango Pro automatically checks a series of direct on-chain DEXs and aggregators on EVM chains, or pump.fun’s bonding curve and PumpSwap on Solana, before giving up. A price-impact warning appears when a trade would move the pool more than 3%. Every trade — Relay’s or a fallback’s — is checked by this app’s own transaction-intent firewall before anything is signed: it verifies the chain, recipient, and approval amount actually match what you quoted, so a manipulated response gets caught before it can be signed rather than after.',
+      `Every quote on the trade screen is a real, live quote from Relay, not an estimate — slippage (Trade Settings, the gear icon there) is sent straight through to it. Buying isn’t limited to the token’s own chain: tap “Pay from” to fund a buy from a different chain’s native asset, or from your cash on any chain you hold it on — USDC almost everywhere, and on Robinhood Chain its own real stablecoin, USDG, works exactly the same way, so a wallet whose only funds are USDG on Robinhood isn’t stuck: Relay bridges and swaps it into the token you’re buying, on any chain, in one confirmation. Selling works the other way too — tap “Receive as” to take the proceeds as cash instead of the chain’s native asset, wherever that chain has one. If Relay itself has no route for a thin or very new token, Mango Pro automatically checks a series of direct on-chain DEXs and aggregators on EVM chains, or pump.fun’s bonding curve and PumpSwap on Solana, before giving up. A price-impact warning appears when a trade would move the pool more than 3%. Every trade — Relay’s or a fallback’s — is checked by this app’s own transaction-intent firewall before anything is signed: it verifies the chain, recipient, and approval amount actually match what you quoted, so a manipulated response gets caught before it can be signed rather than after.`,
   },
   {
     title: 'Deposits and withdrawals',
     body:
-      `Profile’s Total cash shows your real USDC balance across every chain that has a verified USDC contract (${USDC_SUPPORTED_CHAINS.map((c: ChainKey) => CHAIN_LABEL[c]).join(', ')}). Deposit shows the real address for whichever chain you pick — one EVM address covers every EVM chain in that list, Solana has its own separate address. Withdraw sends USDC directly from your device to any address you enter, broadcast straight to the chain — there is no Mango server in that path, and sends can’t be reversed once confirmed. ${NON_USDC_CHAINS.length > 0 ? `${NON_USDC_CHAINS.map(c => CHAIN_LABEL[c]).join(', ')} don’t have a verified USDC contract yet, so USDC deposit/withdraw and “pay or receive in USDC” aren’t available there — trading on those chains still works using their own native asset.` : ''}`,
+      `Profile’s Total cash shows your real balance across every chain with a real cash asset (${CASH_SUPPORTED_CHAINS.map((c: ChainKey) => `${CASH_ASSET_BY_CHAIN[c]} on ${CHAIN_LABEL[c]}`).join(', ')}) — USDC almost everywhere, and Robinhood Chain’s own real stablecoin, USDG, counted the same way rather than left out for being a different token. Deposit and Withdraw both work the same on every one of those chains: Deposit shows the real address for whichever chain you pick — one EVM address covers every EVM chain in the list, Solana has its own separate address — and Withdraw sends that chain’s real cash asset directly from your device to any address you enter, broadcast straight to the chain, with no Mango server in that path and no way to reverse it once confirmed. ${NON_CASH_CHAINS.length > 0 ? `${NON_CASH_CHAINS.map(c => CHAIN_LABEL[c]).join(', ')} ${NON_CASH_CHAINS.length === 1 ? 'has' : 'have'} no real cash asset yet, so cash deposit/withdraw and “pay or receive in cash” aren’t available there — trading on those chains still works using their own native asset.` : ''} Robinhood Chain also gets a separate, dedicated deposit option for its native ETH — needed purely for gas, distinct from its real USDG cash row in the main list above. And Convert (next to Deposit/Withdraw on Total cash) moves your balance between any two of these cash chains directly — USDG on Robinhood into USDC elsewhere, or back — through the same Relay pipeline every trade uses, with Mango’s own fee waived entirely: converting your own cash isn’t a trade Mango takes a cut of, though Relay’s real network costs still apply and show before you confirm.`,
   },
   {
     title: 'Portfolio',
