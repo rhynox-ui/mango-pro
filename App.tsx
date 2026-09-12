@@ -399,7 +399,7 @@ function AppInner(): React.JSX.Element {
   // ProfileScreen to open its own real withdraw modal the moment it
   // mounts from that specific navigation, without duplicating any of
   // its modal state up here.
-  const [pendingProfileAction, setPendingProfileAction] = useState<'withdraw' | null>(null);
+  const [pendingProfileAction, setPendingProfileAction] = useState<'withdraw' | 'deposit' | null>(null);
 
   useEffect(() => {
     readLastCrash().then(setLastCrash);
@@ -424,6 +424,13 @@ function AppInner(): React.JSX.Element {
     setScreen('tabs');
     setTab('profile');
     setPendingProfileAction('withdraw');
+  };
+  // Home's own small Deposit button — same reasoning as goToWalletActions
+  // above, just for the opposite direction and reachable from a second
+  // real entry point (Home, not only Settings).
+  const goToDeposit = () => {
+    setTab('profile');
+    setPendingProfileAction('deposit');
   };
   // Settings' "Profile and Account" row has no dedicated screen either —
   // Profile already covers address/account identity, so this just takes
@@ -463,7 +470,7 @@ function AppInner(): React.JSX.Element {
             ) : showingHistory ? (
               <HistoryScreen onBack={() => setScreen('tabs')} />
             ) : tab === 'home' ? (
-              <HomeScreen onOpenSettings={openSettings} onSelectToken={selectDiscoveryToken} />
+              <HomeScreen onOpenSettings={openSettings} onSelectToken={selectDiscoveryToken} onOpenDeposit={goToDeposit} />
             ) : tab === 'search' ? (
               <SearchScreen onSelectToken={selectSearchResult} />
             ) : tab === 'swap' ? (

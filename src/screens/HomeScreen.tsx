@@ -95,7 +95,15 @@ function formatMarketCap(n: number | null): string {
   return `$${n.toFixed(0)} MC`;
 }
 
-export function HomeScreen({onOpenSettings, onSelectToken}: {onOpenSettings: () => void; onSelectToken?: (token: DiscoveryToken) => void}) {
+export function HomeScreen({
+  onOpenSettings,
+  onSelectToken,
+  onOpenDeposit,
+}: {
+  onOpenSettings: () => void;
+  onSelectToken?: (token: DiscoveryToken) => void;
+  onOpenDeposit?: () => void;
+}) {
   const {colors} = useTheme();
   const styles = makeStyles(colors);
   const [tab, setTab] = useState<DiscoveryTab>('tokens');
@@ -171,16 +179,23 @@ export function HomeScreen({onOpenSettings, onSelectToken}: {onOpenSettings: () 
             </TouchableOpacity>
           </View>
 
-          <View style={styles.discoveryTabs}>
-            <TouchableOpacity style={styles.discoveryTab} onPress={() => setTab('watchlist')} activeOpacity={0.7}>
-              <StarIcon color={tab === 'watchlist' ? colors.textPrimary : colors.textMuted} size={15} />
-              <Text style={[styles.discoveryTabText, tab === 'watchlist' && styles.discoveryTabTextActive]}>Watchlist</Text>
-              {tab === 'watchlist' && <View style={styles.discoveryTabIndicator} />}
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.discoveryTab} onPress={() => setTab('tokens')} activeOpacity={0.7}>
-              <Text style={[styles.discoveryTabText, tab === 'tokens' && styles.discoveryTabTextActive]}>Tokens</Text>
-              {tab === 'tokens' && <View style={styles.discoveryTabIndicator} />}
-            </TouchableOpacity>
+          <View style={styles.discoveryTabsRow}>
+            <View style={styles.discoveryTabs}>
+              <TouchableOpacity style={styles.discoveryTab} onPress={() => setTab('watchlist')} activeOpacity={0.7}>
+                <StarIcon color={tab === 'watchlist' ? colors.textPrimary : colors.textMuted} size={15} />
+                <Text style={[styles.discoveryTabText, tab === 'watchlist' && styles.discoveryTabTextActive]}>Watchlist</Text>
+                {tab === 'watchlist' && <View style={styles.discoveryTabIndicator} />}
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.discoveryTab} onPress={() => setTab('tokens')} activeOpacity={0.7}>
+                <Text style={[styles.discoveryTabText, tab === 'tokens' && styles.discoveryTabTextActive]}>Tokens</Text>
+                {tab === 'tokens' && <View style={styles.discoveryTabIndicator} />}
+              </TouchableOpacity>
+            </View>
+            {onOpenDeposit && (
+              <TouchableOpacity style={styles.depositButton} onPress={onOpenDeposit} activeOpacity={0.7}>
+                <Text style={styles.depositButtonText}>Deposit</Text>
+              </TouchableOpacity>
+            )}
           </View>
 
           {tab === 'tokens' && (
@@ -328,16 +343,19 @@ function makeStyles(colors: Colors) {
       backgroundColor: colors.panel,
     },
 
-    discoveryTabs: {
+    discoveryTabsRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 22,
+      justifyContent: 'space-between',
       paddingHorizontal: 16,
       paddingTop: 10,
       borderBottomWidth: 1,
       borderBottomColor: colors.divider,
     },
+    discoveryTabs: {flexDirection: 'row', alignItems: 'center', gap: 22},
     discoveryTab: {flexDirection: 'row', alignItems: 'center', gap: 6, paddingBottom: 12, position: 'relative'},
+    depositButton: {backgroundColor: colors.ctaBg, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 7, marginBottom: 10},
+    depositButtonText: {color: colors.ctaText, fontSize: 12.5, fontWeight: '700'},
     discoveryTabText: {color: colors.textMuted, fontSize: 15, fontWeight: '600'},
     discoveryTabTextActive: {color: colors.textPrimary, fontWeight: '700'},
     discoveryTabIndicator: {

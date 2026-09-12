@@ -98,8 +98,8 @@ export function ProfileScreen({
 }: {
   onOpenSettings: () => void;
   onOpenHistory: () => void;
-  /** Set by App.tsx when navigation here should also open a specific action (e.g. Settings' "Deposit and Withdraw" row) — consumed once below, not a persistent mode. */
-  pendingAction?: 'withdraw' | null;
+  /** Set by App.tsx when navigation here should also open a specific action (e.g. Settings' "Deposit and Withdraw" row, or Home's own Deposit button) — consumed once below, not a persistent mode. */
+  pendingAction?: 'withdraw' | 'deposit' | null;
   onPendingActionHandled?: () => void;
 }) {
   const {colors} = useTheme();
@@ -245,6 +245,9 @@ export function ProfileScreen({
   useEffect(() => {
     if (pendingAction === 'withdraw') {
       setWithdrawStep('network');
+      onPendingActionHandled?.();
+    } else if (pendingAction === 'deposit') {
+      setDepositStep('network');
       onPendingActionHandled?.();
     }
     // onPendingActionHandled is a fresh closure every render (App.tsx
