@@ -30,7 +30,7 @@
 // real too now (src/wallet/watchlist.ts), not a dead second tab.
 
 import {useMemo, useEffect, useState} from 'react';
-import {ActivityIndicator, FlatList, Image, Modal, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
+import {ActivityIndicator, FlatList, Image, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {FilterIcon, GearIcon, StarIcon} from '../components/icons';
 import {fetchGraduatedTokens, fetchBondingTokens, fetchTrendingTokens, type DiscoveryToken} from '../core/discoveryFeed';
 import {getWatchlist, subscribeWatchlist, toggleWatchlist} from '../wallet/watchlist';
@@ -54,6 +54,11 @@ const SORT_OPTIONS = [
   {key: 'mcapAsc', label: 'Market cap: low to high'},
   {key: 'changeDesc', label: '24h change: gainers first'},
   {key: 'changeAsc', label: '24h change: losers first'},
+  {key: 'volumeDesc', label: 'Most volume (24h)'},
+  {key: 'txDesc', label: 'Most transactions (24h)'},
+  {key: 'liqDesc', label: 'Most liquidity'},
+  {key: 'ageNewest', label: 'Pair age: newest first'},
+  {key: 'ageOldest', label: 'Pair age: oldest first'},
 ] as const;
 type SortKey = (typeof SORT_OPTIONS)[number]['key'];
 
@@ -73,6 +78,21 @@ function sortTokens(tokens: DiscoveryToken[], sort: SortKey): DiscoveryToken[] {
       break;
     case 'changeAsc':
       sorted.sort((a, b) => withRank(a.change24h, false) - withRank(b.change24h, false));
+      break;
+    case 'volumeDesc':
+      sorted.sort((a, b) => withRank(b.volumeUsd24h, true) - withRank(a.volumeUsd24h, true));
+      break;
+    case 'txDesc':
+      sorted.sort((a, b) => withRank(b.txCount24h, true) - withRank(a.txCount24h, true));
+      break;
+    case 'liqDesc':
+      sorted.sort((a, b) => withRank(b.liquidityUsd, true) - withRank(a.liquidityUsd, true));
+      break;
+    case 'ageNewest':
+      sorted.sort((a, b) => withRank(b.createdAt, true) - withRank(a.createdAt, true));
+      break;
+    case 'ageOldest':
+      sorted.sort((a, b) => withRank(a.createdAt, false) - withRank(b.createdAt, false));
       break;
   }
   return sorted;
@@ -249,19 +269,24 @@ export function HomeScreen({
       <TouchableOpacity style={styles.sortBackdrop} activeOpacity={1} onPress={() => setSortMenuOpen(false)}>
         <TouchableOpacity activeOpacity={1} style={styles.sortCard} onPress={() => {}}>
           <Text style={styles.sortTitle}>Sort by</Text>
-          {SORT_OPTIONS.map(opt => (
-            <TouchableOpacity
-              key={opt.key}
-              style={styles.sortRow}
-              activeOpacity={0.7}
-              onPress={() => {
-                setSort(opt.key);
-                setSortMenuOpen(false);
-              }}>
-              <Text style={styles.sortRowText}>{opt.label}</Text>
-              {sort === opt.key && <Text style={styles.sortCheck}>✓</Text>}
-            </TouchableOpacity>
-          ))}
+          {/* Now 10 options (was 5) — capped + scrollable so a longer
+              list never gets clipped top/bottom on a shorter phone or
+              with larger accessibility text sizes. */}
+          <ScrollView style={styles.sortScroll} bounces={false}>
+            {SORT_OPTIONS.map(opt => (
+              <TouchableOpacity
+                key={opt.key}
+                style={styles.sortRow}
+                activeOpacity={0.7}
+                onPress={() => {
+                  setSort(opt.key);
+                  setSortMenuOpen(false);
+                }}>
+                <Text style={styles.sortRowText}>{opt.label}</Text>
+                {sort === opt.key && <Text style={styles.sortCheck}>✓</Text>}
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
         </TouchableOpacity>
       </TouchableOpacity>
     </Modal>
@@ -432,6 +457,7 @@ function makeStyles(colors: Colors) {
       paddingHorizontal: 4,
     },
     sortTitle: {color: colors.textMuted, fontSize: 11.5, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, paddingHorizontal: 14, paddingTop: 8, paddingBottom: 4},
+    sortScroll: {maxHeight: 420},
     sortRow: {
       flexDirection: 'row',
       alignItems: 'center',

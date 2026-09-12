@@ -72,6 +72,14 @@ export type DiscoveryToken = {
   priceUsd: number | null;
   change24h: number | null;
   marketCapUsd: number | null;
+  /** Real pool liquidity in USD. Only DexScreener/GeckoTerminal pairs carry this — pump.fun's bonding-curve listing has no DEX pool yet, so Graduated/Bonding tokens are honestly null here, never estimated from curve reserves. */
+  liquidityUsd: number | null;
+  /** Real 24h trade volume in USD, same source availability as liquidityUsd. */
+  volumeUsd24h: number | null;
+  /** Real 24h buy+sell count, same source availability as liquidityUsd. */
+  txCount24h: number | null;
+  /** Unix ms this token/pair was first created — pump.fun's own token-creation timestamp for Graduated/Bonding, the pair's listing time for DexScreener/GeckoTerminal sources. */
+  createdAt: number | null;
 };
 
 export type DiscoveryResult = {tokens: DiscoveryToken[]; error: string | null};
@@ -131,6 +139,14 @@ async function hydrateBoostedToken(chainKey: ChainKey, dexScreenerChainId: strin
       priceUsd: num(best.priceUsd),
       change24h: num(best.priceChange?.h24),
       marketCapUsd: num(best.marketCap ?? best.fdv),
+      liquidityUsd: num(best.liquidity?.usd),
+      volumeUsd24h: num(best.volume?.h24),
+      txCount24h: (() => {
+        const buys = num(best.txns?.h24?.buys);
+        const sells = num(best.txns?.h24?.sells);
+        return buys == null && sells == null ? null : (buys ?? 0) + (sells ?? 0);
+      })(),
+      createdAt: num(best.pairCreatedAt),
     };
   } catch {
     return null;
@@ -213,7 +229,16 @@ async function fetchTrendingPoolsForChain(chainKey: ChainKey): Promise<Discovery
     if (!res.ok) return [];
     const body = (await res.json()) as {
       data?: {
-        attributes?: {market_cap_usd?: unknown; fdv_usd?: unknown; base_token_price_usd?: unknown; price_change_percentage?: {h24?: unknown}};
+        attributes?: {
+          market_cap_usd?: unknown;
+          fdv_usd?: unknown;
+          base_token_price_usd?: unknown;
+          price_change_percentage?: {h24?: unknown};
+          reserve_in_usd?: unknown;
+          volume_usd?: {h24?: unknown};
+          transactions?: {h24?: {buys?: unknown; sells?: unknown}};
+          pool_created_at?: unknown;
+        };
         relationships?: {base_token?: {data?: {id?: string}}};
       }[];
       included?: {type?: string; id?: string; attributes?: GeckoTerminalTokenAttrs}[];
@@ -244,6 +269,22 @@ async function fetchTrendingPoolsForChain(chainKey: ChainKey): Promise<Discovery
         priceUsd: num(pool?.attributes?.base_token_price_usd),
         change24h: num(pool?.attributes?.price_change_percentage?.h24),
         marketCapUsd: num(pool?.attributes?.market_cap_usd ?? pool?.attributes?.fdv_usd),
+        liquidityUsd: num(pool?.attributes?.reserve_in_usd),
+        volumeUsd24h: num(pool?.attributes?.volume_usd?.h24),
+        txCount24h: (() => {
+          const buys = num(pool?.attributes?.transactions?.h24?.buys);
+          const sells = num(pool?.attributes?.transactions?.h24?.sells);
+          return buys == null && sells == null ? null : (buys ?? 0) + (sells ?? 0);
+        })(),
+        // pool_created_at is an ISO 8601 string here, unlike DexScreener's
+        // own pairCreatedAt (already unix ms) — normalized to ms so
+        // sortTokens's age comparison works the same regardless of source.
+        createdAt: (() => {
+          const raw = pool?.attributes?.pool_created_at;
+          if (typeof raw !== 'string') return null;
+          const parsed = Date.parse(raw);
+          return Number.isFinite(parsed) ? parsed : null;
+        })(),
       });
     }
     return tokens;
@@ -298,6 +339,8 @@ type PumpFunCoin = {
   usd_market_cap?: number;
   market_cap?: number;
   complete?: boolean;
+  /** Unix ms — pump.fun's own token-creation time, real "age" data even though this listing has no DEX pool yet. */
+  created_timestamp?: number;
 };
 
 const PUMP_FUN_RESULT_LIMIT = 20;
@@ -320,6 +363,13 @@ function mapPumpFunCoin(coin: PumpFunCoin): DiscoveryToken | null {
     priceUsd: null,
     change24h: null,
     marketCapUsd: num(coin.usd_market_cap ?? coin.market_cap),
+    // No DEX pool yet on a bonding-curve listing — honestly null rather
+    // than estimated from curve reserves (same reasoning as priceUsd
+    // above).
+    liquidityUsd: null,
+    volumeUsd24h: null,
+    txCount24h: null,
+    createdAt: num(coin.created_timestamp),
   };
 }
 

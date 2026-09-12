@@ -63,6 +63,10 @@ export type DexScreenerPair = {
   priceChange?: {h24?: number};
   marketCap?: number;
   fdv?: number;
+  volume?: {h24?: number};
+  txns?: {h24?: {buys?: number; sells?: number}};
+  /** Unix ms — DexScreener's own "when this pair was created" field, used as this token's listed age. */
+  pairCreatedAt?: number;
 };
 
 /**
