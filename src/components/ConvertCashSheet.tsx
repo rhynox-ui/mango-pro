@@ -117,7 +117,13 @@ export function ConvertCashSheet({
 
   const amtNum = Number(amount) || 0;
   const fromBalance = balanceFor(cashPortfolio, fromChain);
-  const insufficientBalance = amtNum > 0 && amtNum > fromBalance;
+  // Same guard TokenTradeScreen's own insufficientBalance uses (there
+  // via `balance !== null`) — cashPortfolio not having resolved yet
+  // reads identically to "balance is 0" via balanceFor's own fallback,
+  // so without this a user typing an amount before that first fetch
+  // lands would see a false "Insufficient balance" for a chain that
+  // may well have real funds.
+  const insufficientBalance = cashPortfolio !== null && amtNum > 0 && amtNum > fromBalance;
   const sameChain = fromChain === toChain;
 
   useEffect(() => {
