@@ -100,6 +100,13 @@ async function hydrateBoostedToken(chainKey: ChainKey, dexScreenerChainId: strin
     const pairs = Array.isArray(body?.pairs) ? body.pairs : [];
     let best: DexScreenerPair | null = null;
     let bestLiquidity = -1;
+    // A token can trade across several pools, and DexScreener often
+    // attaches image metadata to only one of them — track the first
+    // real image found across ANY of this token's pairs separately from
+    // "best" (which stays purely about price/mcap/liquidity), so a real
+    // icon never goes missing just because the highest-liquidity pool
+    // happens to be the one DexScreener didn't tag with an image.
+    let firstImageUrl: string | null = null;
     for (const pair of pairs) {
       if (pair?.chainId !== dexScreenerChainId) continue;
       const liquidity = num(pair?.liquidity?.usd) ?? 0;
@@ -107,15 +114,20 @@ async function hydrateBoostedToken(chainKey: ChainKey, dexScreenerChainId: strin
         bestLiquidity = liquidity;
         best = pair;
       }
+      if (!firstImageUrl) {
+        const pairImage = (pair as {info?: {imageUrl?: string}})?.info?.imageUrl;
+        if (typeof pairImage === 'string') firstImageUrl = pairImage;
+      }
     }
     if (!best) return null;
-    const info = (best as {info?: {imageUrl?: string}})?.info;
+    const bestInfo = (best as {info?: {imageUrl?: string}})?.info;
+    const bestImageUrl = typeof bestInfo?.imageUrl === 'string' ? bestInfo.imageUrl : null;
     return {
       chainKey,
       tokenAddress,
       symbol: String(best.baseToken?.symbol ?? '?'),
       name: String(best.baseToken?.name ?? best.baseToken?.symbol ?? 'Unknown token'),
-      imageUrl: typeof info?.imageUrl === 'string' ? info.imageUrl : null,
+      imageUrl: bestImageUrl ?? firstImageUrl,
       priceUsd: num(best.priceUsd),
       change24h: num(best.priceChange?.h24),
       marketCapUsd: num(best.marketCap ?? best.fdv),

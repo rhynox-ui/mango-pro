@@ -65,23 +65,36 @@ export async function searchTokens(query: string): Promise<TokenSearchResult[]> 
 
       const dedupeKey = `${chainKey}:${tokenAddress.toLowerCase()}`;
       const existing = bestByKey.get(dedupeKey);
-      if (existing && existing.liquidityUsd >= rankedLiquidity) continue;
 
-      const priceUsd = Number(pair?.priceUsd);
-      const change24h = Number(pair?.priceChange?.h24);
-      const marketCapUsd = Number(pair?.marketCap ?? pair?.fdv);
       // Same field discoveryFeed.ts's own hydrateBoostedToken already
       // reads off a DexScreener pair — not part of DexScreenerPair's
       // typed shape (only Trending's own boost-hydration path declared
       // it before), so read the same way: an inline cast, never fabricated.
       const info = (pair as {info?: {imageUrl?: string}})?.info;
+      const imageUrl = typeof info?.imageUrl === 'string' ? info.imageUrl : null;
+
+      if (existing && existing.liquidityUsd >= rankedLiquidity) {
+        // This pair loses on liquidity so it won't supply price/mcap
+        // data, but a token can have several pools and DexScreener
+        // often attaches image metadata to only one of them — never
+        // drop a real image just because a different pool for the same
+        // token happens to have more liquidity.
+        if (!existing.imageUrl && imageUrl) {
+          bestByKey.set(dedupeKey, {...existing, imageUrl});
+        }
+        continue;
+      }
+
+      const priceUsd = Number(pair?.priceUsd);
+      const change24h = Number(pair?.priceChange?.h24);
+      const marketCapUsd = Number(pair?.marketCap ?? pair?.fdv);
 
       bestByKey.set(dedupeKey, {
         chainKey,
         tokenAddress,
         symbol: String(pair?.baseToken?.symbol ?? '?'),
         name: String(pair?.baseToken?.name ?? pair?.baseToken?.symbol ?? 'Unknown token'),
-        imageUrl: typeof info?.imageUrl === 'string' ? info.imageUrl : null,
+        imageUrl: imageUrl ?? existing?.imageUrl ?? null,
         priceUsd: Number.isFinite(priceUsd) ? priceUsd : null,
         change24h: Number.isFinite(change24h) ? change24h : null,
         marketCapUsd: Number.isFinite(marketCapUsd) ? marketCapUsd : null,
