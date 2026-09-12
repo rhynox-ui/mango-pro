@@ -401,6 +401,11 @@ export function TokenTradeScreen({
   // applies. Built in here from the start rather than shipped without
   // it and patched later, having already paid for that lesson twice.
   const [selectedPercent, setSelectedPercent] = useState<number | null>(null);
+  // Pure press feedback (not selection) — activeOpacity alone reads too
+  // subtly against the pill's already-light background, so onPressIn/Out
+  // toggles a real background shade on top of it, same idea requested
+  // for this exact row.
+  const [pressedPct, setPressedPct] = useState<number | null>(null);
   const [maxLoading, setMaxLoading] = useState(false);
 
   function handleQuickPct(pct: number) {
@@ -824,8 +829,14 @@ export function TokenTradeScreen({
         {QUICK_PCT_OPTIONS.map(pct => (
           <TouchableOpacity
             key={pct}
-            style={[styles.quickPctPill, selectedPercent === pct && styles.quickPctPillActive]}
+            style={[
+              styles.quickPctPill,
+              selectedPercent === pct && styles.quickPctPillActive,
+              pressedPct === pct && selectedPercent !== pct && styles.quickPctPillPressed,
+            ]}
             onPress={() => handleQuickPct(pct)}
+            onPressIn={() => setPressedPct(pct)}
+            onPressOut={() => setPressedPct(null)}
             disabled={balance === null || maxLoading}
             activeOpacity={0.7}>
             <Text style={[styles.quickPctText, selectedPercent === pct && styles.quickPctTextActive]}>{pct === 1 ? (maxLoading ? '…' : 'MAX') : `${pct * 100}%`}</Text>
@@ -1098,6 +1109,7 @@ function makeStyles(colors: Colors) {
     quickPctRow: {flexDirection: 'row', gap: 6, marginTop: 10, marginBottom: 2},
     quickPctPill: {flex: 1, alignItems: 'center', backgroundColor: colors.pillBg, borderRadius: 999, paddingVertical: 7},
     quickPctPillActive: {backgroundColor: colors.ctaBg},
+    quickPctPillPressed: {backgroundColor: colors.input},
     quickPctText: {color: colors.textSecondary, fontSize: 11, fontWeight: '600'},
     quickPctTextActive: {color: colors.ctaText},
     assetSelector: {flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.pillBg, borderRadius: 999, paddingHorizontal: 6, paddingVertical: 3},
