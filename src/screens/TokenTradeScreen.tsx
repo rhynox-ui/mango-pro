@@ -909,10 +909,27 @@ export function TokenTradeScreen({
               selectedPercent === pct && styles.quickPctPillActive,
               pressedPct === pct && selectedPercent !== pct && styles.quickPctPillPressed,
             ]}
-            onPress={() => handleQuickPct(pct)}
+            onPress={() => {
+              // Real bug fix: this row used to disable itself outright
+              // whenever balance was null, which also covers a FAILED
+              // fetch (balanceFetchFailed), not just a still-loading
+              // one — a disabled TouchableOpacity fires no press events
+              // at all in RN, so a failed balance read left every pill
+              // looking and feeling completely dead, with nothing to
+              // even suggest what to do about it. A failed fetch now
+              // keeps the row tappable and retries it (same retry the
+              // "Couldn't load balance — Retry" text below already
+              // offers), so a tap always does something and shows the
+              // same pressed shading either way.
+              if (balanceFetchFailed) {
+                setBalanceRetryToken(t => t + 1);
+                return;
+              }
+              handleQuickPct(pct);
+            }}
             onPressIn={() => setPressedPct(pct)}
             onPressOut={() => setPressedPct(null)}
-            disabled={balance === null || maxLoading}
+            disabled={balanceLoading || maxLoading}
             activeOpacity={0.7}>
             <Text style={[styles.quickPctText, selectedPercent === pct && styles.quickPctTextActive]}>{pct === 1 ? (maxLoading ? '…' : 'MAX') : `${pct * 100}%`}</Text>
           </TouchableOpacity>
