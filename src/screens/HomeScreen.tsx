@@ -35,8 +35,17 @@ import {FilterIcon, GearIcon, StarIcon} from '../components/icons';
 import {FloatingMangoDecor} from '../components/FloatingMangoDecor';
 import {fetchGraduatedTokens, fetchBondingTokens, fetchTrendingTokens, type DiscoveryToken} from '../core/discoveryFeed';
 import {CHAIN_LABEL, type ChainKey} from '../core/chainData';
+import {fetchUsdcPortfolio, type UsdcPortfolio} from '../core/usdcBalances';
 import {getWatchlist, subscribeWatchlist, toggleWatchlist} from '../wallet/watchlist';
+import {useSession} from '../wallet/SessionContext';
 import {useTheme, type Colors} from '../theme/ThemeContext';
+
+// Same small-local-copy convention every other screen already follows
+// (see ProfileScreen.tsx's own formatWhen comment) rather than sharing
+// one formatter across screens for a single function.
+function formatUsd(n: number): string {
+  return n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
 
 const MANGO_MARK = require('../assets/mango-mark.png');
 
@@ -166,6 +175,8 @@ export function HomeScreen({
 }) {
   const {colors} = useTheme();
   const styles = makeStyles(colors);
+  const {session} = useSession();
+  const [usdcPortfolio, setUsdcPortfolio] = useState<UsdcPortfolio | null>(null);
   const [tab, setTab] = useState<DiscoveryTab>('tokens');
   const [filter, setFilter] = useState<TokenFilter>('Trending');
   const [tokens, setTokens] = useState<DiscoveryToken[]>([]);
@@ -194,6 +205,26 @@ export function HomeScreen({
   const [mcapError, setMcapError] = useState('');
 
   useEffect(() => subscribeWatchlist(setWatchlist), []);
+
+  // Real bug this fixes (found in a security/bug audit pass): this
+  // header balance was a literal hardcoded "$0.00" string, never wired
+  // to anything, while ProfileScreen's own Total cash correctly showed
+  // the real number from this exact same fetchUsdcPortfolio(session) —
+  // meaning a user with a real deposited balance saw it as $0 on the
+  // app's own landing tab. No snapshot-recording here (unlike
+  // ProfileScreen's own effect) — that already happens once, on
+  // Profile's mount/refresh; duplicating it here would just double-write
+  // the same history.
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    fetchUsdcPortfolio(session).then(portfolio => {
+      if (!cancelled) setUsdcPortfolio(portfolio);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
 
   // Switching discovery filter can move to a chain the previous
   // selection doesn't cover (e.g. Graduated/Bonding is Solana-only) —
@@ -284,7 +315,7 @@ export function HomeScreen({
             <View style={styles.logoMark}>
               <Image source={MANGO_MARK} style={styles.logoMarkImage} resizeMode="contain" />
             </View>
-            <Text style={styles.balance}>$0.00</Text>
+            <Text style={styles.balance}>${usdcPortfolio ? formatUsd(usdcPortfolio.totalUsd) : '0.00'}</Text>
             <TouchableOpacity style={styles.settingsButton} onPress={onOpenSettings} hitSlop={8}>
               <GearIcon color={colors.textSecondary} size={20} />
             </TouchableOpacity>
