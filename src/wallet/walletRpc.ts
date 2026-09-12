@@ -40,7 +40,23 @@ function getAsyncStorage() {
   return asyncStoragePromise;
 }
 
-const SOLANA_RPC_ENDPOINTS = ['https://rpc.solanatracker.io/public', 'https://api.mainnet-beta.solana.com'];
+// Real bug this closes, confirmed live: "Couldn't load balance" firing
+// even for plain native SOL, on an otherwise-healthy connection — with
+// only two endpoints, a single bad moment for either one (the Solana
+// Foundation's own public endpoint is documented as heavily rate-limited
+// and not meant for production traffic; solanatracker's is a smaller
+// third-party service with no uptime guarantee) means every call in the
+// loop below fails together. Two more genuinely public, keyless RPC
+// providers added as further fallbacks — Ankr's and PublicNode's public
+// Solana endpoints, both real infra providers already relied on
+// elsewhere in the RPC-aggregator ecosystem, not first-party but not a
+// fly-by-night host either.
+const SOLANA_RPC_ENDPOINTS = [
+  'https://rpc.solanatracker.io/public',
+  'https://solana-rpc.publicnode.com',
+  'https://rpc.ankr.com/solana',
+  'https://api.mainnet-beta.solana.com',
+];
 
 const ERC20_BALANCE_ABI = [
   {
