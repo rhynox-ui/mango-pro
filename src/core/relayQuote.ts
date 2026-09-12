@@ -37,14 +37,18 @@
 //
 // Important, confirmed against Relay's own docs: sponsorship covers
 // DESTINATION-chain fees only — the user still pays origin-chain gas
-// themselves, on every trade, sponsored or not. Mango Pro's only
-// current trade screen (TokenTradeScreen.tsx) does same-chain buy/sell
-// (fromChainKey === toChainKey always), so origin and destination are
-// the same chain there today — verify with a real, funded key whether
-// Relay's sponsorship has any visible effect on that same-chain case
-// before assuming it does. The clearer, unambiguous win is real
-// cross-chain bridge+swap trades (build plan §3/§4, not yet built) —
-// that is where "destination chain" is genuinely a separate leg.
+// themselves, on every trade, sponsored or not. UPDATE (stale comment
+// fixed): this was true when first written but no longer is —
+// TokenTradeScreen.tsx's payOrigin now lets a Buy pay from a DIFFERENT
+// chain than the token being bought (a genuine cross-chain buy,
+// fromChainKey !== toChainKey), and executeRelayQuote.ts signs each
+// step on whichever chain Relay's own response actually names, not a
+// single assumed chain. Same-chain buy/sell is still the common case
+// (Sell, and a Buy where the user hasn't picked a different payOrigin
+// chain), but it is no longer the ONLY case — verify with a real,
+// funded key whether Relay's sponsorship has a visible effect on a
+// genuine cross-chain trade now that one is real and reachable, not
+// hypothetical future work.
 
 import {formatUnits} from 'viem';
 import {currencyAddress, MAINNET_CHAIN_IDS, type ChainKey} from './chainData.ts';
