@@ -29,7 +29,8 @@
 // state rather than silently relabeling Trending's numbers. Watchlist is
 // real too now (src/wallet/watchlist.ts), not a dead second tab.
 
-import {useMemo, useEffect, useState} from 'react';
+import {useEffect, useMemo, useRef, useState} from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {ActivityIndicator, FlatList, Image, Keyboard, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import {FilterIcon, GearIcon, StarIcon} from '../components/icons';
 import {FloatingMangoDecor} from '../components/FloatingMangoDecor';
@@ -125,6 +126,49 @@ const MCAP_PRESETS: {label: string; min: number | null; max: number | null}[] = 
 
 type McapRange = {min: number | null; max: number | null};
 
+// Persisted filter/sort selection — same AsyncStorage load/save shape
+// autoLockPrefs.ts already uses. Real gap this closes: every one of
+// these reset to its default on every remount (reopening the app, or
+// even just navigating away from Home and back), so a user who set up
+// "Bonding, sorted by 24h volume, BNB Chain only" lost it immediately —
+// nothing here was ever meant to be a one-time-per-session choice.
+// mcapMinDraft/mcapMaxDraft (the picker's own text inputs, before
+// "Apply") are deliberately NOT persisted — restoring a half-typed
+// number nobody applied would be restoring something that was never a
+// real choice.
+const HOME_FILTER_STORAGE_KEY = 'mango_pro_home_filter_prefs_v1';
+type HomeFilterPrefs = {filter: TokenFilter; sort: SortKey; chainFilter: ChainKey | 'all'; mcapFilter: McapRange | null};
+
+function isValidHomeFilterPrefs(value: unknown): value is HomeFilterPrefs {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  if (!TOKEN_FILTERS.includes(v.filter as TokenFilter)) return false;
+  if (!SORT_OPTIONS.some(opt => opt.key === v.sort)) return false;
+  if (typeof v.chainFilter !== 'string') return false;
+  if (v.mcapFilter !== null && (typeof v.mcapFilter !== 'object' || v.mcapFilter === undefined)) return false;
+  return true;
+}
+
+async function loadHomeFilterPrefs(): Promise<HomeFilterPrefs | null> {
+  try {
+    const raw = await AsyncStorage.getItem(HOME_FILTER_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return isValidHomeFilterPrefs(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function saveHomeFilterPrefs(prefs: HomeFilterPrefs): Promise<void> {
+  try {
+    await AsyncStorage.setItem(HOME_FILTER_STORAGE_KEY, JSON.stringify(prefs));
+  } catch {
+    // best-effort — a failed write just means the choice doesn't
+    // survive a restart, never a hard error blocking the filter itself
+  }
+}
+
 /** Accepts plain numbers or a k/m/b suffix (e.g. "1.5m" -> 1_500_000) — the same compact shape formatMarketCap already displays, so typing back what you see just works. Empty/unparsable input is null, never a fabricated 0. */
 function parseCompactUsd(input: string): number | null {
   const trimmed = input.trim().toLowerCase();
@@ -203,8 +247,27 @@ export function HomeScreen({
   const [mcapMinDraft, setMcapMinDraft] = useState('');
   const [mcapMaxDraft, setMcapMaxDraft] = useState('');
   const [mcapError, setMcapError] = useState('');
+  // True once a saved filter/sort selection (or the absence of one) has
+  // been loaded — gates both the reset-on-filter-change effect below
+  // (so restoring a persisted combination doesn't immediately wipe its
+  // own chain/mcap half a tick later) and the save effect (so there's
+  // nothing to write back before there's anything real to save).
+  const [filterPrefsHydrated, setFilterPrefsHydrated] = useState(false);
+  const prevFilterRef = useRef<TokenFilter | null>(null);
 
   useEffect(() => subscribeWatchlist(setWatchlist), []);
+
+  useEffect(() => {
+    loadHomeFilterPrefs().then(prefs => {
+      if (prefs) {
+        setFilter(prefs.filter);
+        setSort(prefs.sort);
+        setChainFilter(prefs.chainFilter);
+        setMcapFilter(prefs.mcapFilter);
+      }
+      setFilterPrefsHydrated(true);
+    });
+  }, []);
 
   // Real bug this fixes (found in a security/bug audit pass): this
   // header balance was a literal hardcoded "$0.00" string, never wired
@@ -233,13 +296,29 @@ export function HomeScreen({
   // carried across an unrelated tab switch is still surprising — reset
   // it the same way for the same "never silently hide everything"
   // reason.
+  //
+  // Guarded on filterPrefsHydrated, and only fires on an ACTUAL change
+  // (via prevFilterRef) rather than every time this effect re-runs —
+  // otherwise loading a persisted {filter: 'Bonding', chainFilter:
+  // 'solana'} combination would immediately wipe chainFilter back to
+  // 'all' the instant hydration finished, since this effect's deps
+  // include `filter` too.
   useEffect(() => {
-    setChainFilter('all');
-    setMcapFilter(null);
-    setMcapMinDraft('');
-    setMcapMaxDraft('');
-    setMcapError('');
-  }, [filter]);
+    if (!filterPrefsHydrated) return;
+    if (prevFilterRef.current !== null && prevFilterRef.current !== filter) {
+      setChainFilter('all');
+      setMcapFilter(null);
+      setMcapMinDraft('');
+      setMcapMaxDraft('');
+      setMcapError('');
+    }
+    prevFilterRef.current = filter;
+  }, [filter, filterPrefsHydrated]);
+
+  useEffect(() => {
+    if (!filterPrefsHydrated) return;
+    saveHomeFilterPrefs({filter, sort, chainFilter, mcapFilter});
+  }, [filterPrefsHydrated, filter, sort, chainFilter, mcapFilter]);
 
   useEffect(() => {
     if (filter === 'Most held') {
