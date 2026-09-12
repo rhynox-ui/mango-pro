@@ -9,7 +9,7 @@
 // "Joined <month year>" is the one real data point: today's date.
 
 import {useEffect, useMemo, useState} from 'react';
-import {ActivityIndicator, Alert, Image, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {ActivityIndicator, Alert, Image, Linking, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import {launchImageLibrary} from 'react-native-image-picker';
 import Svg, {Defs, LinearGradient, Line as SvgLine, Path as SvgPath, Stop} from 'react-native-svg';
 import {
@@ -29,7 +29,7 @@ import {fetchCashPortfolio, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type Cas
 import {ConvertCashSheet} from '../components/ConvertCashSheet';
 import {NetworkIcon} from '../wallet/NetworkIcon';
 import {sendUsdc, isValidRecipientAddress} from '../wallet/sendUsdc';
-import {filterTxHistoryForAccount, getTxHistory, subscribeTxHistory, type TxHistoryEntry} from '../wallet/txHistory';
+import {explorerUrlFor, filterTxHistoryForAccount, getTxHistory, subscribeTxHistory, type TxHistoryEntry} from '../wallet/txHistory';
 import {getAvatarUri, getBio, getUsername, isValidUsername, setAvatarUri as saveAvatarUri, setBio as saveBio, setUsername as saveUsername} from '../wallet/profileLocal';
 import {computePortfolioChange, filterHistoryByRange, getPortfolioHistory, recordPortfolioSnapshot, type PortfolioSnapshot} from '../wallet/portfolioHistory';
 import {ReferralModal} from '../referral/ReferralModal';
@@ -80,6 +80,10 @@ function joinedLabel(): string {
 // kept as its own small local copy rather than importing across screens
 // for one function — same reasoning TokenTradeScreen.tsx's own
 // formatUsd gives for not sharing formatters across screens.
+function truncateHash(hash: string): string {
+  return hash.length > 14 ? `${hash.slice(0, 8)}…${hash.slice(-6)}` : hash;
+}
+
 function formatWhen(timestamp: number): string {
   const diffMs = Date.now() - timestamp;
   const minutes = Math.floor(diffMs / 60_000);
@@ -542,9 +546,6 @@ export function ProfileScreen({
             ) : (
               <Text style={styles.totalCashValue}>${cashPortfolio ? formatUsd(cashPortfolio.totalUsd) : '0.00'}</Text>
             )}
-            {cashPortfolio && !cashPortfolio.complete && (
-              <Text style={styles.totalCashNote}>Some chains didn't respond — this may be incomplete.</Text>
-            )}
           </View>
         </View>
         <View style={styles.totalCashActions}>
@@ -601,20 +602,38 @@ export function ProfileScreen({
           what exists, not a bug. */}
       {positionTab === 'Closed' && assetFilter !== 'Perps' && closedTrades.length > 0 ? (
         <View style={styles.closedTradesList}>
-          {closedTrades.map(trade => (
-            <View key={trade.id} style={styles.closedTradeRow}>
-              <View style={[styles.closedTradeDot, !trade.isBuySide && styles.closedTradeDotSell]} />
-              <View style={styles.closedTradeMain}>
-                <Text style={styles.closedTradeTitle} numberOfLines={1}>
-                  {trade.isBuySide ? 'Bought' : 'Sold'} {trade.isBuySide ? trade.receiveSymbol : trade.paySymbol} on {trade.chainLabel}
-                </Text>
-                <Text style={styles.closedTradeSubtitle} numberOfLines={1}>
-                  {trade.payAmount} {trade.paySymbol} → {trade.receivedAmountFormatted ?? '?'} {trade.receiveSymbol}
-                </Text>
-              </View>
-              <Text style={styles.closedTradeWhen}>{formatWhen(trade.timestamp)}</Text>
-            </View>
-          ))}
+          {closedTrades.map(trade => {
+            // Real block-explorer link, same source (txHistory.ts's own
+            // explorerUrlFor) HistoryScreen.tsx already uses from the
+            // header's clock icon — this Positions list is a second,
+            // filtered view onto the exact same persisted trades, so it
+            // gets the exact same "tap a row to verify it on-chain"
+            // behavior rather than being a dead-end list of text.
+            const hash = trade.hashes[0];
+            const explorerUrl = hash ? explorerUrlFor(trade.chainKey, hash) : null;
+            return (
+              <TouchableOpacity
+                key={trade.id}
+                style={styles.closedTradeRow}
+                activeOpacity={explorerUrl ? 0.6 : 1}
+                disabled={!explorerUrl}
+                onPress={() => explorerUrl && Linking.openURL(explorerUrl)}>
+                <View style={[styles.closedTradeDot, !trade.isBuySide && styles.closedTradeDotSell]} />
+                <View style={styles.closedTradeMain}>
+                  <Text style={styles.closedTradeTitle} numberOfLines={1}>
+                    {trade.isBuySide ? 'Bought' : 'Sold'} {trade.isBuySide ? trade.receiveSymbol : trade.paySymbol} on {trade.chainLabel}
+                  </Text>
+                  <Text style={styles.closedTradeSubtitle} numberOfLines={1}>
+                    {trade.payAmount} {trade.paySymbol} → {trade.receivedAmountFormatted ?? '?'} {trade.receiveSymbol}
+                  </Text>
+                </View>
+                <View style={styles.closedTradeRight}>
+                  <Text style={styles.closedTradeWhen}>{formatWhen(trade.timestamp)}</Text>
+                  {hash && <Text style={explorerUrl ? styles.closedTradeHashLink : styles.closedTradeHash}>{truncateHash(hash)}</Text>}
+                </View>
+              </TouchableOpacity>
+            );
+          })}
         </View>
       ) : (
         <Text style={styles.emptyPositions}>{positionTab === 'Open' ? 'No open positions' : 'No closed positions yet'}</Text>
@@ -1086,7 +1105,10 @@ function makeStyles(colors: Colors) {
     closedTradeMain: {flex: 1, minWidth: 0},
     closedTradeTitle: {color: colors.textPrimary, fontSize: 13.5, fontWeight: '700'},
     closedTradeSubtitle: {color: colors.textMuted, fontSize: 11.5, marginTop: 2},
-    closedTradeWhen: {color: colors.textMuted, fontSize: 11, flexShrink: 0},
+    closedTradeRight: {alignItems: 'flex-end', flexShrink: 0, gap: 2},
+    closedTradeWhen: {color: colors.textMuted, fontSize: 11},
+    closedTradeHash: {color: colors.textMuted, fontSize: 10.5, fontFamily: 'monospace'},
+    closedTradeHashLink: {color: colors.textSecondary, fontSize: 10.5, fontFamily: 'monospace', textDecorationLine: 'underline'},
 
     showHiddenPill: {
       alignSelf: 'center',
