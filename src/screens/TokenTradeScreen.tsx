@@ -98,6 +98,20 @@ const DEFAULT_DEMO_TOKEN: DemoToken = {
 
 const QUICK_PCT_OPTIONS = [0.25, 0.5, 0.75, 1] as const;
 
+// Investigated a real user report of price impact reading 11%, 20%, up
+// to 225% on different tokens: this is NOT a units/calculation bug on
+// our side — relayQuote.ts's priceImpactPct is Relay's own
+// details.swapImpact.percent, confirmed against the SDK's own types
+// (see that file's comment), and 200%+ is a real, correctly-computed
+// number for a tiny trade against a pump.fun-thin pool (a market cap of
+// a few thousand dollars means even a $1-2 trade can move the pool's
+// marginal price by multiples, not just percent). The number was real;
+// what was missing was anything stopping a trade at that number. Above
+// this threshold the trade is blocked outright rather than merely shown
+// in red, since a 200%+ impact is not "a worse price" but a trade that
+// hands most of its value straight to the pool.
+const EXTREME_PRICE_IMPACT_PCT = 50;
+
 // A quote round-trip is a real network call, not instant — debouncing
 // this means typing doesn't fire a request per keystroke.
 const QUOTE_DEBOUNCE_MS = 450;
@@ -742,11 +756,13 @@ export function TokenTradeScreen({
     }
   }
 
+  const extremePriceImpact = quote?.priceImpactPct != null && Math.abs(quote.priceImpactPct) > EXTREME_PRICE_IMPACT_PCT;
   const canTrade =
     (Boolean(rawQuoteRef.current) || Boolean(fallbackParamsRef.current)) &&
     Boolean(session) &&
     !insufficientBalance &&
     !needsConsolidation &&
+    !extremePriceImpact &&
     (executeState === 'idle' || executeState === 'error');
   const isExecuting = executeState !== 'idle' && executeState !== 'error' && executeState !== 'success';
 
@@ -780,17 +796,16 @@ export function TokenTradeScreen({
   // bottom tab bar / system gesture nav with no way to scroll to it — a
   // real trade failure was effectively invisible. Surfaced instead as a
   // banner right at the top, above the chart, where it's guaranteed
-  // visible without scrolling. A dangerous price impact (the same >3%
-  // threshold the row below already uses) gets the same treatment when
-  // there's no error to show, since a number like "225%" is exactly the
-  // kind of thing a user must see before tapping Buy/Sell, not after
-  // scrolling past it.
+  // visible without scrolling. Price impact stays in its original row
+  // below — not duplicated up here — since its position wasn't the
+  // problem; see priceImpactPct's own computation in relayQuote.ts for
+  // the separate bug in the NUMBER itself on some tokens.
   const topAlert: {message: string; danger: boolean} | null = executeError
     ? {message: executeError, danger: true}
     : quoteError
       ? {message: quoteError, danger: true}
-      : quote?.priceImpactPct != null && Math.abs(quote.priceImpactPct) > 3
-        ? {message: `High price impact: ${Math.abs(quote.priceImpactPct).toFixed(2)}%`, danger: true}
+      : extremePriceImpact
+        ? {message: `Blocked: ${Math.abs(quote!.priceImpactPct!).toFixed(0)}% price impact — this pool has too little liquidity to trade safely right now.`, danger: true}
         : null;
 
   return (
