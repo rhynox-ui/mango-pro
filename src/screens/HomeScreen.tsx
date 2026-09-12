@@ -29,8 +29,8 @@
 // state rather than silently relabeling Trending's numbers. Watchlist is
 // real too now (src/wallet/watchlist.ts), not a dead second tab.
 
-import {useMemo, useEffect, useState} from 'react';
-import {ActivityIndicator, FlatList, Image, Keyboard, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {useMemo, useEffect, useRef, useState} from 'react';
+import {ActivityIndicator, Animated, Easing, FlatList, Image, Keyboard, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import {FilterIcon, GearIcon, StarIcon} from '../components/icons';
 import {fetchGraduatedTokens, fetchBondingTokens, fetchTrendingTokens, type DiscoveryToken} from '../core/discoveryFeed';
 import {CHAIN_LABEL, type ChainKey} from '../core/chainData';
@@ -38,6 +38,33 @@ import {getWatchlist, subscribeWatchlist, toggleWatchlist} from '../wallet/watch
 import {useTheme, type Colors} from '../theme/ThemeContext';
 
 const MANGO_MARK = require('../assets/mango-mark.png');
+
+/**
+ * The real brand mark (same asset onboarding's IntroSplash/AppLockScreen
+ * already use, not a new illustration) given a slow, gentle vertical
+ * drift — the "floating mango" this app's empty/error states asked for.
+ * useNativeDriver, same convention IntroSplash.tsx's own Animated
+ * sequences use. Dimmed via opacity rather than swapped for a
+ * theme-specific asset: the mark's own amber rim-light already reads
+ * against both colors.bg and colors.panel (the same pairing
+ * AppLockScreen/LockedScreen already ship in production), so a second
+ * light/dark variant isn't needed here.
+ */
+function FloatingMango({size = 64}: {size?: number}) {
+  const translateY = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(translateY, {toValue: -6, duration: 1600, easing: Easing.inOut(Easing.sin), useNativeDriver: true}),
+        Animated.timing(translateY, {toValue: 0, duration: 1600, easing: Easing.inOut(Easing.sin), useNativeDriver: true}),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [translateY]);
+  const sized = useMemo(() => StyleSheet.create({img: {width: size, height: size, opacity: 0.5}}), [size]);
+  return <Animated.Image source={MANGO_MARK} resizeMode="contain" style={[sized.img, {transform: [{translateY}]}]} />;
+}
 
 const TOKEN_FILTERS = ['Trending', 'Most held', 'Graduated', 'Bonding'] as const;
 type TokenFilter = (typeof TOKEN_FILTERS)[number];
@@ -361,6 +388,7 @@ export function HomeScreen({
           )}
           {showingLiveList && !loading && error && (
             <View style={styles.stateBlock}>
+              <FloatingMango />
               <Text style={styles.stateText}>Couldn't load {filter.toLowerCase()} — {error}</Text>
               <TouchableOpacity onPress={() => setRefreshToken(t => t + 1)} activeOpacity={0.7}>
                 <Text style={styles.stateRetry}>Retry</Text>
@@ -369,6 +397,7 @@ export function HomeScreen({
           )}
           {showingLiveList && !loading && !error && (chainFilter !== 'all' || mcapFilter) && listData.length === 0 && (
             <View style={styles.stateBlock}>
+              <FloatingMango />
               <Text style={styles.stateText}>
                 No {filter.toLowerCase()} tokens
                 {chainFilter !== 'all' ? ` on ${CHAIN_LABEL[chainFilter] ?? chainFilter}` : ''}
@@ -388,11 +417,13 @@ export function HomeScreen({
           )}
           {tab === 'tokens' && filter === 'Most held' && (
             <View style={styles.stateBlock}>
+              <FloatingMango />
               <Text style={styles.stateText}>Most held isn't tracked yet — there's no real holder or usage data to rank by.</Text>
             </View>
           )}
           {tab === 'watchlist' && watchlist.length === 0 && (
             <View style={styles.stateBlock}>
+              <FloatingMango />
               <Text style={styles.stateText}>Nothing on your watchlist yet — tap the star on any token to add it.</Text>
             </View>
           )}
