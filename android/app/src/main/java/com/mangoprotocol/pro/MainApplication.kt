@@ -18,6 +18,8 @@ class MainApplication : Application(), ReactApplication {
           // autolinkable since it's a plain module in this app's own
           // source tree, not an installed RN package.
           add(Pbkdf2Package())
+          // Deposit-received local notifications (see LocalNotifyModule.kt).
+          add(LocalNotifyPackage())
         },
     )
   }

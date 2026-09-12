@@ -61,6 +61,7 @@ import {describeTradeError} from '../core/tradeErrors';
 import {fetchErc20TokenMetadata, fetchSplMintDecimals, fetchWalletSplTokenBalance, fetchWalletTokenBalance} from '../wallet/walletRpc';
 import {formatAmountForInput, useAvailableBalance} from '../wallet/useAvailableBalance';
 import {addTxHistoryEntry} from '../wallet/txHistory';
+import {markOwnAction} from '../wallet/depositWatcher';
 import {useSession} from '../wallet/SessionContext';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {TradeSettingsSheet} from '../components/TradeSettingsSheet';
@@ -715,6 +716,12 @@ export function TokenTradeScreen({
       setExecuteWarnings(warnings);
       setExecuteTxHashes(txHashes);
       setExecuteState('success');
+      // A completed Sell converts a token into cash (USDC/native) —
+      // exactly the kind of balance increase App.tsx's depositWatcher
+      // poll would otherwise mistake for an external deposit. Mark it
+      // as our own action regardless of Buy/Sell, same reasoning
+      // ProfileScreen's refreshCashPortfolio applies to Convert/Withdraw.
+      if (session) markOwnAction(session.evm.address);
       addTxHistoryEntry({
         status: 'success',
         chainKey: token.chainKey,

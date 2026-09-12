@@ -32,6 +32,7 @@ import {sendUsdc, isValidRecipientAddress} from '../wallet/sendUsdc';
 import {explorerUrlFor, filterTxHistoryForAccount, getTxHistory, subscribeTxHistory, type TxHistoryEntry} from '../wallet/txHistory';
 import {getAvatarUri, getBio, getUsername, isValidUsername, setAvatarUri as saveAvatarUri, setBio as saveBio, setUsername as saveUsername} from '../wallet/profileLocal';
 import {computePortfolioChange, filterHistoryByRange, getPortfolioHistory, recordPortfolioSnapshot, type PortfolioSnapshot} from '../wallet/portfolioHistory';
+import {markOwnAction} from '../wallet/depositWatcher';
 import {privateKeyToAccount} from 'viem/accounts';
 import {ReferralModal} from '../referral/ReferralModal';
 import {getReferralStats, setReferralHandle, type ReferralSigner} from '../referral/referralApi';
@@ -345,6 +346,12 @@ export function ProfileScreen({
 
   function refreshCashPortfolio() {
     if (!session) return;
+    // Both real call sites of this function (Convert's onConverted,
+    // Withdraw's own success branch below) are this app moving its own
+    // money — mark that BEFORE the fetch resolves so App.tsx's
+    // depositWatcher poll (which runs independently, every 60s) never
+    // mistakes the resulting balance change for an external deposit.
+    markOwnAction(session.evm.address);
     // forceFresh: this fires after a real balance change (a completed
     // Convert) or a deliberate pull-to-refresh — the whole point is a
     // genuinely current number, so this is the one caller that must

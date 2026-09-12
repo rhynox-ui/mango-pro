@@ -51,6 +51,9 @@ import {HistoryScreen} from './src/screens/HistoryScreen';
 import {NewsScreen} from './src/screens/NewsScreen';
 import type {TokenSearchResult} from './src/core/tokenSearch';
 import type {DiscoveryToken} from './src/core/discoveryFeed';
+import {fetchCashPortfolio} from './src/core/usdcBalances';
+import {checkForDeposit} from './src/wallet/depositWatcher';
+import {requestNotificationPermission} from './src/notifications/localNotify';
 
 type Tab = 'home' | 'search' | 'swap' | 'profile';
 type Screen = 'tabs' | 'settings' | 'history' | 'news';
@@ -388,6 +391,7 @@ const crashStyles = StyleSheet.create({
 
 function AppInner(): React.JSX.Element {
   const {colors, mode} = useTheme();
+  const {session} = useSession();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [tab, setTab] = useState<Tab>('home');
   const [screen, setScreen] = useState<Screen>('tabs');
@@ -405,6 +409,32 @@ function AppInner(): React.JSX.Element {
   useEffect(() => {
     readLastCrash().then(setLastCrash);
   }, []);
+
+  // Deposit-received alerts (depositWatcher.ts / localNotify.ts) — lives
+  // here rather than inside ProfileScreen because AppInner (this
+  // component) is the one thing mounted for the whole time the wallet is
+  // unlocked regardless of which of the four tabs is active (each
+  // screen below is a ternary, unmounted when not the active tab — see
+  // this file's own render). A deposit landing while the user is on
+  // Home or Trade should still surface an alert, not only when they
+  // happen to have Profile open.
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    requestNotificationPermission();
+    const checkOnce = () => {
+      fetchCashPortfolio(session).then(portfolio => {
+        if (cancelled || !portfolio.complete) return;
+        checkForDeposit(session.evm.address, portfolio.totalUsd);
+      });
+    };
+    checkOnce();
+    const interval = setInterval(checkOnce, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [session]);
 
   function dismissCrashReport() {
     clearLastCrash();
