@@ -773,8 +773,33 @@ export function TokenTradeScreen({
           ? 'Finding the best route…'
           : null;
 
+  // A failed trade's error (or a genuine quote failure) used to render
+  // as a plain <Text> at the very bottom of this screen's own
+  // (unscrollable — styles.screen has no ScrollView) content, below the
+  // fee/price-impact rows. On a real device that content sits behind the
+  // bottom tab bar / system gesture nav with no way to scroll to it — a
+  // real trade failure was effectively invisible. Surfaced instead as a
+  // banner right at the top, above the chart, where it's guaranteed
+  // visible without scrolling. A dangerous price impact (the same >3%
+  // threshold the row below already uses) gets the same treatment when
+  // there's no error to show, since a number like "225%" is exactly the
+  // kind of thing a user must see before tapping Buy/Sell, not after
+  // scrolling past it.
+  const topAlert: {message: string; danger: boolean} | null = executeError
+    ? {message: executeError, danger: true}
+    : quoteError
+      ? {message: quoteError, danger: true}
+      : quote?.priceImpactPct != null && Math.abs(quote.priceImpactPct) > 3
+        ? {message: `High price impact: ${Math.abs(quote.priceImpactPct).toFixed(2)}%`, danger: true}
+        : null;
+
   return (
     <View style={styles.screen}>
+      {topAlert && (
+        <View style={[styles.topAlertBanner, topAlert.danger && styles.topAlertBannerDanger]}>
+          <Text style={styles.topAlertText}>{topAlert.message}</Text>
+        </View>
+      )}
       <View style={styles.portfolioRow}>
         <Text style={styles.portfolioLabel}>Portfolio</Text>
         <Text style={styles.portfolioValue}>{cashPortfolio ? `$${formatUsd(cashPortfolio.totalUsd)}` : '—'}</Text>
@@ -994,8 +1019,6 @@ export function TokenTradeScreen({
           ${amtNum.toFixed(2)} needs more than one chain — you have ${payOriginChainBalance.toFixed(2)} available in a single transaction right now.
         </Text>
       )}
-      {quoteError && <Text style={styles.errorText}>{quoteError}</Text>}
-
       <View style={styles.feeRow}>
         <View style={styles.feeRowLeft}>
           <View style={styles.feeDot} />
@@ -1031,8 +1054,6 @@ export function TokenTradeScreen({
           ))}
         </View>
       )}
-      {executeError && <Text style={styles.errorText}>{executeError}</Text>}
-
       <TradeSettingsSheet visible={settingsOpen} onClose={() => setSettingsOpen(false)} slippageBps={slippageBps} onSave={setSlippageBps} />
     </View>
   );
@@ -1153,6 +1174,17 @@ function makeStyles(colors: Colors) {
     buySellHint: {color: colors.textMuted, fontSize: 11, textAlign: 'center', marginTop: -4, marginBottom: 6},
     noteText: {color: colors.textMuted, fontSize: 11, marginTop: 6, textAlign: 'center'},
     errorText: {color: colors.danger, fontSize: 11, marginTop: 6, textAlign: 'center'},
+    topAlertBanner: {
+      backgroundColor: colors.panel,
+      borderWidth: 1,
+      borderColor: colors.panelBorder,
+      borderRadius: 12,
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      marginBottom: 8,
+    },
+    topAlertBannerDanger: {backgroundColor: `${colors.danger}1a`, borderColor: colors.danger},
+    topAlertText: {color: colors.danger, fontSize: 12, fontWeight: '600', textAlign: 'center'},
     feeRow: {
       flexDirection: 'row',
       justifyContent: 'space-between',
