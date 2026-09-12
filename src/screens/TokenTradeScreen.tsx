@@ -461,6 +461,13 @@ export function TokenTradeScreen({
   // applies. Built in here from the start rather than shipped without
   // it and patched later, having already paid for that lesson twice.
   const [selectedPercent, setSelectedPercent] = useState<number | null>(null);
+  // Real UX fix: a failed balance fetch used to surface as a red error
+  // the instant it happened, even for someone who'd only just opened
+  // the screen to look at the chart and hadn't asked for a balance yet.
+  // True once the user has actually done something that needs it —
+  // typed a real amount, picked a quick-percent preset, or already hit
+  // retry — never on page load alone.
+  const balanceErrorRelevant = amount.length > 0 || selectedPercent !== null || balanceRetryToken > 0;
   // Pure press feedback (not selection) — activeOpacity alone reads too
   // subtly against the pill's already-light background, so onPressIn/Out
   // toggles a real background shade on top of it, same idea requested
@@ -982,9 +989,19 @@ export function TokenTradeScreen({
               <Text style={styles.usdEquivText}>{quote?.payAmountUsd != null ? `≈ $${quote.payAmountUsd.toFixed(2)}` : ''}</Text>
               {session &&
                 (balanceFetchFailed ? (
-                  <TouchableOpacity onPress={() => setBalanceRetryToken(t => t + 1)} hitSlop={6}>
-                    <Text style={[styles.balanceTextSmall, styles.balanceRetryText]}>Couldn't load balance — Retry</Text>
-                  </TouchableOpacity>
+                  // Real UX fix: this used to render the moment the fetch
+                  // failed, even before the user had done anything but
+                  // open the screen to look at the chart — an alarming
+                  // red error for a balance nothing had asked for yet.
+                  // Now it only appears once the user actually needs that
+                  // number: typed an amount, tapped a quick-percent pill
+                  // (including retrying through it, per that row's own
+                  // fix above), or already retried once here directly.
+                  balanceErrorRelevant && (
+                    <TouchableOpacity onPress={() => setBalanceRetryToken(t => t + 1)} hitSlop={6}>
+                      <Text style={[styles.balanceTextSmall, styles.balanceRetryText]}>Couldn't load balance — Retry</Text>
+                    </TouchableOpacity>
+                  )
                 ) : (
                   <Text style={styles.balanceTextSmall} numberOfLines={1}>
                     {balanceLoading ? '…' : balance !== null ? `${formatAmountForInput(balance)} avail.` : ''}
