@@ -341,7 +341,12 @@ export function ProfileScreen({
 
   function refreshCashPortfolio() {
     if (!session) return;
-    fetchCashPortfolio(session).then(portfolio => {
+    // forceFresh: this fires after a real balance change (a completed
+    // Convert) or a deliberate pull-to-refresh — the whole point is a
+    // genuinely current number, so this is the one caller that must
+    // bypass fetchCashPortfolio's own short-lived cache rather than
+    // risk replaying a stale pre-Convert total.
+    fetchCashPortfolio(session, {forceFresh: true}).then(portfolio => {
       setCashPortfolio(portfolio);
       if (portfolio.complete) {
         recordPortfolioSnapshot(session.evm.address, portfolio.totalUsd).then(setPortfolioHistory);

@@ -97,6 +97,20 @@ function extractSocialLinks(pair: DexScreenerPair | undefined): TokenSocialLink[
   return links;
 }
 
+// Short-lived cache + in-flight dedup, same reasoning as
+// usdcBalances.ts's own portfolio cache: TokenChartPanel re-runs this on
+// every chainKey/tokenAddress change, and bouncing between a few tokens
+// (or navigating away from one and back) is a completely normal usage
+// pattern this was re-hitting DexScreener's API for every single time,
+// for data that's realistically unchanged within a short window. A null
+// result (no pair found, or a fetch failure) is cached too — same "the
+// answer for this exact token isn't going to change a second later"
+// reasoning, and a genuinely new pair getting indexed is worth a
+// deliberate re-check, not an instant one.
+const PAIR_CACHE_TTL_MS = 30_000;
+const pairCache = new Map<string, {data: ResolvedPair | null; fetchedAt: number}>();
+const pairInFlight = new Map<string, Promise<ResolvedPair | null>>();
+
 /**
  * Finds the deepest real DexScreener pair for a token on one chain.
  * Resolves to null — never throws — for every "no chart here" case: an
@@ -109,6 +123,23 @@ function extractSocialLinks(pair: DexScreenerPair | undefined): TokenSocialLink[
 export async function resolveDexScreenerPair({chainKey, tokenAddress}: {chainKey: ChainKey; tokenAddress: string | null}): Promise<ResolvedPair | null> {
   const chainId = dexScreenerChainForChain(chainKey);
   if (!chainId || !tokenAddress) return null;
+
+  const key = `${chainId}:${tokenAddress.toLowerCase()}`;
+  const cached = pairCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < PAIR_CACHE_TTL_MS) return cached.data;
+  const inFlight = pairInFlight.get(key);
+  if (inFlight) return inFlight;
+
+  const promise = resolveDexScreenerPairUncached(chainId, tokenAddress).then(data => {
+    pairCache.set(key, {data, fetchedAt: Date.now()});
+    return data;
+  });
+  pairInFlight.set(key, promise);
+  promise.finally(() => pairInFlight.delete(key));
+  return promise;
+}
+
+async function resolveDexScreenerPairUncached(chainId: string, tokenAddress: string): Promise<ResolvedPair | null> {
   try {
     const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(tokenAddress)}`);
     if (!response.ok) return null;

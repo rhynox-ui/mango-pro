@@ -21,6 +21,54 @@ import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, assetDecimalsForChain, type Cha
 import {fetchWalletSplTokenBalance, fetchWalletTokenBalance} from '../wallet/walletRpc.ts';
 import type {DerivedAccounts} from '../wallet/keys';
 
+// Real caching gap this closes: every one of these fans out to ALL of
+// USDC_SUPPORTED_CHAINS/CASH_SUPPORTED_CHAINS (~10 RPC calls) on every
+// single call — and HomeScreen, ProfileScreen, and TokenTradeScreen each
+// independently call one of these on their own mount, so switching
+// Home -> Trade -> Profile in normal use re-ran the full ~10-chain fan-
+// out three times in as many seconds for a number that hadn't changed.
+// walletRpc.ts already caches each INDIVIDUAL chain's balance (45s), but
+// that only helps once a chain has actually SUCCEEDED once — a chain
+// that's currently failing (the live, repeatedly-observed
+// "Couldn't load balance" case) is never cached there and gets retried
+// at full frequency on every single one of these three screens' visits.
+// This cache sits one level up: the WHOLE portfolio result, success or
+// partial failure alike, reused for a short window across all callers.
+// Session-scoped (not per-address-in-isolation) since a portfolio reads
+// both the EVM and Solana address together; forceFresh is the deliberate
+// bypass for the two places that need a truly current number right now
+// (ProfileScreen's pull-to-refresh and its post-Convert refresh).
+const PORTFOLIO_CACHE_TTL_MS = 30_000;
+
+function sessionCacheKey(session: DerivedAccounts): string {
+  return `${session.evm.address.toLowerCase()}:${session.solana.address}`;
+}
+
+function makePortfolioCache<T>() {
+  let cached: {key: string; data: T; fetchedAt: number} | null = null;
+  let inFlight: {key: string; promise: Promise<T>} | null = null;
+  return {
+    get(key: string): T | null {
+      if (cached && cached.key === key && Date.now() - cached.fetchedAt < PORTFOLIO_CACHE_TTL_MS) return cached.data;
+      return null;
+    },
+    getInFlight(key: string): Promise<T> | null {
+      return inFlight && inFlight.key === key ? inFlight.promise : null;
+    },
+    run(key: string, fetcher: () => Promise<T>): Promise<T> {
+      const promise = fetcher().then(data => {
+        cached = {key, data, fetchedAt: Date.now()};
+        return data;
+      });
+      inFlight = {key, promise};
+      promise.finally(() => {
+        if (inFlight?.promise === promise) inFlight = null;
+      });
+      return promise;
+    },
+  };
+}
+
 /** Every chain this app has a verified USDC contract/mint address for — see this file's own header for why this is derived, not a separate hardcoded list. */
 export const USDC_SUPPORTED_CHAINS = Object.keys(TOKEN_ADDRESSES.USDC ?? {}) as ChainKey[];
 
@@ -48,22 +96,33 @@ async function fetchOneChainUsdc(chainKey: ChainKey, session: DerivedAccounts): 
   return fetchWalletTokenBalance(chainKey, address, decimals, session.evm.address);
 }
 
-export async function fetchUsdcPortfolio(session: DerivedAccounts): Promise<UsdcPortfolio> {
-  const settled = await Promise.allSettled(USDC_SUPPORTED_CHAINS.map(chainKey => fetchOneChainUsdc(chainKey, session)));
+const usdcPortfolioCache = makePortfolioCache<UsdcPortfolio>();
 
-  const results: ChainUsdcResult[] = settled.map((outcome, i) => {
-    const chainKey = USDC_SUPPORTED_CHAINS[i];
-    if (outcome.status === 'fulfilled') {
-      return {chainKey, status: 'ok', balance: outcome.value};
-    }
-    const error = outcome.reason instanceof Error ? outcome.reason.message : 'Could not fetch this chain\'s balance.';
-    return {chainKey, status: 'error', error};
+export async function fetchUsdcPortfolio(session: DerivedAccounts, {forceFresh = false}: {forceFresh?: boolean} = {}): Promise<UsdcPortfolio> {
+  const key = sessionCacheKey(session);
+  if (!forceFresh) {
+    const cached = usdcPortfolioCache.get(key);
+    if (cached) return cached;
+    const inFlight = usdcPortfolioCache.getInFlight(key);
+    if (inFlight) return inFlight;
+  }
+  return usdcPortfolioCache.run(key, async () => {
+    const settled = await Promise.allSettled(USDC_SUPPORTED_CHAINS.map(chainKey => fetchOneChainUsdc(chainKey, session)));
+
+    const results: ChainUsdcResult[] = settled.map((outcome, i) => {
+      const chainKey = USDC_SUPPORTED_CHAINS[i];
+      if (outcome.status === 'fulfilled') {
+        return {chainKey, status: 'ok', balance: outcome.value};
+      }
+      const error = outcome.reason instanceof Error ? outcome.reason.message : 'Could not fetch this chain\'s balance.';
+      return {chainKey, status: 'error', error};
+    });
+
+    const totalUsd = results.reduce((sum, r) => (r.status === 'ok' ? sum + r.balance : sum), 0);
+    const complete = results.every(r => r.status === 'ok');
+
+    return {results, totalUsd, complete};
   });
-
-  const totalUsd = results.reduce((sum, r) => (r.status === 'ok' ? sum + r.balance : sum), 0);
-  const complete = results.every(r => r.status === 'ok');
-
-  return {results, totalUsd, complete};
 }
 
 // Real per-chain "cash" asset — USDC everywhere it exists, USDG on
@@ -140,21 +199,32 @@ async function fetchOneChainCash(chainKey: ChainKey, session: DerivedAccounts): 
 }
 
 /** Same shape/discipline as fetchUsdcPortfolio above, over CASH_SUPPORTED_CHAINS instead. */
-export async function fetchCashPortfolio(session: DerivedAccounts): Promise<CashPortfolio> {
-  const settled = await Promise.allSettled(CASH_SUPPORTED_CHAINS.map(chainKey => fetchOneChainCash(chainKey, session)));
+const cashPortfolioCache = makePortfolioCache<CashPortfolio>();
 
-  const results: ChainCashResult[] = settled.map((outcome, i) => {
-    const chainKey = CASH_SUPPORTED_CHAINS[i];
-    const asset = CASH_ASSET_BY_CHAIN[chainKey] as 'USDC' | 'USDG';
-    if (outcome.status === 'fulfilled') {
-      return {chainKey, asset, status: 'ok', balance: outcome.value};
-    }
-    const error = outcome.reason instanceof Error ? outcome.reason.message : "Could not fetch this chain's balance.";
-    return {chainKey, asset, status: 'error', error};
+export async function fetchCashPortfolio(session: DerivedAccounts, {forceFresh = false}: {forceFresh?: boolean} = {}): Promise<CashPortfolio> {
+  const key = sessionCacheKey(session);
+  if (!forceFresh) {
+    const cached = cashPortfolioCache.get(key);
+    if (cached) return cached;
+    const inFlight = cashPortfolioCache.getInFlight(key);
+    if (inFlight) return inFlight;
+  }
+  return cashPortfolioCache.run(key, async () => {
+    const settled = await Promise.allSettled(CASH_SUPPORTED_CHAINS.map(chainKey => fetchOneChainCash(chainKey, session)));
+
+    const results: ChainCashResult[] = settled.map((outcome, i) => {
+      const chainKey = CASH_SUPPORTED_CHAINS[i];
+      const asset = CASH_ASSET_BY_CHAIN[chainKey] as 'USDC' | 'USDG';
+      if (outcome.status === 'fulfilled') {
+        return {chainKey, asset, status: 'ok', balance: outcome.value};
+      }
+      const error = outcome.reason instanceof Error ? outcome.reason.message : "Could not fetch this chain's balance.";
+      return {chainKey, asset, status: 'error', error};
+    });
+
+    const totalUsd = results.reduce((sum, r) => (r.status === 'ok' ? sum + r.balance : sum), 0);
+    const complete = results.every(r => r.status === 'ok');
+
+    return {results, totalUsd, complete};
   });
-
-  const totalUsd = results.reduce((sum, r) => (r.status === 'ok' ? sum + r.balance : sum), 0);
-  const complete = results.every(r => r.status === 'ok');
-
-  return {results, totalUsd, complete};
 }
