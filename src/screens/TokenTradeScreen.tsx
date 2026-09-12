@@ -61,7 +61,7 @@ import {addTxHistoryEntry} from '../wallet/txHistory';
 import {useSession} from '../wallet/SessionContext';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {TradeSettingsSheet} from '../components/TradeSettingsSheet';
-import {fetchCashPortfolio, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
+import {cashLogoUrl, fetchCashPortfolio, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
 
 /**
  * Buy-side only — what chain/asset "You pay" actually spends from. Sell
@@ -138,13 +138,27 @@ function AssetIcon({symbol, imageUrl, size = 16}: {symbol: string; imageUrl?: st
   );
 }
 
-/** USDC has no per-chain logo of its own in this app (NetworkIcon renders the CHAIN's icon, which would be wrong for a stablecoin riding on top of it) — a plain "$" badge, same honest-generic treatment ProfileScreen's own Total-cash icon already uses, not a fabricated brand mark. */
-function CashBadge({size = 16}: {size?: number}) {
+/**
+ * The cash asset's own real logo (USDC/USDG, via cashLogoUrl's verified
+ * Trust Wallet address) — NetworkIcon renders the CHAIN's icon, which
+ * would be wrong for a stablecoin riding on top of it, so this needed
+ * its own source. Falls back to the same honest-generic "$" mark
+ * ProfileScreen's own Total-cash icon already uses (never a fabricated
+ * brand mark) when chainKey has no confirmed logo URL, or the real one
+ * fails to load.
+ */
+function CashBadge({chainKey, size = 16}: {chainKey: ChainKey; size?: number}) {
   const {colors} = useTheme();
+  const [failed, setFailed] = useState(false);
+  const url = cashLogoUrl(chainKey);
   const s = StyleSheet.create({
     circle: {width: size, height: size, borderRadius: size / 2, backgroundColor: colors.pillBg, alignItems: 'center', justifyContent: 'center'},
     sign: {fontSize: size * 0.6, fontWeight: '800', color: colors.textPrimary},
+    image: {width: size, height: size, borderRadius: size / 2},
   });
+  if (url && !failed) {
+    return <Image source={{uri: url}} style={s.image} onError={() => setFailed(true)} />;
+  }
   return (
     <View style={s.circle}>
       <Text style={s.sign}>$</Text>
@@ -241,11 +255,12 @@ export function TokenTradeScreen({
   const [showPayOriginPicker, setShowPayOriginPicker] = useState(false);
   // True once the user has actually picked a "Pay from" option themselves
   // — the auto-default effect below never overrides a deliberate choice,
-  // only ever fills in a sane default before one exists.
+  // only ever fills in a sane default before one exists. Only reset on a
+  // TOKEN change (not every time cashPortfolio below happens to update),
+  // so a deliberate pick survives a background balance refresh.
   const manualPayOriginRef = useRef(false);
   useEffect(() => {
     manualPayOriginRef.current = false;
-    setPayOrigin({chainKey: token.chainKey, asset: 'native'});
   }, [token]);
   const crossChainPay = isBuySide && (payOrigin.chainKey !== token.chainKey || payOrigin.asset !== 'native');
 
@@ -296,20 +311,32 @@ export function TokenTradeScreen({
   // default. cashPortfolio is the same real, already-fetched aggregator
   // the picker below already uses; this just applies its answer as the
   // starting pick instead of requiring the user to open the picker and
-  // choose it manually every time. Only ever fires once cashPortfolio
-  // actually resolves, only when a real non-zero balance exists
-  // somewhere, and never after a manual pick — a wallet with no cash
-  // anywhere simply keeps the existing native-asset default, which is
-  // still the more honest choice than auto-selecting an empty chain.
+  // choose it manually every time. Never overrides a manual pick, and a
+  // wallet with no cash anywhere simply gets the token's own chain's
+  // native asset, which is still the more honest choice than
+  // auto-selecting an empty chain.
+  //
+  // Keyed on [token, cashPortfolio] — not cashPortfolio alone. Real bug
+  // this fixes, live-confirmed across three separate tokens/chains
+  // (Ethereum, Solana, Robinhood): cashPortfolio is fetched once per
+  // session and rarely changes again, so a `[cashPortfolio]`-only effect
+  // only ever ran ONCE, the first time a real cash balance appeared.
+  // Every token switch after that needed its OWN re-run (a Buy's payable
+  // chain is per-token state) but got none, since nothing in
+  // cashPortfolio itself had changed — leaving payOrigin silently stuck
+  // on whatever it was for the previous token: native SOL/ETH with "0
+  // avail." or a failed balance fetch, even though this exact same
+  // wallet had a real, already-fetched USDC/USDG balance sitting right
+  // there in cashPortfolio the whole time.
   useEffect(() => {
-    if (manualPayOriginRef.current || !cashPortfolio) return;
+    if (manualPayOriginRef.current) return;
     let best: {chainKey: ChainKey; balance: number} | null = null;
-    for (const result of cashPortfolio.results) {
+    for (const result of cashPortfolio?.results ?? []) {
       if (result.status !== 'ok' || result.balance <= 0) continue;
       if (!best || result.balance > best.balance) best = {chainKey: result.chainKey, balance: result.balance};
     }
-    if (best) setPayOrigin({chainKey: best.chainKey, asset: 'cash'});
-  }, [cashPortfolio]);
+    setPayOrigin(best ? {chainKey: best.chainKey, asset: 'cash'} : {chainKey: token.chainKey, asset: 'native'});
+  }, [token, cashPortfolio]);
 
   // paySymbol reflects payOrigin's own choice on Buy (the token's own
   // chain and native asset on Sell — unchanged, no origin to pick there).
@@ -913,7 +940,7 @@ export function TokenTradeScreen({
                 payOrigin.asset === 'native' ? (
                   <NetworkIcon chainKey={payOrigin.chainKey} size={16} />
                 ) : (
-                  <CashBadge size={16} />
+                  <CashBadge chainKey={payOrigin.chainKey} size={16} />
                 )
               ) : (
                 <AssetIcon symbol={token.symbol} imageUrl={token.imageUrl} size={16} />
@@ -960,7 +987,7 @@ export function TokenTradeScreen({
               {isBuySide ? (
                 <AssetIcon symbol={token.symbol} imageUrl={token.imageUrl} size={16} />
               ) : receiveAsset === 'cash' ? (
-                <CashBadge size={16} />
+                <CashBadge chainKey={token.chainKey} size={16} />
               ) : (
                 <NetworkIcon chainKey={token.chainKey} size={16} />
               )}
@@ -1125,7 +1152,7 @@ export function TokenTradeScreen({
                 setReceiveAsset('cash');
                 setShowReceiveAssetPicker(false);
               }}>
-              <CashBadge size={22} />
+              <CashBadge chainKey={token.chainKey} size={22} />
               <Text style={styles.pickerRowText}>
                 {CASH_ASSET_BY_CHAIN[token.chainKey] ?? 'USDC'} on {CHAIN_LABEL[token.chainKey]}
               </Text>

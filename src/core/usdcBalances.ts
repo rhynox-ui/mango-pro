@@ -90,6 +90,33 @@ export const CASH_ASSET_BY_CHAIN: Partial<Record<ChainKey, 'USDC' | 'USDG'>> = {
 };
 export const CASH_SUPPORTED_CHAINS = Object.keys(CASH_ASSET_BY_CHAIN) as ChainKey[];
 
+// Trust Wallet's own community-maintained asset repo — the same
+// verified logo source TokenTradeScreen's own AssetIcon effectively
+// leans on for a real searched token's imageUrl, applied here to the
+// two fixed cash assets instead. Scoped deliberately to only the chains
+// independently confirmed to be listed under this exact slug in that
+// repo — a chain left out here (hyperevm/ink/abstract/unichain/
+// robinhood: none confirmed, and Robinhood Chain/USDG are too new to be
+// listed at all) gets no logo attempt, falling through to CashBadge's
+// own honest "$" mark rather than guessing a slug that 404s.
+const TRUST_WALLET_CHAIN_SLUG: Partial<Record<ChainKey, string>> = {
+  ethereum: 'ethereum',
+  base: 'base',
+  bnb: 'smartchain',
+  arbitrum: 'arbitrum',
+  avalanche: 'avalanchec',
+  solana: 'solana',
+};
+
+/** Real, verified logo URL for a chain's own cash asset (USDC everywhere confirmed above, USDG on Robinhood) — null, never a guess, when this file has no confirmed Trust Wallet slug for that chain. */
+export function cashLogoUrl(chainKey: ChainKey): string | null {
+  const asset = CASH_ASSET_BY_CHAIN[chainKey];
+  const slug = TRUST_WALLET_CHAIN_SLUG[chainKey];
+  const address = asset ? TOKEN_ADDRESSES[asset]?.[chainKey] : undefined;
+  if (!asset || !slug || !address) return null;
+  return `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${slug}/assets/${address}/logo.png`;
+}
+
 export type ChainCashResult =
   | {chainKey: ChainKey; asset: 'USDC' | 'USDG'; status: 'ok'; balance: number}
   | {chainKey: ChainKey; asset: 'USDC' | 'USDG'; status: 'error'; error: string};
