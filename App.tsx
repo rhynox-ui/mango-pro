@@ -65,6 +65,21 @@ type Tab = 'home' | 'search' | 'swap' | 'profile';
 type Screen = 'tabs' | 'settings' | 'history' | 'news' | 'notifications';
 type AuthState = 'loading' | 'welcome' | 'create' | 'import' | 'locked' | 'app-locked' | 'unlocked';
 
+// Single gate on the Google-login (Particle MPC) onboarding path — set to
+// false rather than ripping the feature out, since the underlying work
+// (particleAuth.ts, particleSigning.ts, every authMethod === 'google'
+// branch across execution/wallet/referral code) is real and complete
+// except for one confirmed gap: EIP-7702 gasless trading can't be signed
+// through Particle's currently-exposed SDK primitives (see
+// ARCHITECTURE.md §1a's "EVM gasless trading... stays local-key-only").
+// Flip this back to true once that gap is closed (or accepted) — nothing
+// else needs to change. While false: WelcomeScreen never renders the
+// Google button, and a cold start never attempts to restore a lingering
+// Particle session, so the only reachable onboarding paths are Create
+// and Import, exactly as if Google login didn't exist, without deleting
+// any of the code that makes it work.
+const GOOGLE_LOGIN_ENABLED = false;
+
 // Labels come from useTranslation() at render time (TABS_META below is
 // just the static key/icon pairing) — a module-level constant can't
 // react to a language change, since it's evaluated once at import time,
@@ -140,7 +155,7 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
         setVaultChecked(true);
         return;
       }
-      const restored = await tryRestoreParticleSession();
+      const restored = GOOGLE_LOGIN_ENABLED ? await tryRestoreParticleSession() : null;
       if (restored) {
         setSession(particleAddressesToSession(restored));
         // Real bug this closes: app-lock (Security screen's "Require
@@ -355,7 +370,7 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
       <WelcomeScreen
         onCreate={() => setAuthState('create')}
         onImport={() => setAuthState('import')}
-        onGoogleLogin={handleGoogleLogin}
+        onGoogleLogin={GOOGLE_LOGIN_ENABLED ? handleGoogleLogin : undefined}
         googleLoading={googleLoading}
         googleError={googleError}
       />

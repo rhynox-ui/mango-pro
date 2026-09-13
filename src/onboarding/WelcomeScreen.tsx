@@ -46,7 +46,8 @@ export function WelcomeScreen({
 }: {
   onCreate: () => void;
   onImport: () => void;
-  onGoogleLogin: () => void;
+  /** Omit (or pass undefined) to hide the Google entry point entirely — see App.tsx's own GOOGLE_LOGIN_ENABLED for why this is gated rather than deleted. */
+  onGoogleLogin?: () => void;
   googleLoading?: boolean;
   googleError?: string | null;
 }) {
@@ -67,20 +68,24 @@ export function WelcomeScreen({
       <View style={styles.spacer} />
 
       <View style={styles.actions}>
-        {!!googleError && <Text style={styles.errorText}>{googleError}</Text>}
-        <TouchableOpacity
-          onPress={onGoogleLogin}
-          activeOpacity={0.85}
-          disabled={googleLoading}
-          style={[styles.secondaryButton, styles.googleButton, googleLoading && styles.buttonDisabled]}>
-          {googleLoading ? <ActivityIndicator color={colors.textPrimary} /> : <GoogleG size={18} />}
-          <Text style={styles.secondaryButtonText}>Continue with Google</Text>
-        </TouchableOpacity>
-        <View style={styles.divider}>
-          <View style={styles.dividerLine} />
-          <Text style={styles.dividerText}>or</Text>
-          <View style={styles.dividerLine} />
-        </View>
+        {!!onGoogleLogin && (
+          <>
+            {!!googleError && <Text style={styles.errorText}>{googleError}</Text>}
+            <TouchableOpacity
+              onPress={onGoogleLogin}
+              activeOpacity={0.85}
+              disabled={googleLoading}
+              style={[styles.secondaryButton, styles.googleButton, googleLoading && styles.buttonDisabled]}>
+              {googleLoading ? <ActivityIndicator color={colors.textPrimary} /> : <GoogleG size={18} />}
+              <Text style={styles.secondaryButtonText}>Continue with Google</Text>
+            </TouchableOpacity>
+            <View style={styles.divider}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerText}>or</Text>
+              <View style={styles.dividerLine} />
+            </View>
+          </>
+        )}
         <TouchableOpacity onPress={onCreate} activeOpacity={0.85} style={styles.primaryButton}>
           <Text style={styles.primaryButtonText}>Create new wallet</Text>
         </TouchableOpacity>
