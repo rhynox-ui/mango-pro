@@ -211,6 +211,33 @@ check("BLOCKS a quote with no recorded intent (a quote we didn't request)", () =
   blocks(() => assertTransactionItemsMatchIntent([swapItem()], undefined), 'no recorded intent');
 });
 
+// ---- Solana-shaped items: a real Solana Sell's item came back with
+// ---- NO chainId field at all, which the ORIGINAL fix here still
+// ---- treated as a block ("no chain") since it ran the numeric-chainId
+// ---- check before checking whether the item was Solana-shaped in the
+// ---- first place. Chain identity for these items is checked against
+// ---- the recorded INTENT instead, not a per-item field. ------------
+const SOLANA_CHAIN_ID = 792703809;
+const solanaOriginIntent = buildTransactionIntent({
+  originChainId: SOLANA_CHAIN_ID,
+  destinationChainId: SOLANA_CHAIN_ID,
+  originCurrency: 'ANSEMtokenMintAddressxxxxxxxxxxxxxxxxxxxxxx',
+  destinationCurrency: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+  amountBaseUnits: '1000000',
+  userAddress: '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM',
+});
+const solanaItem = (overrides = {}) => ({data: {instructions: [{programId: '11111111111111111111111111111111', keys: [], data: 'ff'}], ...overrides}});
+check('a Solana-origin Sell with NO chainId on the item is allowed (the real bug)', () => {
+  const warnings = allows(() => assertTransactionItemsMatchIntent([solanaItem()], solanaOriginIntent));
+  assert(warnings.length === 0, `expected no warnings, got ${JSON.stringify(warnings)}`);
+});
+check('a Solana-shaped item is still allowed when it DOES carry the matching chainId', () => {
+  allows(() => assertTransactionItemsMatchIntent([solanaItem({chainId: SOLANA_CHAIN_ID})], solanaOriginIntent));
+});
+check('BLOCKS a Solana-shaped item when the intent was not actually Solana-sourced', () => {
+  blocks(() => assertTransactionItemsMatchIntent([solanaItem()], nativeIntent), 'not sourced from solana');
+});
+
 // ---- warnings, not blocks (see the module header on why) ----------
 check('WARNS on an approval larger than the trade, without blocking it', () => {
   const warnings = assertTransactionItemsMatchIntent(

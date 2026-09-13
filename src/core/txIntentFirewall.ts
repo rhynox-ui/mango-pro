@@ -328,23 +328,37 @@ export type RelayTransactionItem = {
  * Real, confirmed bug fixed here (found auditing this exact function):
  * every check below — `to` shaped as an EVM address, ERC-20/Permit2
  * selector decoding — assumed EVERY item was EVM-shaped. A genuine
- * Solana-side Relay step (origin or destination on Solana; this app's
- * own MAINNET_CHAIN_IDS.solana = 792703809, so the CHAIN check above
- * still applies to it correctly) has `instructions`, not `to`/`data` in
- * the EVM sense, so `data.to` is always undefined for one — meaning
- * this function unconditionally threw "no valid destination address"
- * for every Solana item, before signing was ever attempted. In
- * practice this meant any Relay quote touching Solana could never
- * actually execute, full stop, regardless of whether the quote was
- * legitimate. Solana items now skip only the EVM-specific body
- * (destination address, native value, approve-selector decoding —
- * none of which mean anything for an instruction list); the real
- * Solana-specific check (fee payer identity, dangerous SPL
- * instructions) lives in solanaTxIntent.ts and is run by
- * executeRelayQuote.ts on the actual built transaction right before
- * signing, not here — this file has no Solana SDK dependency and
- * isn't the right place to add one.
+ * Solana-side Relay step has `instructions`, not `to`/`data` in the EVM
+ * sense, so `data.to` is always undefined for one — meaning this
+ * function unconditionally threw "no valid destination address" for
+ * every Solana item, before signing was ever attempted. In practice
+ * this meant any Relay quote touching Solana could never actually
+ * execute, full stop, regardless of whether the quote was legitimate.
+ * Solana items now skip the EVM-specific body (destination address,
+ * native value, approve-selector decoding — none of which mean
+ * anything for an instruction list); the real Solana-specific check
+ * (fee payer identity, dangerous SPL instructions) lives in
+ * solanaTxIntent.ts and is run by executeRelayQuote.ts on the actual
+ * built transaction right before signing, not here — this file has no
+ * Solana SDK dependency and isn't the right place to add one.
+ *
+ * SECOND real, confirmed bug fixed here after a real Solana Sell
+ * failed with "no chain": the original version of this fix still ran
+ * the numeric-chainId check BEFORE the isSolanaShapedItem branch,
+ * on the assumption that Relay always echoes a numeric chainId
+ * (this app's own MAINNET_CHAIN_IDS.solana = 792703809) on Solana
+ * items too, the same as it does for EVM ones. A real Solana-origin
+ * Sell quote proved that assumption wrong — Relay's own response
+ * omitted chainId entirely on the Solana instruction item, which
+ * `Number(undefined)` turns into NaN, failing `Number.isInteger` and
+ * blocking every Solana Sell regardless of legitimacy. The
+ * Solana-shape check now runs FIRST, and validates chain identity
+ * against the INTENT (intent.originChainId — recorded from what the
+ * user actually asked for, at quote time) rather than trusting a
+ * per-item field Relay doesn't reliably populate for this shape.
  */
+const SOLANA_CHAIN_ID = 792703809;
+
 function isSolanaShapedItem(data: {instructions?: unknown[]} | undefined): boolean {
   return Array.isArray(data?.instructions);
 }
@@ -391,6 +405,19 @@ export function assertTransactionItemsMatchIntent(items: RelayTransactionItem[] 
       fail('The routing service returned a transaction with no data.');
     }
 
+    // Solana item: checked FIRST now (see isSolanaShapedItem's own
+    // comment for why — a real Solana Sell's chainId came back
+    // unpopulated). Chain identity is verified against the INTENT
+    // instead of the per-item field; everything below this branch is
+    // EVM-specific (an 0x... address, ERC-20/Permit2 calldata) and
+    // doesn't apply to an instruction list, so it's skipped entirely.
+    if (isSolanaShapedItem(data)) {
+      if (intent.originChainId !== SOLANA_CHAIN_ID) {
+        fail('The routing service returned a Solana transaction for a trade that was not sourced from Solana.');
+      }
+      continue;
+    }
+
     // CHAIN. Absence is a failure, not a skip: a wallet that only
     // switches chains when chainId is set means an omitted chainId
     // signs on whichever chain it's already on.
@@ -400,17 +427,6 @@ export function assertTransactionItemsMatchIntent(items: RelayTransactionItem[] 
     }
     if (chainId !== intent.originChainId) {
       fail(`A transaction would be signed on chain ${chainId}, not the chain you chose (${intent.originChainId}).`);
-    }
-
-    // Solana item: chain is already checked above (this app's own
-    // MAINNET_CHAIN_IDS.solana convention makes that check meaningful
-    // even here) — everything below is EVM-specific (an 0x... address,
-    // ERC-20/Permit2 calldata) and doesn't apply to an instruction list.
-    // See isSolanaShapedItem's own comment for why this branch exists at
-    // all: without it, every real Solana item failed the `to` check
-    // unconditionally and no Solana trade could ever execute.
-    if (isSolanaShapedItem(data)) {
-      continue;
     }
 
     const to = normalizeAddress(data.to);
