@@ -6,11 +6,26 @@
 // gone the moment the amount changed or the screen unmounted, with no
 // way to look back and confirm something went through. Scoped port of
 // mango-mobile's own src/wallet/txHistory.js: same AsyncStorage-backed
-// shape and cancellation-safe hydrate/subscribe pattern, but local-only
-// — that file's own server-sync (survives a reinstall) depends on a
-// mango-bridge.jsx backend endpoint this app has no reason to assume is
-// reachable or intended for it; add that later if reinstall-durability
-// is ever actually asked for, not speculatively now.
+// shape and cancellation-safe hydrate/subscribe pattern.
+//
+// Real, requested durability, same explicit ask mobile's own header
+// documents: history should survive a reinstall, not just live in this
+// device's AsyncStorage. Ported byte-for-byte in spirit (adapted to this
+// file's own entry shape): syncs to the SAME already-live mango-bridge.jsx
+// backend mobile already uses (api/v1/history/sync.js + list.js,
+// txHistoryStore.js's salted-per-address Vercel Blob store — NOT the
+// Upstash Redis instance the referral system uses; that store's own
+// header explains why it moved off Redis) — keyed by whichever address
+// (EVM or Solana) actually originated the entry, same as mobile. No
+// signature required for a write (txHistoryStore.js's own header: this
+// is an activity log, not money or points — the worst a bad write can
+// do is cosmetically pollute one address's own feed, rate-limited same
+// as every other api/v1/* endpoint). Both calls are best-effort: a
+// failed sync/fetch never blocks or breaks anything the on-device store
+// already does on its own; the device is always the primary source of
+// truth for a session that's actually online.
+const HISTORY_SYNC_URL = 'https://mangoprotocol.site/api/v1/history/sync';
+const HISTORY_LIST_URL = 'https://mangoprotocol.site/api/v1/history/list';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {CHAIN_KEY_TO_VIEM_CHAIN} from '../core/chainRegistry.ts';
@@ -108,7 +123,61 @@ export function addTxHistoryEntry(entry: Omit<TxHistoryEntry, 'id' | 'timestamp'
   entries = [record, ...entries].slice(0, MAX_ENTRIES);
   persist();
   notify();
+  // Only a record with a real hash is worth backing up — txHistoryStore.js's
+  // own validateHistoryEntry rejects a hard "failed" entry (nothing ever
+  // broadcast) server-side anyway, since a reinstall has nothing real to
+  // recover there; skipping the call here avoids a request that would
+  // just 400. fromAddress is required too (the sync key) — every real
+  // call site already passes it, but one that somehow doesn't just
+  // silently skips syncing rather than syncing to a wrong/missing key.
+  const hasRealHash = record.hashes.some(h => typeof h === 'string' && h);
+  if (hasRealHash && record.fromAddress) {
+    fetch(HISTORY_SYNC_URL, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        address: record.fromAddress,
+        // The backend's validateHistoryEntry requires chainKey/kind/status
+        // plus a hash — this app's own entry shape has no `kind` field
+        // (isBuySide instead), so one is synthesized here purely for the
+        // synced copy; nothing local ever reads it back.
+        entry: {...record, kind: record.isBuySide ? 'buy' : 'sell'},
+      }),
+    }).catch(() => {});
+  }
   return record;
+}
+
+/**
+ * Fetches this address's own server-synced history and merges it into
+ * the on-device list — the real recovery path after a reinstall. Same
+ * reasoning and safety properties as mobile's own syncTxHistoryFromServer:
+ * additive only (a synced entry whose hash is already known locally is
+ * skipped — the device's own copy, written the moment it actually
+ * happened, is always the more complete/authoritative one for anything
+ * already known), nothing is ever removed from the local list based on
+ * what the server does or doesn't have, and a network failure here just
+ * means "nothing recovered this time," never a broken local list. Call
+ * once per address once it's known (e.g. right after unlock) — safe to
+ * call repeatedly.
+ */
+export async function syncTxHistoryFromServer(address: string | undefined): Promise<void> {
+  if (!address) return;
+  try {
+    const res = await fetch(`${HISTORY_LIST_URL}?address=${encodeURIComponent(address)}`);
+    if (!res.ok) return;
+    const {data} = (await res.json()) as {data?: {entries?: TxHistoryEntry[]}};
+    const remoteEntries = Array.isArray(data?.entries) ? data.entries : [];
+    if (remoteEntries.length === 0) return;
+    const localHashes = new Set(entries.flatMap(e => e.hashes).filter(Boolean));
+    const newOnes = remoteEntries.filter(e => e.hashes?.some(h => h && !localHashes.has(h)));
+    if (newOnes.length === 0) return;
+    entries = [...entries, ...newOnes].sort((a, b) => b.timestamp - a.timestamp).slice(0, MAX_ENTRIES);
+    persist();
+    notify();
+  } catch {
+    // Best-effort only — see this function's own comment.
+  }
 }
 
 const SOLANA_EXPLORER_TX_BASE = 'https://solscan.io/tx/';

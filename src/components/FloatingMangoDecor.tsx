@@ -40,7 +40,7 @@ const SHAPES = [
   {top: '50%', left: '2%', size: 24, delay: 900, duration: 11500, rotate: -12},
 ] as const;
 
-function FloatingMango({shape, color}: {shape: (typeof SHAPES)[number]; color: string}) {
+function FloatingMango({shape, color, opacity}: {shape: (typeof SHAPES)[number]; color: string; opacity: number}) {
   const progress = useRef(new Animated.Value(0)).current;
   const reduceMotionRef = useRef(false);
 
@@ -79,15 +79,21 @@ function FloatingMango({shape, color}: {shape: (typeof SHAPES)[number]; color: s
 
   return (
     <Animated.View
-      style={[styles.shape, {top: shape.top, left: shape.left, transform: [{translateY}, {rotate}]}]}>
+      style={[styles.shape, {top: shape.top, left: shape.left, opacity, transform: [{translateY}, {rotate}]}]}>
       <MangoMark size={shape.size} color={color} />
     </Animated.View>
   );
 }
 
 export function FloatingMangoDecor() {
-  const {colors} = useTheme();
+  const {colors, mode} = useTheme();
   const shapes = useMemo(() => SHAPES, []);
+  // Same 0.08 mobile/site both use on a dark ground, where a light tint
+  // reads clearly — but that same 8% of a near-black fill on pure WHITE
+  // blends to almost nothing (255 -> ~238, barely off-white), a real
+  // contrast asymmetry, not a porting bug. Bumped for light mode only so
+  // it's actually visible there; dark mode is untouched.
+  const opacity = mode === 'light' ? 0.14 : 0.08;
   return (
     <View
       style={[StyleSheet.absoluteFill, styles.container]}
@@ -95,7 +101,7 @@ export function FloatingMangoDecor() {
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants">
       {shapes.map((shape, i) => (
-        <FloatingMango key={i} shape={shape} color={colors.textPrimary} />
+        <FloatingMango key={i} shape={shape} color={colors.textPrimary} opacity={opacity} />
       ))}
     </View>
   );
@@ -103,5 +109,5 @@ export function FloatingMangoDecor() {
 
 const styles = StyleSheet.create({
   container: {overflow: 'hidden'},
-  shape: {position: 'absolute', opacity: 0.08},
+  shape: {position: 'absolute'},
 });

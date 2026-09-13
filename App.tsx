@@ -56,6 +56,7 @@ import type {TokenSearchResult} from './src/core/tokenSearch';
 import type {DiscoveryToken} from './src/core/discoveryFeed';
 import {fetchCashPortfolio} from './src/core/usdcBalances';
 import {checkForDeposit} from './src/wallet/depositWatcher';
+import {syncTxHistoryFromServer} from './src/wallet/txHistory';
 import {requestNotificationPermission} from './src/notifications/localNotify';
 
 type Tab = 'home' | 'search' | 'swap' | 'profile';
@@ -444,6 +445,18 @@ function AppInner(): React.JSX.Element {
   // this file's own render). A deposit landing while the user is on
   // Home or Trade should still surface an alert, not only when they
   // happen to have Profile open.
+  // Recovers any trade history synced from a previous install (or from
+  // a trade signed on a different device with the same seed phrase) —
+  // real, requested durability: "save forever, not in user phone
+  // storage." Runs once per session unlock, for both addresses this
+  // account can originate a trade from (txHistory.ts's own sync call
+  // keys each entry by whichever address actually signed it).
+  useEffect(() => {
+    if (!session) return;
+    syncTxHistoryFromServer(session.evm.address);
+    syncTxHistoryFromServer(session.solana.address);
+  }, [session]);
+
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
