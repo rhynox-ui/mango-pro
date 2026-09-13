@@ -103,25 +103,36 @@ jobs:
           keyPassword=$RELEASE_KEYSTORE_PASSWORD
           PROPS
 
+      # Read once, used by both Gradle builds below AND by the Release
+      # step further down — one source of truth for "what version is
+      # this", not two separately-typed values that could drift.
+      - name: Read app version
+        id: pkgver
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
       # -PVERSION_CODE=<run number>: Google Play rejects any upload whose
       # versionCode isn't strictly higher than the last one it has on
       # file — this always increases, run over run, with nothing to
-      # remember to bump by hand. -PALLOW_DEBUG_SIGNED_RELEASE=true is
-      # the explicit opt-in build.gradle requires for a debug-signed
-      # release build (only consulted when the signing step above didn't
-      # run) — see this file's own header comment.
+      # remember to bump by hand. -PVERSION_NAME=<package.json version>
+      # is the human-readable string Play's own listing shows real users
+      # (see build.gradle's own comment — this used to be hardcoded
+      # "1.0" forever). -PALLOW_DEBUG_SIGNED_RELEASE=true is the explicit
+      # opt-in build.gradle requires for a debug-signed release build
+      # (only consulted when the signing step above didn't run) — see
+      # this file's own header comment.
       - name: Build release APK (sideload-testable, bundles JS)
         working-directory: android
-        run: ./gradlew assembleRelease --no-daemon -PVERSION_CODE=${{ github.run_number }} -PALLOW_DEBUG_SIGNED_RELEASE=true
+        run: ./gradlew assembleRelease --no-daemon -PVERSION_CODE=${{ github.run_number }} -PVERSION_NAME=${{ steps.pkgver.outputs.version }} -PALLOW_DEBUG_SIGNED_RELEASE=true
 
       # The .aab, not the .apk, is what actually gets uploaded to Google
       # Play Console — Play has required App Bundle (not a raw APK) for
       # new apps since 2021; it slices this into per-device APKs itself
-      # at install time. Same signingConfig, same versionCode as the APK
-      # above (Gradle just reuses the already-configured release variant).
+      # at install time. Same signingConfig, same versionCode/versionName
+      # as the APK above (Gradle just reuses the already-configured
+      # release variant).
       - name: Build release AAB (for Google Play Console upload)
         working-directory: android
-        run: ./gradlew bundleRelease --no-daemon -PVERSION_CODE=${{ github.run_number }} -PALLOW_DEBUG_SIGNED_RELEASE=true
+        run: ./gradlew bundleRelease --no-daemon -PVERSION_CODE=${{ github.run_number }} -PVERSION_NAME=${{ steps.pkgver.outputs.version }} -PALLOW_DEBUG_SIGNED_RELEASE=true
 
       - name: Upload APK (sideload testing)
         uses: actions/upload-artifact@v4
@@ -143,13 +154,10 @@ jobs:
       # Release instead, so testers can go to the repo's Releases tab and
       # choose which build number to install rather than only ever
       # grabbing the latest one from Actions. Tag combines package.json's
-      # version with the run number (package.json alone repeats across
-      # every untagged build; the run number alone means nothing at a
-      # glance) — always unique since github.run_number only increases.
-      - name: Read app version
-        id: pkgver
-        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
-
+      # version (read once, above, and reused here) with the run number
+      # (package.json alone repeats across every untagged build; the run
+      # number alone means nothing at a glance) — always unique since
+      # github.run_number only increases.
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:

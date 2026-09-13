@@ -154,7 +154,14 @@ android {
         // whatever ambiguity AGP's newer Groovy DSL parsing hit.
         def resolvedVersionCode = (project.hasProperty('VERSION_CODE') ? project.property('VERSION_CODE') : '1').toString().toInteger()
         versionCode resolvedVersionCode
-        versionName "1.0"
+        // Was a hardcoded "1.0" that never moved regardless of how many
+        // times this shipped -- Play Store listings show versionName to
+        // real users, so a frozen string there reads as an app that's
+        // never been updated. CI passes -PVERSION_NAME=<package.json's
+        // version>, the same value android-debug-apk.yml now tags GitHub
+        // Releases with, so both places describe the same build the same
+        // way. A local/manual build with no property set stays "1.0".
+        versionName (project.hasProperty('VERSION_NAME') ? project.property('VERSION_NAME') : '1.0').toString()
 
         // Particle Auth (Google login) — read from android/gradle.properties
         // (blank by default; fill in real values from
