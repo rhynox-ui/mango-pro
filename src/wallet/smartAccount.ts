@@ -15,38 +15,70 @@
 // This is additive and opt-in (Security settings' "Gasless trading
 // (beta)" toggle, gaslessTradingPrefs.ts): a user who never opts in
 // keeps trading exactly as today, holding native gas on whichever chain
-// they spend from. It IS wired into live trading now
-// (executeRelayQuote.ts), but a real trade hit Pimlico's bundler
-// rejecting a UserOperation ("Invalid fields set on User Operation")
-// before this had ever been confirmed end-to-end — so
-// executeRelayQuote.ts treats any pre-broadcast rejection here as a
-// signal to fall back to a plain transaction, never as a reason to fail
-// an otherwise-tradeable quote. Getting a real sponsored UserOperation
-// to actually land (this file's own original TODO) is still open.
+// they spend from.
 //
-// Verified against the actually-installed permissionless@0.4.1 types
-// (node_modules/permissionless/_types), not copied from docs that may
-// be stale — this session's own network sandbox couldn't reach
-// docs.pimlico.io to confirm the current guide directly, so the real
-// installed .d.ts files were read instead. Two things confirmed this
-// way, not assumed: (1) to7702SimpleSmartAccount's own parameter type
-// requires EntryPoint v0.8 specifically when eip7702 delegation is used
-// — permissionless's ToSimpleSmartAccountParameters type enforces this
-// at the type level, not v0.7 as an older example elsewhere suggested;
+// A real trade hit Pimlico's bundler rejecting a UserOperation
+// ("Invalid fields set on User Operation") — root-caused by reading the
+// ACTUAL installed source, not guessed: this file builds the 7702
+// account via permissionless's to7702SimpleSmartAccount, which asks
+// viem's own automatic UserOperation-preparation path to attach an
+// EIP-7702 authorization when the EOA hasn't delegated on this chain
+// yet. But the installed viem version's automatic path
+// (node_modules/viem/account-abstraction/actions/bundler/
+// prepareUserOperation.ts) only ever produces a STUB authorization —
+// hardcoded, structurally-fake r/s/yParity bytes meant for gas
+// estimation — UNLESS the caller passes a real, already-signed
+// `authorization` explicitly. Nothing in this file (or
+// executeRelayQuote.ts) was doing that, so every first-ever sponsored
+// UserOperation for a not-yet-delegated EOA carried a signature that
+// could never recover to the right address — exactly what a bundler's
+// field validation rejects as "invalid fields", before the UserOp is
+// ever included.
+//
+// Fixed by getEip7702AuthorizationIfNeeded below: sign a REAL
+// authorization with viem's own signAuthorization (using the exact same
+// owner key and delegation target permissionless's account object
+// already carries at account.authorization) whenever the EOA isn't
+// deployed/delegated on this chain yet, and hand it to sendTransaction
+// explicitly. permissionless's own sendTransaction (actions/smartAccount
+// /sendTransaction.ts) forwards any extra field straight through to
+// viem's sendUserOperation, which uses a caller-supplied `authorization`
+// as-is (`typeof parameters.authorization === 'object'`) instead of
+// asking prepareUserOperation to fabricate one — confirmed by reading
+// both files directly, not assumed from either library's docs.
+// executeRelayQuote.ts's own fallback-to-plain-transaction on a
+// pre-broadcast rejection stays in place regardless, as a second layer:
+// this fix should make that fallback path stop firing for this
+// specific reason, not a replacement for having it.
+//
+// Verified against the actually-installed permissionless@0.4.1 and
+// viem@2.56.3 source (node_modules), not copied from docs that may be
+// stale or refer to a different version — this session's own network
+// sandbox couldn't reach docs.pimlico.io to confirm the current guide
+// directly, so the real installed source was read instead. Also
+// confirmed this way: (1) to7702SimpleSmartAccount's own parameter type
+// requires EntryPoint v0.8 specifically when eip7702 delegation is used;
 // (2) createSmartAccountClient's `paymaster` field accepts an object
 // exposing getPaymasterData/getPaymasterStubData, which the Pimlico
-// client returned by createPimlicoClient satisfies structurally.
+// client returned by createPimlicoClient satisfies structurally;
+// (3) SIMPLE_7702_ACCOUNT_IMPLEMENTATION below is permissionless's own
+// default accountLogicAddress for EntryPoint 0.8 (toSimpleSmartAccount.ts),
+// pinned explicitly here (passed to to7702SimpleSmartAccount) rather
+// than left as an unread default, so this file has one place that both
+// builds the account AND signs its authorization against the exact same
+// address.
 //
 // PIMLICO_API_KEY below is real (the account owner's own "Mango-protocol"
 // key from dashboard.pimlico.io, free tier) — same plain-constant
 // pattern RELAY_API_KEY already uses in relayQuote.ts, since this
-// codebase has no build-time env-var system. Still unproven end-to-end:
-// having a real key means the network call can now actually be made,
-// not that a sponsored UserOperation has been confirmed to land — that
-// still needs the isolated test screen this file's own header calls
-// for, before executeRelayQuote.ts touches any of this.
+// codebase has no build-time env-var system.
 
 import {createPublicClient, http, type Chain, type LocalAccount} from 'viem';
+// This installed viem version's root export only re-exports
+// signAuthorization's TYPES, not the function itself (confirmed by
+// reading node_modules/viem/index.ts directly) — the real function
+// lives at the 'viem/actions' subpath instead.
+import {signAuthorization} from 'viem/actions';
 import {entryPoint08Address} from 'viem/account-abstraction';
 import {to7702SimpleSmartAccount} from 'permissionless/accounts';
 import {createPimlicoClient} from 'permissionless/clients/pimlico';
@@ -55,6 +87,8 @@ import {createSmartAccountClient} from 'permissionless';
 const PIMLICO_API_KEY = 'pim_N9WghP1RNn1eZ5nnFrFyKi';
 
 const ENTRY_POINT = {address: entryPoint08Address, version: '0.8'} as const;
+
+const SIMPLE_7702_ACCOUNT_IMPLEMENTATION = '0xe6Cae83BdE06E4c305530e199D7217f42808555B' as const;
 
 function pimlicoUrl(chain: Chain): string {
   return `https://api.pimlico.io/v2/${chain.id}/rpc?apikey=${PIMLICO_API_KEY}`;
@@ -81,7 +115,12 @@ export async function getSponsoredSmartAccountClient({chain, owner}: {chain: Cha
   }
 
   const publicClient = createPublicClient({chain, transport: http()});
-  const account = await to7702SimpleSmartAccount({client: publicClient, owner, entryPoint: ENTRY_POINT});
+  const account = await to7702SimpleSmartAccount({
+    client: publicClient,
+    owner,
+    entryPoint: ENTRY_POINT,
+    accountLogicAddress: SIMPLE_7702_ACCOUNT_IMPLEMENTATION,
+  });
 
   const pimlicoClient = createPimlicoClient({
     chain,
@@ -97,5 +136,29 @@ export async function getSponsoredSmartAccountClient({chain, owner}: {chain: Cha
     userOperation: {
       estimateFeesPerGas: async () => (await pimlicoClient.getUserOperationGasPrice()).fast,
     },
+  });
+}
+
+/**
+ * Signs a REAL EIP-7702 authorization (never the automatic stub — see
+ * this file's own header) when the EOA hasn't delegated to the smart
+ * account implementation on this specific chain yet. Returns undefined
+ * once delegated (the account already has code there, so no
+ * authorization is needed on subsequent transactions) — safe to call on
+ * every sponsored transaction regardless of delegation state.
+ *
+ * `publicClient` here is only used for the authorization's own
+ * nonce/chainId lookup (viem's prepareAuthorization) — it can be the
+ * same publicClient the caller already built for simulate/receipt
+ * calls, no separate client needed.
+ */
+export async function getEip7702AuthorizationIfNeeded(
+  client: Awaited<ReturnType<typeof getSponsoredSmartAccountClient>>,
+  publicClient: ReturnType<typeof createPublicClient>,
+) {
+  if (await client.account.isDeployed()) return undefined;
+  return signAuthorization(publicClient, {
+    account: client.account.authorization.account,
+    contractAddress: client.account.authorization.address,
   });
 }

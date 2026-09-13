@@ -35,7 +35,7 @@ import {transportFor, viemChainForChainId} from './chainRegistry.ts';
 import {assertQuoteSafeToSign} from './txIntentFirewall.ts';
 import {assertSolanaTransactionMatchesIntent} from './solanaTxIntent.ts';
 import {intentForQuote, type RelayQuote, type RelayTransactionStepItem} from './relayQuote.ts';
-import {getSponsoredSmartAccountClient, isSmartAccountSponsorshipConfigured} from '../wallet/smartAccount.ts';
+import {getEip7702AuthorizationIfNeeded, getSponsoredSmartAccountClient, isSmartAccountSponsorshipConfigured} from '../wallet/smartAccount.ts';
 import type {DerivedAccounts} from '../wallet/keys';
 
 const RELAY_STATUS_URL = 'https://api.relay.link/intents/status/v3';
@@ -213,7 +213,12 @@ async function sendRelayEvmStepSponsored(
     }
   }
 
-  const hash = await client.sendTransaction({to: tx.to, data: tx.data, value: tx.value});
+  // See smartAccount.ts's own header for the real bug this closes: the
+  // installed viem's automatic path only ever attaches a STUB (fake)
+  // EIP-7702 authorization, which Pimlico's bundler rejects outright —
+  // a real one has to be signed and passed explicitly here.
+  const authorization = await getEip7702AuthorizationIfNeeded(client, publicClient);
+  const hash = await client.sendTransaction({to: tx.to, data: tx.data, value: tx.value, authorization});
   await publicClient.waitForTransactionReceipt({hash});
   return hash;
 }
