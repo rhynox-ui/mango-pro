@@ -9,11 +9,12 @@
 // "Joined <month year>" is the one real data point: today's date.
 
 import {useEffect, useMemo, useState} from 'react';
-import {ActivityIndicator, Alert, Image, Linking, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {ActivityIndicator, Alert, Image, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import {launchImageLibrary} from 'react-native-image-picker';
 import Svg, {Defs, LinearGradient, Line as SvgLine, Path as SvgPath, Stop} from 'react-native-svg';
 import {
   ArrowUpIcon,
+  BellIcon,
   CalendarIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -29,11 +30,12 @@ import {fetchCashPortfolio, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type Cas
 import {ConvertCashSheet} from '../components/ConvertCashSheet';
 import {NetworkIcon} from '../wallet/NetworkIcon';
 import {sendUsdc, isValidRecipientAddress} from '../wallet/sendUsdc';
-import {explorerUrlFor, filterTxHistoryForAccount, getTxHistory, subscribeTxHistory, type TxHistoryEntry} from '../wallet/txHistory';
+import {filterTxHistoryForAccount, getTxHistory, subscribeTxHistory} from '../wallet/txHistory';
 import {getAvatarUri, getBio, getUsername, isValidUsername, setAvatarUri as saveAvatarUri, setBio as saveBio, setUsername as saveUsername} from '../wallet/profileLocal';
 import {computePortfolioChange, filterHistoryByRange, getPortfolioHistory, recordPortfolioSnapshot, type PortfolioSnapshot} from '../wallet/portfolioHistory';
 import {markOwnAction} from '../wallet/depositWatcher';
-import {computeOpenPositions, withLiveValues, type OpenPositionWithValue} from '../wallet/openPositions';
+import {computeClosedPositions, computeOpenPositions, withLiveValues, type ClosedPosition, type OpenPositionWithValue} from '../wallet/openPositions';
+import {hasUnseenNotifications, subscribeNotificationHistory} from '../notifications/notificationHistory';
 import {AssetIcon} from '../components/AssetIcon';
 import {privateKeyToAccount} from 'viem/accounts';
 import {ReferralModal} from '../referral/ReferralModal';
@@ -92,10 +94,6 @@ function joinedLabel(): string {
 // kept as its own small local copy rather than importing across screens
 // for one function — same reasoning TokenTradeScreen.tsx's own
 // formatUsd gives for not sharing formatters across screens.
-function truncateHash(hash: string): string {
-  return hash.length > 14 ? `${hash.slice(0, 8)}…${hash.slice(-6)}` : hash;
-}
-
 function formatWhen(timestamp: number): string {
   const diffMs = Date.now() - timestamp;
   const minutes = Math.floor(diffMs / 60_000);
@@ -109,11 +107,13 @@ function formatWhen(timestamp: number): string {
 export function ProfileScreen({
   onOpenSettings,
   onOpenHistory,
+  onOpenNotifications,
   pendingAction,
   onPendingActionHandled,
 }: {
   onOpenSettings: () => void;
   onOpenHistory: () => void;
+  onOpenNotifications: () => void;
   /** Set by App.tsx when navigation here should also open a specific action (e.g. Settings' "Deposit and Withdraw" row, or Home's own Deposit button) — consumed once below, not a persistent mode. */
   pendingAction?: 'withdraw' | 'deposit' | null;
   onPendingActionHandled?: () => void;
@@ -299,14 +299,18 @@ export function ProfileScreen({
   // token, derived from this same trade history, priced live via
   // DexScreener.
   const [tradeCount, setTradeCount] = useState(0);
-  const [closedTrades, setClosedTrades] = useState<TxHistoryEntry[]>([]);
+  const [closedPositions, setClosedPositions] = useState<ClosedPosition[]>([]);
   const [openPositions, setOpenPositions] = useState<OpenPositionWithValue[]>([]);
   useEffect(() => {
     function recount(entries: ReturnType<typeof getTxHistory>) {
       const scoped = session ? filterTxHistoryForAccount(entries, {evmAddress: session.evm.address, solanaAddress: session.solana.address}) : entries;
       const successful = scoped.filter(e => e.status === 'success');
       setTradeCount(successful.length);
-      setClosedTrades(successful);
+      // "Closed" is a token fully sold back out (net ~0), one row per
+      // token — not one row per trade (see openPositions.ts's own
+      // header for why five round-trip trades on the same token used
+      // to render as five separate rows here).
+      setClosedPositions(computeClosedPositions(successful));
       // Synchronous amounts first (so the list appears immediately with
       // real held amounts), then the same positions re-rendered with
       // live $ values once DexScreener resolves — never blocks showing
@@ -318,6 +322,9 @@ export function ProfileScreen({
     recount(getTxHistory());
     return subscribeTxHistory(recount);
   }, [session]);
+
+  const [hasUnreadNotifications, setHasUnreadNotifications] = useState(() => hasUnseenNotifications());
+  useEffect(() => subscribeNotificationHistory(() => setHasUnreadNotifications(hasUnseenNotifications())), []);
 
   useEffect(() => {
     if (!session) return;
@@ -469,6 +476,10 @@ export function ProfileScreen({
           </TouchableOpacity>
         </View>
         <View style={styles.identityActions}>
+          <TouchableOpacity style={styles.shareButton} hitSlop={6} onPress={onOpenNotifications}>
+            <BellIcon color={colors.textPrimary} size={15} />
+            {hasUnreadNotifications && <View style={styles.bellDot} />}
+          </TouchableOpacity>
           <TouchableOpacity style={styles.shareButton} hitSlop={6} onPress={() => setShowReferral(true)}>
             <UploadIcon color={colors.textPrimary} size={15} />
           </TouchableOpacity>
@@ -652,40 +663,28 @@ export function ProfileScreen({
             </View>
           ))}
         </View>
-      ) : positionTab === 'Closed' && assetFilter !== 'Perps' && closedTrades.length > 0 ? (
+      ) : positionTab === 'Closed' && assetFilter !== 'Perps' && closedPositions.length > 0 ? (
         <View style={styles.closedTradesList}>
-          {closedTrades.map(trade => {
-            // Real block-explorer link, same source (txHistory.ts's own
-            // explorerUrlFor) HistoryScreen.tsx already uses from the
-            // header's clock icon — this Positions list is a second,
-            // filtered view onto the exact same persisted trades, so it
-            // gets the exact same "tap a row to verify it on-chain"
-            // behavior rather than being a dead-end list of text.
-            const hash = trade.hashes[0];
-            const explorerUrl = hash ? explorerUrlFor(trade.chainKey, hash) : null;
-            return (
-              <TouchableOpacity
-                key={trade.id}
-                style={styles.closedTradeRow}
-                activeOpacity={explorerUrl ? 0.6 : 1}
-                disabled={!explorerUrl}
-                onPress={() => explorerUrl && Linking.openURL(explorerUrl)}>
-                <View style={[styles.closedTradeDot, !trade.isBuySide && styles.closedTradeDotSell]} />
-                <View style={styles.closedTradeMain}>
-                  <Text style={styles.closedTradeTitle} numberOfLines={1}>
-                    {trade.isBuySide ? 'Bought' : 'Sold'} {trade.isBuySide ? trade.receiveSymbol : trade.paySymbol} on {trade.chainLabel}
-                  </Text>
-                  <Text style={styles.closedTradeSubtitle} numberOfLines={1}>
-                    {trade.payAmount} {trade.paySymbol} → {trade.receivedAmountFormatted ?? '?'} {trade.receiveSymbol}
-                  </Text>
-                </View>
-                <View style={styles.closedTradeRight}>
-                  <Text style={styles.closedTradeWhen}>{formatWhen(trade.timestamp)}</Text>
-                  {hash && <Text style={explorerUrl ? styles.closedTradeHashLink : styles.closedTradeHash}>{truncateHash(hash)}</Text>}
-                </View>
-              </TouchableOpacity>
-            );
-          })}
+          {/* One row per fully-exited TOKEN (computeClosedPositions
+              aggregates every Buy/Sell down to a net ~0 amount), not one
+              row per trade — matches the Open tab's own per-token shape
+              instead of showing a raw, unfiltered trade log here. */}
+          {closedPositions.map(position => (
+            <View key={position.key} style={styles.closedTradeRow}>
+              <AssetIcon symbol={position.symbol} imageUrl={position.imageUrl} size={30} />
+              <View style={styles.closedTradeMain}>
+                <Text style={styles.closedTradeTitle} numberOfLines={1}>
+                  {position.symbol}
+                </Text>
+                <Text style={styles.closedTradeSubtitle} numberOfLines={1}>
+                  Fully sold on {position.chainLabel}
+                </Text>
+              </View>
+              <View style={styles.closedTradeRight}>
+                <Text style={styles.closedTradeWhen}>{formatWhen(position.lastTradeAt)}</Text>
+              </View>
+            </View>
+          ))}
         </View>
       ) : (
         <Text style={styles.emptyPositions}>{positionTab === 'Open' ? 'No open positions' : 'No closed positions yet'}</Text>
@@ -1051,6 +1050,17 @@ function makeStyles(colors: Colors) {
       borderWidth: 1,
       borderColor: colors.panelBorder,
     },
+    bellDot: {
+      position: 'absolute',
+      top: 7,
+      right: 7,
+      width: 7,
+      height: 7,
+      borderRadius: 3.5,
+      backgroundColor: colors.danger,
+      borderWidth: 1.5,
+      borderColor: colors.panel,
+    },
     name: {color: colors.textPrimary, fontSize: 22, fontWeight: '800', marginTop: 14, paddingHorizontal: 16},
     handle: {color: colors.textMuted, fontSize: 14, marginTop: 2, paddingHorizontal: 16},
     addBio: {color: colors.textPrimary, fontSize: 14, fontWeight: '700', marginTop: 8, paddingHorizontal: 16},
@@ -1152,15 +1162,11 @@ function makeStyles(colors: Colors) {
 
     closedTradesList: {paddingHorizontal: 16, marginTop: 14, gap: 2},
     closedTradeRow: {flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.divider},
-    closedTradeDot: {width: 8, height: 8, borderRadius: 4, backgroundColor: colors.gain, flexShrink: 0},
-    closedTradeDotSell: {backgroundColor: colors.danger},
     closedTradeMain: {flex: 1, minWidth: 0},
     closedTradeTitle: {color: colors.textPrimary, fontSize: 13.5, fontWeight: '700'},
     closedTradeSubtitle: {color: colors.textMuted, fontSize: 11.5, marginTop: 2},
     closedTradeRight: {alignItems: 'flex-end', flexShrink: 0, gap: 2},
     closedTradeWhen: {color: colors.textMuted, fontSize: 11},
-    closedTradeHash: {color: colors.textMuted, fontSize: 10.5, fontFamily: 'monospace'},
-    closedTradeHashLink: {color: colors.textSecondary, fontSize: 10.5, fontFamily: 'monospace', textDecorationLine: 'underline'},
 
     showHiddenPill: {
       alignSelf: 'center',

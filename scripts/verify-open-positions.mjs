@@ -9,7 +9,7 @@
 // Run: node --experimental-strip-types scripts/verify-open-positions.mjs
 
 import assert from 'node:assert/strict';
-import {computeOpenPositions} from '../src/wallet/openPositions.ts';
+import {computeClosedPositions, computeOpenPositions} from '../src/wallet/openPositions.ts';
 
 let passed = 0;
 const failures = [];
@@ -98,6 +98,56 @@ check('an entry with no tokenAddress (written before the field existed) is skipp
 check('a later trade\'s imageUrl overrides an earlier trade with none', () => {
   const positions = computeOpenPositions([buy({timestamp: 1, tokenAddress: '0xToken', symbol: 'PEPE', amount: 10}), buy({timestamp: 2, tokenAddress: '0xToken', symbol: 'PEPE', amount: 10, imageUrl: 'https://example.com/pepe.png'})]);
   assert.equal(positions[0].imageUrl, 'https://example.com/pepe.png');
+});
+
+check('a Buy fully offset by a Sell shows as ONE closed position, not two trade rows', () => {
+  const closed = computeClosedPositions([buy({timestamp: 1, tokenAddress: '0xToken', symbol: 'PEPE', amount: 100}), sell({timestamp: 2, tokenAddress: '0xToken', symbol: 'PEPE', amount: 100})]);
+  assert.equal(closed.length, 1);
+  assert.equal(closed[0].symbol, 'PEPE');
+  assert.equal(closed[0].lastTradeAt, 2);
+});
+
+check('a token still partially held does NOT show as closed', () => {
+  const closed = computeClosedPositions([buy({timestamp: 1, tokenAddress: '0xToken', symbol: 'PEPE', amount: 100}), sell({timestamp: 2, tokenAddress: '0xToken', symbol: 'PEPE', amount: 40})]);
+  assert.equal(closed.length, 0);
+});
+
+check('a token bought, sold, then bought again shows as open, not closed', () => {
+  const closed = computeClosedPositions([
+    buy({timestamp: 1, tokenAddress: '0xToken', symbol: 'PEPE', amount: 100}),
+    sell({timestamp: 2, tokenAddress: '0xToken', symbol: 'PEPE', amount: 100}),
+    buy({timestamp: 3, tokenAddress: '0xToken', symbol: 'PEPE', amount: 50}),
+  ]);
+  assert.equal(closed.length, 0, 'expected no closed position — the token is open again after the second buy');
+  const open = computeOpenPositions([
+    buy({timestamp: 1, tokenAddress: '0xToken', symbol: 'PEPE', amount: 100}),
+    sell({timestamp: 2, tokenAddress: '0xToken', symbol: 'PEPE', amount: 100}),
+    buy({timestamp: 3, tokenAddress: '0xToken', symbol: 'PEPE', amount: 50}),
+  ]);
+  assert.equal(open.length, 1);
+  assert.equal(open[0].amountHeld, 50);
+});
+
+check('multiple round-trips on the same token collapse into ONE closed row, not one per trade', () => {
+  const closed = computeClosedPositions([
+    buy({timestamp: 1, tokenAddress: '0xToken', symbol: 'PEPE', amount: 100}),
+    sell({timestamp: 2, tokenAddress: '0xToken', symbol: 'PEPE', amount: 100}),
+    buy({timestamp: 3, tokenAddress: '0xToken', symbol: 'PEPE', amount: 50}),
+    sell({timestamp: 4, tokenAddress: '0xToken', symbol: 'PEPE', amount: 50}),
+  ]);
+  assert.equal(closed.length, 1, 'five raw trades on one token should still be exactly one closed position row');
+  assert.equal(closed[0].lastTradeAt, 4);
+});
+
+check('closed positions across different tokens sort newest-closed first', () => {
+  const closed = computeClosedPositions([
+    buy({timestamp: 1, tokenAddress: '0xTokenA', symbol: 'AAA', amount: 10}),
+    sell({timestamp: 2, tokenAddress: '0xTokenA', symbol: 'AAA', amount: 10}),
+    buy({timestamp: 3, tokenAddress: '0xTokenB', symbol: 'BBB', amount: 10}),
+    sell({timestamp: 9, tokenAddress: '0xTokenB', symbol: 'BBB', amount: 10}),
+  ]);
+  assert.equal(closed.length, 2);
+  assert.equal(closed[0].symbol, 'BBB', 'expected the most recently closed token first');
 });
 
 console.log(`${passed}/${passed + failures.length} checks passed`);

@@ -30,9 +30,21 @@ export type OpenPosition = {
   symbol: string;
   imageUrl: string | null;
   amountHeld: number;
+  lastTradeAt: number;
 };
 
 export type OpenPositionWithValue = OpenPosition & {valueUsd: number | null};
+
+/** A token that was bought and is now fully sold back out — net amount at/near zero. Shows in the Positions "Closed" tab, one row per token exited, not one row per trade. */
+export type ClosedPosition = {
+  key: string;
+  chainKey: ChainKey;
+  chainLabel: string;
+  tokenAddress: string;
+  symbol: string;
+  imageUrl: string | null;
+  lastTradeAt: number;
+};
 
 // EVM addresses compare case-insensitively; Solana addresses are
 // case-sensitive — same convention filterTxHistoryForAccount already
@@ -49,14 +61,18 @@ const DUST_EPSILON = 1e-9;
 
 /**
  * Aggregates net-held amount per (chainKey, tokenAddress) across every
- * successful trade. Entries are expected already scoped to one account
- * (filterTxHistoryForAccount) — this function doesn't re-check
- * ownership.
+ * successful trade — shared by computeOpenPositions (still held) and
+ * computeClosedPositions (fully exited) below, so "which token, on
+ * which chain, how much is left" is computed exactly once and the two
+ * tabs can never disagree about it. Entries are expected already
+ * scoped to one account (filterTxHistoryForAccount) — this function
+ * doesn't re-check ownership.
  */
-export function computeOpenPositions(entries: TxHistoryEntry[]): OpenPosition[] {
+function aggregatePositionsByToken(entries: TxHistoryEntry[]): OpenPosition[] {
   const byKey = new Map<string, OpenPosition>();
   // Oldest first, so a later trade's symbol/imageUrl (a search index
-  // that resolved an icon after an earlier trade didn't) is what wins.
+  // that resolved an icon after an earlier trade didn't) is what wins,
+  // and lastTradeAt naturally ends up as the most recent timestamp.
   const chronological = [...entries].filter(e => e.status === 'success' && e.tokenAddress).sort((a, b) => a.timestamp - b.timestamp);
 
   for (const entry of chronological) {
@@ -71,6 +87,7 @@ export function computeOpenPositions(entries: TxHistoryEntry[]): OpenPosition[] 
     if (existing) {
       existing.amountHeld += delta;
       existing.symbol = symbol;
+      existing.lastTradeAt = entry.timestamp;
       if (entry.tokenImageUrl) existing.imageUrl = entry.tokenImageUrl;
     } else {
       byKey.set(key, {
@@ -81,11 +98,36 @@ export function computeOpenPositions(entries: TxHistoryEntry[]): OpenPosition[] 
         symbol,
         imageUrl: entry.tokenImageUrl ?? null,
         amountHeld: delta,
+        lastTradeAt: entry.timestamp,
       });
     }
   }
 
-  return [...byKey.values()].filter(p => p.amountHeld > DUST_EPSILON);
+  return [...byKey.values()];
+}
+
+/** Tokens still genuinely held — a real, non-dust net amount left after every Buy/Sell nets out. */
+export function computeOpenPositions(entries: TxHistoryEntry[]): OpenPosition[] {
+  return aggregatePositionsByToken(entries).filter(p => p.amountHeld > DUST_EPSILON);
+}
+
+/**
+ * Tokens that were bought and are now fully sold back out — the
+ * Positions "Closed" tab's real content. Reusing the SAME per-token
+ * aggregation as computeOpenPositions above (rather than just showing
+ * every past trade) is the actual fix here: a wallet that bought and
+ * sold the same token five times used to show as five separate rows
+ * even though nothing about it is "open" anymore — now it's the one
+ * row a fully-closed position actually is. A net amount that overshoots
+ * slightly negative (a Sell nudging past its matching Buy on rounded
+ * display amounts) still reads as closed, not as a phantom short
+ * position this app has no concept of. Newest-closed first.
+ */
+export function computeClosedPositions(entries: TxHistoryEntry[]): ClosedPosition[] {
+  return aggregatePositionsByToken(entries)
+    .filter(p => Math.abs(p.amountHeld) <= DUST_EPSILON)
+    .sort((a, b) => b.lastTradeAt - a.lastTradeAt)
+    .map(({amountHeld: _amountHeld, ...closed}) => closed);
 }
 
 /** Attaches a live $ value to each position, in parallel, one DexScreener lookup per position (already short-lived-cached there). */

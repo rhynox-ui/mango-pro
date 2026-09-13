@@ -50,6 +50,7 @@ import {TokenTradeScreen, type DemoToken} from './src/screens/TokenTradeScreen';
 import {ProfileScreen} from './src/screens/ProfileScreen';
 import {SettingsScreen} from './src/screens/SettingsScreen';
 import {HistoryScreen} from './src/screens/HistoryScreen';
+import {NotificationHistoryScreen} from './src/screens/NotificationHistoryScreen';
 import {NewsScreen} from './src/screens/NewsScreen';
 import type {TokenSearchResult} from './src/core/tokenSearch';
 import type {DiscoveryToken} from './src/core/discoveryFeed';
@@ -58,7 +59,7 @@ import {checkForDeposit} from './src/wallet/depositWatcher';
 import {requestNotificationPermission} from './src/notifications/localNotify';
 
 type Tab = 'home' | 'search' | 'swap' | 'profile';
-type Screen = 'tabs' | 'settings' | 'history' | 'news';
+type Screen = 'tabs' | 'settings' | 'history' | 'news' | 'notifications';
 type AuthState = 'loading' | 'welcome' | 'create' | 'import' | 'locked' | 'app-locked' | 'unlocked';
 
 const TABS: {key: Tab; label: string; icon: TabIconName}[] = [
@@ -469,10 +470,12 @@ function AppInner(): React.JSX.Element {
   const showingSettings = screen === 'settings';
   const showingHistory = screen === 'history';
   const showingNews = screen === 'news';
-  const showingPushedScreen = showingSettings || showingHistory || showingNews;
+  const showingNotifications = screen === 'notifications';
+  const showingPushedScreen = showingSettings || showingHistory || showingNews || showingNotifications;
   const openSettings = () => setScreen('settings');
   const openHistory = () => setScreen('history');
   const openNews = () => setScreen('news');
+  const openNotifications = () => setScreen('notifications');
   // Settings' own "Deposit and Withdraw" row has no dedicated screen of
   // its own — Profile already IS that real destination (the totalCash
   // row's +/- buttons), so this takes the user there AND tells it to
@@ -537,6 +540,8 @@ function AppInner(): React.JSX.Element {
                   <SettingsScreen onBack={() => setScreen('tabs')} onOpenDepositWithdraw={goToWalletActions} onOpenProfile={goToProfile} />
                 ) : showingHistory ? (
                   <HistoryScreen onBack={() => setScreen('tabs')} />
+                ) : showingNotifications ? (
+                  <NotificationHistoryScreen onBack={() => setScreen('tabs')} />
                 ) : showingNews ? (
                   <NewsScreen onBack={() => setScreen('tabs')} />
                 ) : tab === 'home' ? (
@@ -560,6 +565,7 @@ function AppInner(): React.JSX.Element {
                   <ProfileScreen
                     onOpenSettings={openSettings}
                     onOpenHistory={openHistory}
+                    onOpenNotifications={openNotifications}
                     pendingAction={pendingProfileAction}
                     onPendingActionHandled={() => setPendingProfileAction(null)}
                   />

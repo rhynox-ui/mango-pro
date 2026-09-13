@@ -24,6 +24,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {notify} from '../notifications/localNotify';
+import {addNotificationHistoryEntry} from '../notifications/notificationHistory';
 
 const STORAGE_PREFIX = 'mango_pro_deposit_watch_v1:';
 const EPSILON_USD = 0.01;
@@ -75,6 +76,15 @@ export async function checkForDeposit(address: string, totalUsd: number): Promis
 
   if (delta <= EPSILON_USD || withinCooldown) return null;
 
-  await notify('Deposit received', `$${delta.toFixed(2)} landed in your Mango Pro wallet.`);
+  const title = 'Deposit received';
+  const body = `$${delta.toFixed(2)} landed in your Mango Pro wallet.`;
+  await notify(title, body);
+  // Recorded at the exact point the OS notification fires, so the
+  // in-app Notifications screen (opened from the Profile bell) always
+  // matches what the system notification actually said — same
+  // discipline mango-mobile's own notificationHistory.js documents. No
+  // chainKey/txHash here: this is a balance-total observation, not a
+  // specific on-chain transaction this app watched land.
+  addNotificationHistoryEntry({title, body});
   return delta;
 }
