@@ -48,7 +48,7 @@ export function chainKeyForDexScreenerChainId(dexScreenerChainId: string): Chain
   return reverseChainIds.get(dexScreenerChainId) ?? null;
 }
 
-export type ResolvedPair = {chainId: string; pairAddress: string; socialLinks: TokenSocialLink[]};
+export type ResolvedPair = {chainId: string; pairAddress: string; socialLinks: TokenSocialLink[]; priceUsd: number | null};
 
 // The handful of fields this app actually reads off a DexScreener API
 // pair object — not the full response shape, just enough to type-check
@@ -157,11 +157,15 @@ async function resolveDexScreenerPairUncached(chainId: string, tokenAddress: str
         best = pair;
       }
     }
-    // Social links come off this SAME winning pair, not a second lookup —
-    // the highest-liquidity pair is already the one this app trusts for
-    // price/chart data, so its own info.socials/websites is the same
-    // trust boundary, not a new one.
-    return best ? {chainId, pairAddress: best.pairAddress as string, socialLinks: extractSocialLinks(best)} : null;
+    // Social links AND price come off this SAME winning pair, not a
+    // second lookup — the highest-liquidity pair is already the one
+    // this app trusts for price/chart data, so its own
+    // info.socials/websites/priceUsd is the same trust boundary, not a
+    // new one. priceUsd is used by openPositions.ts to value a held
+    // token in $$$.
+    if (!best) return null;
+    const priceUsd = Number(best.priceUsd);
+    return {chainId, pairAddress: best.pairAddress as string, socialLinks: extractSocialLinks(best), priceUsd: Number.isFinite(priceUsd) ? priceUsd : null};
   } catch {
     return null;
   }

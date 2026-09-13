@@ -48,6 +48,7 @@ import {ActivityIndicator, Image, StyleSheet, Text, TextInput, TouchableOpacity,
 import Svg, {Circle, Path} from 'react-native-svg';
 import {formatUnits, parseUnits} from 'viem';
 import {TokenChartPanel} from '../components/TokenChartPanel';
+import {AssetIcon} from '../components/AssetIcon';
 import {ChevronLeftIcon} from '../components/icons';
 import {NetworkIcon} from '../wallet/NetworkIcon';
 import {CHAIN_LABEL, NATIVE_SYMBOL, assetDecimalsForChain, currencyAddress, type ChainKey} from '../core/chainData';
@@ -124,33 +125,6 @@ function formatFeePct(rate: number): string {
 function formatEta(seconds: number): string {
   if (seconds < 60) return `~${Math.round(seconds)}s`;
   return `~${Math.round(seconds / 60)}m`;
-}
-
-/**
- * The actual asset's own logo where one is real (a searched/discovered
- * token's imageUrl, already fetched by HomeScreen/SearchScreen — never
- * refetched here), falling back to a lettered badge rather than a wrong
- * or fabricated icon when there isn't one (a bare DemoToken, or an image
- * URL that 404s). Used for the traded token itself — the chain-native
- * pay/receive side uses NetworkIcon directly instead, since that one has
- * a real per-chain icon already ported (src/wallet/NetworkIcon.tsx).
- */
-function AssetIcon({symbol, imageUrl, size = 16}: {symbol: string; imageUrl?: string | null; size?: number}) {
-  const {colors} = useTheme();
-  const [failed, setFailed] = useState(false);
-  const s = StyleSheet.create({
-    circle: {width: size, height: size, borderRadius: size / 2, backgroundColor: colors.pillBg, alignItems: 'center', justifyContent: 'center'},
-    letter: {fontSize: size * 0.55, fontWeight: '700', color: colors.textPrimary},
-    image: {width: size, height: size, borderRadius: size / 2},
-  });
-  if (imageUrl && !failed) {
-    return <Image source={{uri: imageUrl}} style={s.image} onError={() => setFailed(true)} />;
-  }
-  return (
-    <View style={s.circle}>
-      <Text style={s.letter}>{symbol.slice(0, 1).toUpperCase()}</Text>
-    </View>
-  );
 }
 
 /**
@@ -733,6 +707,8 @@ export function TokenTradeScreen({
         receivedAmountFormatted,
         hashes: txHashes,
         fromAddress,
+        tokenAddress: token.address,
+        tokenImageUrl: token.imageUrl,
       });
     } catch (err) {
       // TransactionIntentError carries its own complete, user-facing

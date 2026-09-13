@@ -33,6 +33,17 @@ export type TxHistoryEntry = {
   hashes: string[];
   errorMessage?: string;
   fromAddress?: string;
+  /**
+   * The TRADED token's own contract/mint address — the receive side on
+   * a Buy, the pay side on a Sell — added for openPositions.ts to
+   * aggregate real net-held amounts per token. Optional: entries
+   * written before this field existed simply don't contribute to Open
+   * Positions rather than being misattributed to the wrong token by a
+   * symbol-only guess (a ticker isn't unique across chains/tokens).
+   */
+  tokenAddress?: string;
+  /** Same real-logo-or-none contract as everywhere else this app shows an icon — never fabricated when absent. */
+  tokenImageUrl?: string | null;
 };
 
 let entries: TxHistoryEntry[] = [];

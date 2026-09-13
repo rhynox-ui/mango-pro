@@ -33,6 +33,8 @@ import {explorerUrlFor, filterTxHistoryForAccount, getTxHistory, subscribeTxHist
 import {getAvatarUri, getBio, getUsername, isValidUsername, setAvatarUri as saveAvatarUri, setBio as saveBio, setUsername as saveUsername} from '../wallet/profileLocal';
 import {computePortfolioChange, filterHistoryByRange, getPortfolioHistory, recordPortfolioSnapshot, type PortfolioSnapshot} from '../wallet/portfolioHistory';
 import {markOwnAction} from '../wallet/depositWatcher';
+import {computeOpenPositions, withLiveValues, type OpenPositionWithValue} from '../wallet/openPositions';
+import {AssetIcon} from '../components/AssetIcon';
 import {privateKeyToAccount} from 'viem/accounts';
 import {ReferralModal} from '../referral/ReferralModal';
 import {getReferralStats, setReferralHandle, type ReferralSigner} from '../referral/referralApi';
@@ -42,6 +44,13 @@ import {useSession} from '../wallet/SessionContext';
 
 function formatUsd(n: number): string {
   return n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
+/** A held token amount, not a $ amount — more decimals for a sub-$1 meme-token balance, trimmed trailing zeros so "5.2000" reads as "5.2". */
+function formatTokenAmount(n: number): string {
+  if (n === 0) return '0';
+  const decimals = Math.abs(n) >= 1 ? 4 : 6;
+  return n.toFixed(decimals).replace(/\.?0+$/, '');
 }
 
 // Every cash chain except Solana shares the SAME EVM address — this is
@@ -286,17 +295,25 @@ export function ProfileScreen({
   // site) — both were a hardcoded "0 trades"/"No closed positions yet"
   // before txHistory.ts existed, same "real shell, not a mock" reasoning
   // as everything else this screen shows for a new account. "Open"
-  // positions stay a real empty state — this app has no live balance/
-  // PnL tracking of held tokens yet, a materially bigger feature than
-  // just listing what already happened.
+  // positions are real too now (openPositions.ts) — net held amount per
+  // token, derived from this same trade history, priced live via
+  // DexScreener.
   const [tradeCount, setTradeCount] = useState(0);
   const [closedTrades, setClosedTrades] = useState<TxHistoryEntry[]>([]);
+  const [openPositions, setOpenPositions] = useState<OpenPositionWithValue[]>([]);
   useEffect(() => {
     function recount(entries: ReturnType<typeof getTxHistory>) {
       const scoped = session ? filterTxHistoryForAccount(entries, {evmAddress: session.evm.address, solanaAddress: session.solana.address}) : entries;
       const successful = scoped.filter(e => e.status === 'success');
       setTradeCount(successful.length);
       setClosedTrades(successful);
+      // Synchronous amounts first (so the list appears immediately with
+      // real held amounts), then the same positions re-rendered with
+      // live $ values once DexScreener resolves — never blocks showing
+      // what's actually held on a price lookup.
+      const positions = computeOpenPositions(successful);
+      setOpenPositions(positions.map(p => ({...p, valueUsd: null})));
+      withLiveValues(positions).then(setOpenPositions);
     }
     recount(getTxHistory());
     return subscribeTxHistory(recount);
@@ -616,7 +633,26 @@ export function ProfileScreen({
       {/* This app has nothing that's actually a Perp yet, so the Perps
           filter always reads as empty here — an honest reflection of
           what exists, not a bug. */}
-      {positionTab === 'Closed' && assetFilter !== 'Perps' && closedTrades.length > 0 ? (
+      {positionTab === 'Open' && assetFilter !== 'Perps' && openPositions.length > 0 ? (
+        <View style={styles.closedTradesList}>
+          {openPositions.map(position => (
+            <View key={position.key} style={styles.closedTradeRow}>
+              <AssetIcon symbol={position.symbol} imageUrl={position.imageUrl} size={30} />
+              <View style={styles.closedTradeMain}>
+                <Text style={styles.closedTradeTitle} numberOfLines={1}>
+                  {position.symbol}
+                </Text>
+                <Text style={styles.closedTradeSubtitle} numberOfLines={1}>
+                  {formatTokenAmount(position.amountHeld)} {position.symbol} on {position.chainLabel}
+                </Text>
+              </View>
+              <View style={styles.closedTradeRight}>
+                <Text style={styles.closedTradeTitle}>{position.valueUsd != null ? `$${formatUsd(position.valueUsd)}` : '—'}</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      ) : positionTab === 'Closed' && assetFilter !== 'Perps' && closedTrades.length > 0 ? (
         <View style={styles.closedTradesList}>
           {closedTrades.map(trade => {
             // Real block-explorer link, same source (txHistory.ts's own
