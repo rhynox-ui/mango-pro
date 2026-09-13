@@ -36,6 +36,15 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # GitHub Actions doesn't let a step's own `if:` reference the
+    # `secrets` context directly ("Unrecognized named-value: 'secrets'")
+    # — every run from the commit that first added the signing step
+    # below through the next 17 pushes failed at workflow-parse time
+    # over exactly this, before a single job step ever ran. Exposing the
+    # one secret this workflow needs to gate on as a job-level env var
+    # and testing THAT in the if: is the documented workaround.
+    env:
+      RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -74,10 +83,9 @@ jobs:
       # below falls back to the explicit debug-signed opt-in instead of
       # failing.
       - name: Configure release signing
-        if: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' }}
+        if: ${{ env.RELEASE_KEYSTORE_BASE64 != '' }}
         working-directory: android
         env:
-          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
           RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
         run: |
