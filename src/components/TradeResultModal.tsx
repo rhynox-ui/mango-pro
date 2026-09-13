@@ -54,7 +54,7 @@ export function TradeResultModal({
       <View style={styles.overlay}>
         <View style={styles.card}>
           <View style={[styles.iconCircle, isSuccess ? styles.iconCircleSuccess : styles.iconCircleError]}>
-            <MangoMark size={26} color={isSuccess ? colors.gain : colors.danger} />
+            <MangoMark size={19} color={isSuccess ? colors.gain : colors.danger} />
           </View>
           <Text style={styles.title}>
             {isSuccess && result ? `${result.isBuySide ? 'Bought' : 'Sold'} ${result.isBuySide ? result.receiveSymbol : result.paySymbol}` : isSuccess ? 'Trade sent' : 'Trade failed'}
@@ -96,19 +96,19 @@ export function TradeResultModal({
 
 function makeStyles(colors: Colors) {
   return StyleSheet.create({
-    overlay: {flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', padding: 24},
-    card: {backgroundColor: colors.panel, borderColor: colors.panelBorder, borderWidth: 1, borderRadius: 20, padding: 22, alignItems: 'center'},
-    iconCircle: {width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', marginBottom: 14},
+    overlay: {flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', padding: 32},
+    card: {backgroundColor: colors.panel, borderColor: colors.panelBorder, borderWidth: 1, borderRadius: 16, padding: 16, alignItems: 'center'},
+    iconCircle: {width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', marginBottom: 10},
     iconCircleSuccess: {backgroundColor: `${colors.gain}22`},
     iconCircleError: {backgroundColor: `${colors.danger}22`},
-    title: {color: colors.textPrimary, fontSize: 17, fontWeight: '800', textAlign: 'center'},
-    subtitle: {color: colors.textSecondary, fontSize: 13.5, textAlign: 'center', marginTop: 8},
-    errorScroll: {maxHeight: 120, marginTop: 8},
-    errorText: {color: colors.danger, fontSize: 13.5, textAlign: 'center'},
-    hashLink: {color: colors.accent, fontSize: 13, fontWeight: '600', marginTop: 12, textAlign: 'center'},
-    hashText: {color: colors.textMuted, fontSize: 12, marginTop: 12, textAlign: 'center'},
-    warningText: {color: colors.warning, fontSize: 12, textAlign: 'center', marginTop: 8},
-    doneButton: {backgroundColor: colors.ctaBg, borderRadius: 14, paddingVertical: 13, alignItems: 'center', alignSelf: 'stretch', marginTop: 20},
-    doneButtonText: {color: colors.ctaText, fontSize: 15, fontWeight: '700'},
+    title: {color: colors.textPrimary, fontSize: 15, fontWeight: '800', textAlign: 'center'},
+    subtitle: {color: colors.textSecondary, fontSize: 12.5, textAlign: 'center', marginTop: 6},
+    errorScroll: {maxHeight: 90, marginTop: 6},
+    errorText: {color: colors.danger, fontSize: 12.5, textAlign: 'center'},
+    hashLink: {color: colors.accent, fontSize: 12, fontWeight: '600', marginTop: 10, textAlign: 'center'},
+    hashText: {color: colors.textMuted, fontSize: 11, marginTop: 10, textAlign: 'center'},
+    warningText: {color: colors.warning, fontSize: 11, textAlign: 'center', marginTop: 6},
+    doneButton: {backgroundColor: colors.ctaBg, borderRadius: 12, paddingVertical: 11, alignItems: 'center', alignSelf: 'stretch', marginTop: 14},
+    doneButtonText: {color: colors.ctaText, fontSize: 14, fontWeight: '700'},
   });
 }
