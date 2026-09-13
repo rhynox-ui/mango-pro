@@ -18,11 +18,16 @@ name: Android release APK
 # with no android/keystore.properties (a security audit flagged the old
 # unconditional signingConfigs.debug fallback -- debug.keystore's
 # password is the public, documented 'android', so anyone could sign a
-# replacement "update"), so this sideloaded test build passes the
-# explicit -PALLOW_DEBUG_SIGNED_RELEASE=true opt-in below. There is no
-# real release keystore secret configured for this repo yet -- a real
-# production release needs one, but that's out of scope for a
-# sideloaded test build.
+# replacement "update"). "Configure release signing" below writes a
+# real android/keystore.properties from repository secrets when they're
+# set (RELEASE_KEYSTORE_BASE64/RELEASE_KEYSTORE_PASSWORD/RELEASE_KEY_ALIAS
+# -- see android/keystore.properties.example for what each maps to), so
+# every build from here on is signed with the SAME real key, which is
+# what lets a tester install one build over the last without
+# uninstalling first. -PALLOW_DEBUG_SIGNED_RELEASE=true stays on the
+# build step purely as a fallback so this workflow never just breaks if
+# those secrets are ever unset -- build.gradle only consults that flag
+# when android/keystore.properties is actually missing.
 on:
   push:
     branches: [main]
@@ -62,6 +67,27 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # Only runs when the three secrets are actually set (see this
+      # file's own header for what they map to) — a fork PR or a repo
+      # that hasn't added them yet just skips this and the build step
+      # below falls back to the explicit debug-signed opt-in instead of
+      # failing.
+      - name: Configure release signing
+        if: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' }}
+        working-directory: android
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+        run: |
+          echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > app/release.keystore
+          cat > keystore.properties << PROPS
+          storeFile=release.keystore
+          storePassword=$RELEASE_KEYSTORE_PASSWORD
+          keyAlias=$RELEASE_KEY_ALIAS
+          keyPassword=$RELEASE_KEYSTORE_PASSWORD
+          PROPS
 
       - name: Build release APK (bundles JS — no Metro needed on-device)
         working-directory: android
