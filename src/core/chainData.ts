@@ -128,6 +128,18 @@ const NATIVE_PLACEHOLDER_BY_CHAIN: Record<ChainKey, string> = {
   xlayer: NATIVE_TOKEN_ADDRESS,
 };
 
+// Solana's entry is Relay's own synthetic id (see MAINNET_CHAIN_IDS's
+// own comment) — harmless to include here since no real EVM chain will
+// ever collide with it, and it lets a caller that already has "a
+// chainId from a Relay step" resolve back to a ChainKey generically
+// without special-casing Solana out first.
+const CHAIN_KEY_BY_CHAIN_ID: Partial<Record<number, ChainKey>> = Object.fromEntries(Object.entries(MAINNET_CHAIN_IDS).map(([key, id]) => [id, key as ChainKey])) as Partial<Record<number, ChainKey>>;
+
+/** Reverse of MAINNET_CHAIN_IDS — undefined for any chain id this app doesn't know about, never guessed. */
+export function chainKeyForChainId(chainId: number): ChainKey | undefined {
+  return CHAIN_KEY_BY_CHAIN_ID[chainId];
+}
+
 export function currencyAddress(chainKey: ChainKey, assetSymbol: string): string {
   if (assetSymbol === NATIVE_SYMBOL[chainKey]) return NATIVE_PLACEHOLDER_BY_CHAIN[chainKey] ?? NATIVE_TOKEN_ADDRESS;
   const addr = TOKEN_ADDRESSES[assetSymbol]?.[chainKey];

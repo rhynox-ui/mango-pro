@@ -29,14 +29,15 @@
 // so there's nothing left to unwrap (see mobile's own long comment on
 // why that fix made the whole cleanup path unnecessary going forward).
 
-import {createPublicClient, createWalletClient} from 'viem';
+import {createPublicClient, createWalletClient, encodeFunctionData} from 'viem';
 import {privateKeyToAccount} from 'viem/accounts';
 import {transportFor, viemChainForChainId} from './chainRegistry.ts';
 import {assertQuoteSafeToSign} from './txIntentFirewall.ts';
 import {assertSolanaTransactionMatchesIntent} from './solanaTxIntent.ts';
 import {intentForQuote, type RelayQuote, type RelayTransactionStepItem} from './relayQuote.ts';
 import {getEip7702AuthorizationIfNeeded, getSponsoredSmartAccountClient, isSmartAccountSponsorshipConfigured} from '../wallet/smartAccount.ts';
-import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS} from './chainData.ts';
+import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, assetDecimalsForChain, chainKeyForChainId} from './chainData.ts';
+import {DEV_FEE_WALLET} from './fees.ts';
 import {fetchWalletPrices} from './walletPrices.ts';
 import type {DerivedAccounts} from '../wallet/keys';
 
@@ -254,6 +255,67 @@ async function sendRelayEvmStepViaParticle(evmAddress: `0x${string}`, publicClie
   return hash;
 }
 
+// ---------------------------------------------------------------------
+// EVM half of sponsorship cost recovery — same design contract as the
+// Solana section above (this file's own header there has the full
+// precedent citations), adapted to what's actually available on this
+// side: Pimlico's own paymaster sponsors gas here (not a Mango-operated
+// native-gas wallet the way Solana's fee payer is), billed against a
+// real funded Pimlico balance — so this closes the exact same "pure
+// gift, never recovered" gap Relay's own subsidizeFees path already
+// closes via appFeeBpsForSponsoredTrade()'s quote-time bps, except
+// Pimlico's sponsorship was never wired into that bps decision at all
+// (it's a separate, independently-toggled opt-in — see smartAccount.ts).
+//
+// The atomic-in-the-same-operation shape survives the move to EVM
+// almost exactly: a 7702 smart account can batch multiple calls into
+// ONE UserOperation (permissionless's own sendTransaction wraps a
+// single {to,data,value} into exactly this `calls` array already — see
+// node_modules/permissionless/actions/smartAccount/sendTransaction.js),
+// so appending a second call (an ERC-20 USDC transfer to Mango's
+// existing DEV_FEE_WALLET — already the appFees recipient, no new
+// address to provision) is the direct EVM equivalent of Solana's second
+// SPL-transfer instruction. No sponsor-side account needs creating
+// here either: DEV_FEE_WALLET is a plain EOA, already set up to receive
+// USDC.
+//
+// What's genuinely different from Solana: there's no single "simulate,
+// read real units, done" call — viem/permissionless splits that into
+// `prepareUserOperation` (real gas-field estimation, no broadcast) and
+// `sendTransaction` (broadcasts). So the shape here is: prepare the
+// swap-only operation to measure its real worst-case native cost
+// (never guessed), decide whether to attempt recovery, then — if
+// attempting — prepare the COMBINED (swap + recovery) operation as the
+// actual pre-flight check. Nothing broadcasts during either prepare
+// call, so it's always safe to fall back to the swap-only calls if
+// EITHER prepare throws (paymaster policy rejects the extra call,
+// price feed missing, insufficient USDC, anything) — exactly one
+// `sendTransaction` (broadcast) ever happens, chosen upfront, never a
+// blind retry after a real broadcast attempt.
+
+const ERC20_TRANSFER_ABI = [
+  {type: 'function', name: 'transfer', inputs: [{name: 'to', type: 'address'}, {name: 'amount', type: 'uint256'}], outputs: [{type: 'bool'}], stateMutability: 'nonpayable'},
+] as const;
+const ERC20_BALANCE_OF_ABI = [
+  {type: 'function', name: 'balanceOf', inputs: [{name: 'account', type: 'address'}], outputs: [{type: 'uint256'}], stateMutability: 'view'},
+] as const;
+
+/**
+ * Real native-gas cost (wei) -> USDC base units for this chain, live
+ * priced and buffered exactly like the Solana side
+ * (sponsorshipRecoveryUsdcUnits) — same non-profit buffer constant, same
+ * "0 means skip, never guess" contract on a missing/invalid input. Takes
+ * `usdcDecimals` explicitly rather than assuming 6, since BNB Chain's
+ * own USDC deploy uses 18 (assetDecimalsForChain in chainData.ts already
+ * carries this exception). Pure, independently testable.
+ */
+export function evmSponsorshipRecoveryUsdcUnits(nativeCostWei: bigint, nativePriceUsd: number, usdcDecimals: number): bigint {
+  if (!(nativeCostWei > 0n) || !(nativePriceUsd > 0)) return 0n;
+  const nativeCost = Number(nativeCostWei) / 1e18;
+  const recoveryUsd = nativeCost * nativePriceUsd * (1 + SPONSORSHIP_RECOVERY_BUFFER_PCT);
+  return BigInt(Math.round(recoveryUsd * 10 ** usdcDecimals));
+}
+
 /**
  * Same shape as sendRelayEvmStep above (simulate first, then broadcast)
  * but through a Pimlico-sponsored EIP-7702 smart-account client
@@ -286,7 +348,56 @@ async function sendRelayEvmStepSponsored(
   // EIP-7702 authorization, which Pimlico's bundler rejects outright —
   // a real one has to be signed and passed explicitly here.
   const authorization = await getEip7702AuthorizationIfNeeded(client, publicClient);
-  const hash = await client.sendTransaction({to: tx.to, data: tx.data, value: tx.value, authorization});
+  const swapCall = {to: tx.to, data: tx.data ?? ('0x' as const), value: tx.value};
+
+  // Cost recovery — strictly opportunistic, per this section's own
+  // header above. Any failure anywhere in this block just means the
+  // single swapCall below goes out exactly as it always has.
+  let calls: {to: `0x${string}`; data: `0x${string}`; value: bigint}[] = [swapCall];
+  try {
+    const chainId = publicClient.chain?.id;
+    const chainKey = typeof chainId === 'number' ? chainKeyForChainId(chainId) : undefined;
+    const usdcAddress = chainKey ? TOKEN_ADDRESSES.USDC?.[chainKey] : undefined;
+    if (chainKey && usdcAddress) {
+      const basePrepared = await client.prepareUserOperation({calls: [swapCall], authorization});
+      const totalGas =
+        basePrepared.callGasLimit +
+        basePrepared.verificationGasLimit +
+        basePrepared.preVerificationGas +
+        (basePrepared.paymasterVerificationGasLimit ?? 0n) +
+        (basePrepared.paymasterPostOpGasLimit ?? 0n);
+      const worstCaseNativeCost = totalGas * basePrepared.maxFeePerGas;
+
+      const nativeSymbol = publicClient.chain?.nativeCurrency?.symbol;
+      const prices = await fetchWalletPrices().catch(() => ({}) as Record<string, number>);
+      const nativePriceUsd = (nativeSymbol && prices[nativeSymbol]) || 0;
+      const usdcDecimals = assetDecimalsForChain(chainKey, 'USDC') ?? ASSET_ONCHAIN_DECIMALS.USDC;
+      const recoveryUnits = evmSponsorshipRecoveryUsdcUnits(worstCaseNativeCost, nativePriceUsd, usdcDecimals);
+
+      if (recoveryUnits > 0n) {
+        const usdcBalance = await publicClient
+          .readContract({address: usdcAddress as `0x${string}`, abi: ERC20_BALANCE_OF_ABI, functionName: 'balanceOf', args: [client.account.address]})
+          .catch(() => null);
+        if (typeof usdcBalance === 'bigint' && usdcBalance >= recoveryUnits) {
+          const recoveryCall = {
+            to: usdcAddress as `0x${string}`,
+            data: encodeFunctionData({abi: ERC20_TRANSFER_ABI, functionName: 'transfer', args: [DEV_FEE_WALLET as `0x${string}`, recoveryUnits]}),
+            value: 0n,
+          };
+          // The real pre-flight: nothing broadcasts on a failed prepare
+          // (a paymaster policy rejection, a gas-estimation revert on
+          // the recovery call itself, anything), so it's always safe to
+          // fall back to swap-only if this throws.
+          await client.prepareUserOperation({calls: [swapCall, recoveryCall], authorization});
+          calls = [swapCall, recoveryCall];
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[sponsorshipRecovery] Skipping EVM cost recovery for this trade:', err instanceof Error ? err.message : String(err));
+  }
+
+  const hash = await client.sendTransaction({calls, authorization});
   await publicClient.waitForTransactionReceipt({hash});
   return hash;
 }
