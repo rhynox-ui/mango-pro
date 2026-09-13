@@ -65,12 +65,21 @@
 // AFTER a fallback trade has already succeeded, never blocks or affects
 // it, and silently does nothing if the price, balance, or gas-reserve
 // estimate isn't available.
+//
+// sweepFallbackFeeFromSolanaBalance further below closes a second,
+// separately-confirmed gap: pump.fun/PumpSwap (this file's Solana
+// fallback, above) collect no fee inline either, and — unlike the EVM
+// fallback path — had no native-balance sweep at all until now, a real
+// revenue gap this file's own header used to disclose rather than hide.
+// Same fire-and-forget contract, same MIN_FALLBACK_FEE_USD floor, same
+// doubled-reserve headroom logic, just against SOL/DEV_FEE_WALLET_SOLANA
+// instead of an EVM chain's native asset/DEV_FEE_WALLET.
 
 import {formatUnits, parseEther} from 'viem';
 import {MAINNET_CHAIN_IDS, NATIVE_SYMBOL, currencyAddress, type ChainKey} from './chainData.ts';
-import {DEV_FEE_MAX_USD, DEV_FEE_PCT, DEV_FEE_WALLET, appFeeBps} from './fees.ts';
+import {DEV_FEE_MAX_USD, DEV_FEE_PCT, DEV_FEE_WALLET, DEV_FEE_WALLET_SOLANA, appFeeBps} from './fees.ts';
 import {fetchWalletPrices} from './walletPrices.ts';
-import {estimateEvmNativeFeeReserve, fetchWalletNativeBalance} from '../wallet/walletRpc.ts';
+import {estimateEvmNativeFeeReserve, estimateSolanaMaxReserveSol, fetchWalletNativeBalance, fetchWalletSolanaBalance} from '../wallet/walletRpc.ts';
 import {formatAmountForInput} from '../wallet/useAvailableBalance.ts';
 import {signerAndPublicClientForChain, writeContractAs, sendTransactionAs} from './evmSigner.ts';
 import {executeUniswapV4Swap, quoteUniswapV4, uniswapV4SupportsChain} from './uniswapV4.ts';
@@ -446,13 +455,11 @@ export async function tryFallbackProviders(params: FallbackExecuteParams): Promi
             ? await pumpfun.executePumpFunTrade({connection, session: params.session, mintAddress: parsed.mintAddress, side: parsed.side, amountBaseUnits})
             : await pumpswap.executePumpSwapTrade({connection, session: params.session, mintAddress: parsed.mintAddress, side: parsed.side, amountBaseUnits});
         // Neither provider collects Mango's fee inline (no fee mechanism
-        // built into either), and unlike the EVM fallback path this has
-        // no post-success native-balance sweep yet — a real, disclosed
-        // gap (see fallbackDex.ts's own header / the README's Known Gaps)
-        // rather than a silently-attempted call that would just throw
-        // (sweepFallbackFeeFromNativeBalance below is EVM-only, via
-        // chainIdFor). TokenTradeScreen.tsx's own call site skips it for
-        // chainKey === 'solana' specifically because of this.
+        // built into either) — feeCollectedInline: false tells the
+        // caller to run the post-success sweep, same contract as the
+        // EVM path below. sweepFallbackFeeFromSolanaBalance (this
+        // file's own SOL equivalent of sweepFallbackFeeFromNativeBalance)
+        // closes what used to be a real, disclosed gap here.
         return {provider: entry.provider, hash: signature, buyAmount: entry.buyAmount.toString(), feeCollectedInline: false};
       } catch (err) {
         failures.push(`${entry.provider}: ${err instanceof Error ? err.message : String(err)}`);
@@ -572,4 +579,62 @@ export async function sweepFallbackFeeFromNativeBalance({
   const {signer, publicClient} = signerAndPublicClientForChain(chainIdFor(chainKey), session);
   const hash = await sendTransactionAs(signer, {to: DEV_FEE_WALLET as `0x${string}`, value: parseEther(formatAmountForInput(feeToSend))});
   await publicClient.waitForTransactionReceipt({hash});
+}
+
+/**
+ * SOL equivalent of sweepFallbackFeeFromNativeBalance above, for a
+ * Solana pump.fun/PumpSwap fallback trade (tryFallbackProviders' Solana
+ * branch always returns feeCollectedInline: false — neither provider
+ * has a fee mechanism built in). Same best-effort, fire-and-forget
+ * contract: the swap has already succeeded by the time this runs, so a
+ * skip or a failure here never affects it or surfaces to the user. Uses
+ * a plain legacy Transaction (not the VersionedTransaction shape
+ * executeRelayQuote.ts's Solana signing uses) since this is a single
+ * SystemProgram transfer with no lookup tables or program instructions
+ * to compile — the simplest correct shape for the job.
+ */
+export async function sweepFallbackFeeFromSolanaBalance({
+  solanaAddress,
+  session,
+  originAmountUsd,
+}: {
+  solanaAddress: string;
+  session: DerivedAccounts;
+  originAmountUsd: number | undefined | null;
+}): Promise<void> {
+  if (!(originAmountUsd && originAmountUsd > 0)) return;
+  const targetFeeUsd = Math.min(originAmountUsd * DEV_FEE_PCT, DEV_FEE_MAX_USD);
+  if (!(targetFeeUsd >= MIN_FALLBACK_FEE_USD)) return;
+
+  const prices = await fetchWalletPrices('usd').catch(() => null);
+  const solPriceUsd = prices?.[NATIVE_SYMBOL.solana];
+  if (!(solPriceUsd && solPriceUsd > 0)) return;
+  const targetFeeSol = targetFeeUsd / solPriceUsd;
+
+  const freshBalance = await fetchWalletSolanaBalance(solanaAddress, {forceFresh: true}).catch(() => null);
+  if (freshBalance === null) return;
+  const reserve = await estimateSolanaMaxReserveSol().catch(() => null);
+  if (reserve === null) return;
+  // Doubled for the same reason sweepFallbackFeeFromNativeBalance above
+  // doubles its own gas reserve: this transfer is itself a second
+  // transaction after the swap, so it needs its own fee headroom kept
+  // aside too, never eating into what the user needs to transact again.
+  const spareSol = freshBalance - reserve * 2;
+  const feeToSend = Math.min(targetFeeSol, spareSol);
+  if (!(feeToSend > 0)) return;
+
+  const [{Connection, Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction}, bs58Module] = await Promise.all([import('@solana/web3.js'), import('bs58')]);
+  const bs58 = bs58Module.default;
+  const lamports = Math.floor(feeToSend * LAMPORTS_PER_SOL);
+  if (lamports <= 0) return;
+
+  const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
+  const keypair = Keypair.fromSecretKey(bs58.decode(session.solana.privateKey));
+  const {blockhash, lastValidBlockHeight} = await connection.getLatestBlockhash('confirmed');
+  const transaction = new Transaction({recentBlockhash: blockhash, feePayer: keypair.publicKey}).add(
+    SystemProgram.transfer({fromPubkey: keypair.publicKey, toPubkey: new PublicKey(DEV_FEE_WALLET_SOLANA), lamports}),
+  );
+  transaction.sign(keypair);
+  const signature = await connection.sendRawTransaction(transaction.serialize());
+  await connection.confirmTransaction({signature, blockhash, lastValidBlockHeight}, 'confirmed');
 }

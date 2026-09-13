@@ -56,7 +56,7 @@ import {DEV_FEE_PCT} from '../core/fees';
 import {getRelayQuote, summarizeQuote, type QuoteSummary, type RelayQuote} from '../core/relayQuote';
 import {executeRelayQuote, type ExecuteStep} from '../core/executeRelayQuote';
 import {loadGaslessTradingEnabled} from '../settings/gaslessTradingPrefs';
-import {checkFallbackRoute, sweepFallbackFeeFromNativeBalance, tryFallbackProviders, type FallbackRouteParams} from '../core/fallbackDex';
+import {checkFallbackRoute, sweepFallbackFeeFromNativeBalance, sweepFallbackFeeFromSolanaBalance, tryFallbackProviders, type FallbackRouteParams} from '../core/fallbackDex';
 import {TransactionIntentError} from '../core/txIntentFirewall';
 import {describeTradeError} from '../core/tradeErrors';
 import {fetchErc20TokenMetadata, fetchSplMintDecimals, fetchWalletSplTokenBalance, fetchWalletTokenBalance} from '../wallet/walletRpc';
@@ -679,20 +679,24 @@ export function TokenTradeScreen({
         // Best-effort, fire-and-forget — the trade above already
         // succeeded, so this never affects it either way. Only needed
         // when the winning provider didn't already collect Mango's fee
-        // inline (1inch's own Integrator Fee does; 0x doesn't). EVM-only:
-        // sweepFallbackFeeFromNativeBalance resolves an EVM chain id
-        // internally and would just throw (into the .catch below) for a
-        // Solana pump.fun/PumpSwap fallback trade — neither collects a
-        // fee inline either, but there's no Solana-native sweep built yet
-        // (see fallbackDex.ts's own header), so this is skipped outright
-        // rather than calling something guaranteed to fail.
-        if (!result.feeCollectedInline && token.chainKey !== 'solana') {
-          sweepFallbackFeeFromNativeBalance({
-            chainKey: token.chainKey,
-            evmAddress: session.evm.address,
-            session,
-            originAmountUsd: fallbackParams!.originAmountUsd,
-          }).catch(() => {});
+        // inline (1inch's own Integrator Fee does; 0x doesn't; neither
+        // pump.fun nor PumpSwap ever does). Branches on chain since the
+        // sweep itself is chain-specific — EVM native balance vs. SOL.
+        if (!result.feeCollectedInline) {
+          if (token.chainKey === 'solana') {
+            sweepFallbackFeeFromSolanaBalance({
+              solanaAddress: session.solana.address,
+              session,
+              originAmountUsd: fallbackParams!.originAmountUsd,
+            }).catch(() => {});
+          } else {
+            sweepFallbackFeeFromNativeBalance({
+              chainKey: token.chainKey,
+              evmAddress: session.evm.address,
+              session,
+              originAmountUsd: fallbackParams!.originAmountUsd,
+            }).catch(() => {});
+          }
         }
       }
       setExecuteWarnings(warnings);
