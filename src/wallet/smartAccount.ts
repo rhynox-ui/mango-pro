@@ -84,7 +84,15 @@ import {to7702SimpleSmartAccount} from 'permissionless/accounts';
 import {createPimlicoClient} from 'permissionless/clients/pimlico';
 import {createSmartAccountClient} from 'permissionless';
 
-const PIMLICO_API_KEY = 'pim_N9WghP1RNn1eZ5nnFrFyKi';
+// Rotated after an uploaded security audit's MANGO-C02 finding confirmed
+// the previous key (pim_N9Wgh...) was a live, embedded client secret —
+// the old key was revoked on Pimlico's dashboard before this replacement
+// landed. Embedding a key here at all is still the same real exposure
+// the audit flagged (any React Native bundle ships this string readably
+// unless minification/R8 is enabled — see MANGO-M02, also not yet
+// closed); moving Pimlico calls behind mango-api so the client never
+// holds this key is the real fix, tracked separately, not done here.
+const PIMLICO_API_KEY = 'pim_JRJAkD756rxN2xZvJ6Lb5z';
 
 const ENTRY_POINT = {address: entryPoint08Address, version: '0.8'} as const;
 
