@@ -58,8 +58,8 @@ export function TradeResultModal({
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onDone}>
       <View style={styles.overlay}>
         <View style={styles.card}>
-          <View style={[styles.iconCircle, isSuccess ? styles.iconCircleSuccess : styles.iconCircleError]}>
-            <MangoMark size={19} color={isSuccess ? colors.gain : colors.danger} />
+          <View style={styles.iconWrap}>
+            <MangoMark size={56} color={isSuccess ? colors.textPrimary : colors.danger} />
           </View>
           <Text style={styles.title}>
             {isSuccess && result ? `${result.isBuySide ? 'Bought' : 'Sold'} ${result.isBuySide ? result.receiveSymbol : result.paySymbol}` : isSuccess ? 'Trade sent' : 'Trade failed'}
@@ -104,9 +104,7 @@ function makeStyles(colors: Colors) {
   return StyleSheet.create({
     overlay: {flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', padding: 40},
     card: {backgroundColor: colors.panel, borderColor: colors.panelBorder, borderWidth: 1, borderRadius: 18, padding: 20, alignItems: 'center'},
-    iconCircle: {width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginBottom: 8},
-    iconCircleSuccess: {backgroundColor: `${colors.gain}22`},
-    iconCircleError: {backgroundColor: `${colors.danger}22`},
+    iconWrap: {marginBottom: 10},
     title: {color: colors.textPrimary, fontSize: 14.5, fontWeight: '800', textAlign: 'center'},
     subtitle: {color: colors.textSecondary, fontSize: 12, textAlign: 'center', marginTop: 4},
     errorScroll: {maxHeight: 90, marginTop: 6},
