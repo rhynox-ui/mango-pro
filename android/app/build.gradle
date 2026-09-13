@@ -135,7 +135,14 @@ android {
         applicationId "com.mangoprotocol.pro"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
+        // Google Play rejects any upload whose versionCode isn't strictly
+        // higher than the last one it has for this applicationId — a
+        // hardcoded "1" would need a manual bump before every single
+        // future release or the upload just fails. CI passes
+        // -PVERSION_CODE=<github.run_number> (always increasing, no
+        // tracked state to forget to update); a local/manual build with
+        // no property set stays at 1, same as before.
+        versionCode (project.findProperty('VERSION_CODE') ?: '1').toInteger()
         versionName "1.0"
 
         // Particle Auth (Google login) — read from android/gradle.properties

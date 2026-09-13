@@ -89,16 +89,36 @@ jobs:
           keyPassword=$RELEASE_KEYSTORE_PASSWORD
           PROPS
 
-      - name: Build release APK (bundles JS — no Metro needed on-device)
+      # -PVERSION_CODE=<run number>: Google Play rejects any upload whose
+      # versionCode isn't strictly higher than the last one it has on
+      # file — this always increases, run over run, with nothing to
+      # remember to bump by hand. -PALLOW_DEBUG_SIGNED_RELEASE=true is
+      # the explicit opt-in build.gradle requires for a debug-signed
+      # release build (only consulted when the signing step above didn't
+      # run) — see this file's own header comment.
+      - name: Build release APK (sideload-testable, bundles JS)
         working-directory: android
-        # -PALLOW_DEBUG_SIGNED_RELEASE=true is the explicit opt-in
-        # build.gradle now requires for a debug-signed release build —
-        # see the file header comment above.
-        run: ./gradlew assembleRelease --no-daemon -PALLOW_DEBUG_SIGNED_RELEASE=true
+        run: ./gradlew assembleRelease --no-daemon -PVERSION_CODE=${{ github.run_number }} -PALLOW_DEBUG_SIGNED_RELEASE=true
 
-      - name: Upload APK
+      # The .aab, not the .apk, is what actually gets uploaded to Google
+      # Play Console — Play has required App Bundle (not a raw APK) for
+      # new apps since 2021; it slices this into per-device APKs itself
+      # at install time. Same signingConfig, same versionCode as the APK
+      # above (Gradle just reuses the already-configured release variant).
+      - name: Build release AAB (for Google Play Console upload)
+        working-directory: android
+        run: ./gradlew bundleRelease --no-daemon -PVERSION_CODE=${{ github.run_number }} -PALLOW_DEBUG_SIGNED_RELEASE=true
+
+      - name: Upload APK (sideload testing)
         uses: actions/upload-artifact@v4
         with:
           name: mango-pro-release
           path: android/app/build/outputs/apk/release/*.apk
+          retention-days: 30
+
+      - name: Upload AAB (Google Play Console upload)
+        uses: actions/upload-artifact@v4
+        with:
+          name: mango-pro-release-aab
+          path: android/app/build/outputs/bundle/release/*.aab
           retention-days: 30
