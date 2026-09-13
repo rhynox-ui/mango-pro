@@ -20,6 +20,16 @@
 // explains why) — moving your own cash between its two real forms isn't
 // a trade Mango takes a cut of. Real Relay/network costs still apply
 // and show in the quote; only Mango's own fee is waived.
+//
+// Also reads the same Security-screen gasless-trading opt-in
+// TokenTradeScreen.tsx already passes through — this sheet's own
+// executeRelayQuote() call never did until now, so Convert always ran
+// the plain (non-sponsored) EVM path regardless of that setting. Real,
+// confirmed impact: consolidating cash FROM a chain you hold zero
+// native gas on — the exact case this whole sheet exists for — hit
+// "Insufficient BNB/ETH for network fees" with no way out, since
+// gasless sponsorship was never even attempted. Fixed by wiring the
+// same preference through, same as every other trade path.
 
 import {useEffect, useMemo, useRef, useState} from 'react';
 import {ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
@@ -33,6 +43,7 @@ import {executeRelayQuote, type ExecuteStep} from '../core/executeRelayQuote';
 import {TransactionIntentError} from '../core/txIntentFirewall';
 import {addTxHistoryEntry} from '../wallet/txHistory';
 import {formatAmountForInput} from '../wallet/useAvailableBalance';
+import {loadGaslessTradingEnabled} from '../settings/gaslessTradingPrefs';
 import type {DerivedAccounts} from '../wallet/keys';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 
@@ -102,6 +113,18 @@ export function ConvertCashSheet({
   const [executeState, setExecuteState] = useState<ExecuteStep | 'idle' | 'success'>('idle');
   const [executeError, setExecuteError] = useState<string | null>(null);
   const [executeTxHashes, setExecuteTxHashes] = useState<string[]>([]);
+  // Same Security-screen opt-in TokenTradeScreen.tsx already reads
+  // before every trade (gaslessTradingPrefs.ts, defaults to true) — this
+  // sheet's own executeRelayQuote() call never passed it at all until
+  // now, so Convert always ran the plain (non-sponsored) path regardless
+  // of the setting. Real, confirmed impact: a user consolidating cash
+  // FROM a chain they hold zero native gas on — the exact case Convert
+  // exists for — hit "Insufficient BNB/ETH for network fees" with no
+  // way out, since gasless was never even attempted.
+  const [gaslessTradingEnabled, setGaslessTradingEnabled] = useState(false);
+  useEffect(() => {
+    loadGaslessTradingEnabled().then(setGaslessTradingEnabled);
+  }, []);
 
   // Fresh defaults and a clean slate every time the sheet opens — never
   // carries a stale amount/quote/result into the next open.
@@ -212,6 +235,7 @@ export function ConvertCashSheet({
     try {
       const quoteParamsForRetry = lastQuoteParamsRef.current;
       const result = await executeRelayQuote(quoteToExecute, session, step => setExecuteState(step), {
+        useGaslessTrading: gaslessTradingEnabled,
         requote: quoteParamsForRetry ? () => getRelayQuote(quoteParamsForRetry) : undefined,
       });
       setExecuteTxHashes(result.txHashes);
