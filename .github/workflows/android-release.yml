@@ -1,0 +1,156 @@
+name: Android release (choose version)
+
+# A separate, manually-triggered workflow from android-debug-apk.yml's
+# every-push builds. That one auto-derives its version from
+# package.json and never asks anything — this one exists so a real
+# release can be cut on demand with a version YOU type in on GitHub,
+# with no repo/code edit required. Modeled directly on mango-mobile's
+# own android-release.yml (the workflow this was built to match), same
+# reasoning throughout, adapted to mango-pro's own three-secret signing
+# setup (see android/keystore.properties.example — this repo has no
+# separate RELEASE_KEY_PASSWORD secret, storePassword doubles as
+# keyPassword, matching android-debug-apk.yml's own signing step).
+#
+# To run it: this repo's Actions tab -> "Android release (choose
+# version)" in the left sidebar -> "Run workflow" button -> type a
+# version name (e.g. 1.0.0) and pick a Play Console track -> Run
+# workflow. versionCode is set automatically from the run number
+# (Play Store requires it to strictly increase; this never needs manual
+# bookkeeping).
+#
+# Produces: a signed release AAB + APK (same signing secrets as
+# android-debug-apk.yml), a GitHub Release with both attached, and —
+# only if the PLAY_SERVICE_ACCOUNT_JSON secret is set — a direct upload
+# to the Play Console track you picked. Until that secret exists, the
+# Play upload step is skipped; everything else above it still runs.
+#
+# One-time setup for the Play Console upload step specifically (not
+# needed for the signed AAB/APK/GitHub Release parts, which work today):
+#   1. Google Cloud Console: create a service account, enable the
+#      "Google Play Android Developer API" for that project.
+#   2. Play Console -> Users and permissions: invite that service
+#      account's email, grant only what it needs (e.g. "Release apps to
+#      testing tracks", "View app information") — not full access.
+#   3. Download that service account's JSON key, add it as this repo's
+#      PLAY_SERVICE_ACCOUNT_JSON secret (Settings -> Secrets and
+#      variables -> Actions).
+# Google also requires a brand-new app's very FIRST release to be
+# uploaded through the Play Console web UI by hand — the API rejects
+# API-driven uploads for an app with no release history yet. This step
+# only starts working after that one manual upload has happened once.
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: 'Version name shown to users (e.g. 1.0.0) — versionCode is set automatically from the run number.'
+        required: true
+        default: '1.0.0'
+      play_track:
+        description: 'Play Console track to publish to (only used if PLAY_SERVICE_ACCOUNT_JSON is set)'
+        required: true
+        type: choice
+        default: internal
+        options:
+          - internal
+          - alpha
+          - beta
+          - production
+
+jobs:
+  build-signed-release:
+    runs-on: ubuntu-latest
+    # Needed for the "Publish a GitHub Release" step below — the default
+    # GITHUB_TOKEN is read-only against repo contents unless a job
+    # explicitly asks for write access.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses > /dev/null || true
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Decode release keystore
+        working-directory: android
+        run: |
+          if [ -z "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" ]; then
+            echo "::error::RELEASE_KEYSTORE_BASE64 secret is not set — add it (and RELEASE_KEYSTORE_PASSWORD/RELEASE_KEY_ALIAS) under Settings > Secrets and variables > Actions before running this workflow."
+            exit 1
+          fi
+          echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > app/release.keystore
+          cat > keystore.properties << PROPS
+          storeFile=release.keystore
+          storePassword=${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          keyAlias=${{ secrets.RELEASE_KEY_ALIAS }}
+          keyPassword=${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          PROPS
+
+      - name: Build signed release AAB (Play Store upload)
+        working-directory: android
+        run: ./gradlew bundleRelease --no-daemon -PVERSION_CODE=${{ github.run_number }} -PVERSION_NAME=${{ inputs.version_name }}
+
+      - name: Build signed release APK (direct install)
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon -PVERSION_CODE=${{ github.run_number }} -PVERSION_NAME=${{ inputs.version_name }}
+
+      - name: Remove decoded keystore
+        if: always()
+        working-directory: android
+        run: rm -f app/release.keystore keystore.properties
+
+      - name: Upload AAB artifact (Play Store upload)
+        uses: actions/upload-artifact@v4
+        with:
+          name: mango-pro-release-aab-v${{ inputs.version_name }}-${{ github.run_number }}
+          path: android/app/build/outputs/bundle/release/*.aab
+          retention-days: 30
+
+      - name: Upload APK artifact (direct install)
+        uses: actions/upload-artifact@v4
+        with:
+          name: mango-pro-release-apk-v${{ inputs.version_name }}-${{ github.run_number }}
+          path: android/app/build/outputs/apk/release/*.apk
+          retention-days: 30
+
+      - name: Publish a GitHub Release with the APK/AAB attached
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: release-v${{ inputs.version_name }}-${{ github.run_number }}
+          name: Mango Pro v${{ inputs.version_name }} (build ${{ github.run_number }})
+          body: |
+            Signed release build. The APK below can be downloaded and installed directly on an Android phone (enable "install unknown apps" for your browser/file manager first). The AAB is for Play Console upload only — it can't be installed directly.
+          files: |
+            android/app/build/outputs/apk/release/*.apk
+            android/app/build/outputs/bundle/release/*.aab
+
+      - name: Check for Play Console secret
+        id: play_secret_check
+        run: |
+          if [ -n "${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}" ]; then
+            echo "has_secret=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_secret=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish AAB to Play Console
+        if: steps.play_secret_check.outputs.has_secret == 'true'
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.mangoprotocol.pro
+          releaseFiles: android/app/build/outputs/bundle/release/*.aab
+          tracks: ${{ inputs.play_track }}
