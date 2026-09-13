@@ -8,12 +8,26 @@
 // to this app's own screen convention (a plain back-button + title, per
 // HistoryScreen.tsx — this app has no shared ScreenHeader component)
 // and its own explorerUrlFor (src/wallet/txHistory.ts).
+//
+// This screen's own feed is wider than notificationHistory.ts's
+// persisted store: that store only ever logs depositWatcher.ts's real
+// deposit alert (the one thing that fires an actual OS notification
+// here — see that file's own header for why a trade result doesn't
+// also log there, TradeResultModal.tsx already gives it a real in-app
+// result). But a single "Notifications" screen that only shows
+// deposits and silently drops every trade reads as broken, not scoped
+// — so this view merges in real trade history (txHistory.ts) at render
+// time, sorted alongside deposit alerts by timestamp, each with its own
+// real explorer link. Two different real stores, one merged view; the
+// underlying deposit-only persistence semantics of notificationHistory.ts
+// itself are untouched.
 
-import {useEffect, useState} from 'react';
+import {useEffect, useMemo, useState} from 'react';
 import {Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {ChevronLeftIcon} from '../components/icons';
 import {useTheme, type Colors} from '../theme/ThemeContext';
-import {explorerUrlFor} from '../wallet/txHistory';
+import {useSession} from '../wallet/SessionContext';
+import {explorerUrlFor, filterTxHistoryForAccount, getTxHistory, subscribeTxHistory, type TxHistoryEntry} from '../wallet/txHistory';
 import type {ChainKey} from '../core/chainData';
 import {
   getNotificationHistory,
@@ -22,6 +36,16 @@ import {
   subscribeNotificationHistory,
   type NotificationHistoryEntry,
 } from '../notifications/notificationHistory';
+
+/** A completed trade, reshaped into the same {title, body, chainKey, txHash} rows deposit alerts already render as — same Row component, same explorer-link behavior, no special-casing needed downstream. */
+function tradeToEntry(trade: TxHistoryEntry): NotificationHistoryEntry {
+  const title = trade.status === 'error' ? 'Trade failed' : `${trade.isBuySide ? 'Bought' : 'Sold'} ${trade.isBuySide ? trade.receiveSymbol : trade.paySymbol} on ${trade.chainLabel}`;
+  const body =
+    trade.status === 'error'
+      ? (trade.errorMessage ?? 'This trade did not go through.')
+      : `${trade.payAmount} ${trade.paySymbol} → ${trade.receivedAmountFormatted ?? '?'} ${trade.receiveSymbol}`;
+  return {id: `trade:${trade.id}`, timestamp: trade.timestamp, title, body, chainKey: trade.chainKey, txHash: trade.hashes[0]};
+}
 
 function formatTimestamp(ts: number): string {
   const d = new Date(ts);
@@ -64,12 +88,14 @@ function Row({entry, colors}: {entry: NotificationHistoryEntry; colors: Colors})
 export function NotificationHistoryScreen({onBack}: {onBack: () => void}) {
   const {colors} = useTheme();
   const styles = makeStyles(colors);
-  const [entries, setEntries] = useState<NotificationHistoryEntry[]>(() => getNotificationHistory());
+  const {session} = useSession();
+  const [notifications, setNotifications] = useState<NotificationHistoryEntry[]>(() => getNotificationHistory());
   const [hydrated, setHydrated] = useState(isNotificationHistoryHydrated());
+  const [trades, setTrades] = useState<TxHistoryEntry[]>(() => getTxHistory());
 
   useEffect(() => {
     const unsubscribe = subscribeNotificationHistory(next => {
-      setEntries(next);
+      setNotifications(next);
       setHydrated(true);
     });
     setHydrated(isNotificationHistoryHydrated());
@@ -79,6 +105,13 @@ export function NotificationHistoryScreen({onBack}: {onBack: () => void}) {
     return unsubscribe;
   }, []);
 
+  useEffect(() => subscribeTxHistory(setTrades), []);
+
+  const entries = useMemo(() => {
+    const scopedTrades = session ? filterTxHistoryForAccount(trades, {evmAddress: session.evm.address, solanaAddress: session.solana.address}) : trades;
+    return [...notifications, ...scopedTrades.map(tradeToEntry)].sort((a, b) => b.timestamp - a.timestamp);
+  }, [notifications, trades, session]);
+
   return (
     <View style={styles.screen}>
       <TouchableOpacity onPress={onBack} hitSlop={10} style={styles.backButton}>
@@ -86,7 +119,7 @@ export function NotificationHistoryScreen({onBack}: {onBack: () => void}) {
       </TouchableOpacity>
       <Text style={styles.title}>Notifications</Text>
       {!hydrated ? null : entries.length === 0 ? (
-        <Text style={styles.emptyText}>No notifications yet — a real deposit landing in your wallet will show up here.</Text>
+        <Text style={styles.emptyText}>Nothing yet — a real deposit or a completed trade will show up here.</Text>
       ) : (
         <ScrollView contentContainerStyle={styles.rows} showsVerticalScrollIndicator={false}>
           {entries.map(entry => (

@@ -18,6 +18,7 @@ import {Linking, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View} fr
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {explorerUrlFor} from '../wallet/txHistory';
 import type {ChainKey} from '../core/chainData';
+import {MangoMark} from './MangoMark';
 
 export type TradeResultSummary = {
   isBuySide: boolean;
@@ -53,7 +54,7 @@ export function TradeResultModal({
       <View style={styles.overlay}>
         <View style={styles.card}>
           <View style={[styles.iconCircle, isSuccess ? styles.iconCircleSuccess : styles.iconCircleError]}>
-            <Text style={styles.iconGlyph}>{isSuccess ? '✓' : '✕'}</Text>
+            <MangoMark size={26} color={isSuccess ? colors.gain : colors.danger} />
           </View>
           <Text style={styles.title}>
             {isSuccess && result ? `${result.isBuySide ? 'Bought' : 'Sold'} ${result.isBuySide ? result.receiveSymbol : result.paySymbol}` : isSuccess ? 'Trade sent' : 'Trade failed'}
@@ -100,7 +101,6 @@ function makeStyles(colors: Colors) {
     iconCircle: {width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', marginBottom: 14},
     iconCircleSuccess: {backgroundColor: `${colors.gain}22`},
     iconCircleError: {backgroundColor: `${colors.danger}22`},
-    iconGlyph: {fontSize: 24, fontWeight: '800', color: colors.textPrimary},
     title: {color: colors.textPrimary, fontSize: 17, fontWeight: '800', textAlign: 'center'},
     subtitle: {color: colors.textSecondary, fontSize: 13.5, textAlign: 'center', marginTop: 8},
     errorScroll: {maxHeight: 120, marginTop: 8},
