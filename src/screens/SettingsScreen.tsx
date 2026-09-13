@@ -9,8 +9,9 @@
 // actual channels are X and Telegram, not Discord), so they open for
 // real rather than sitting as a placeholder for no reason.
 
-import {useState} from 'react';
+import {useEffect, useState} from 'react';
 import {Alert, Linking, Modal, ScrollView, Share, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {useTranslation} from 'react-i18next';
 import {
   AlertCircleIcon,
   BellIcon,
@@ -41,6 +42,8 @@ import {AppearanceScreen} from './AppearanceScreen';
 import {SolanaDevnetTestScreen} from './SolanaDevnetTestScreen';
 import {Eip7702TestScreen} from './Eip7702TestScreen';
 import {DocumentationScreen} from './DocumentationScreen';
+import {LanguageScreen} from './LanguageScreen';
+import {SUPPORTED_LANGUAGES, getLanguagePreference} from '../i18n';
 
 // Same real URLs as mango-mobile's own src/settings/AboutModal.tsx —
 // one Mango, same channels, not a separate app's accounts.
@@ -86,12 +89,23 @@ export function SettingsScreen({
   onOpenProfile: () => void;
 }) {
   const {colors} = useTheme();
+  const {t} = useTranslation();
   const styles = makeStyles(colors);
   const {session} = useSession();
   const {logout, deleteWallet} = useAuthActions();
   const [showSecurity, setShowSecurity] = useState(false);
   const [showAppearance, setShowAppearance] = useState(false);
+  const [showLanguage, setShowLanguage] = useState(false);
   const [showDocumentation, setShowDocumentation] = useState(false);
+  // Real current value for the Language row — re-read whenever the
+  // picker screen closes, since that's the only place it can change.
+  const [languageValue, setLanguageValue] = useState('');
+  useEffect(() => {
+    if (showLanguage) return;
+    getLanguagePreference().then(pref => {
+      setLanguageValue(pref === 'system' ? t('language.system') : (SUPPORTED_LANGUAGES.find(l => l.code === pref)?.nativeLabel ?? t('language.system')));
+    });
+  }, [showLanguage, t]);
   const [showSolanaDevnetTest, setShowSolanaDevnetTest] = useState(false);
   const [showEip7702Test, setShowEip7702Test] = useState(false);
   const [showDeleteWallet, setShowDeleteWallet] = useState(false);
@@ -137,26 +151,21 @@ export function SettingsScreen({
   // sends no push notifications of its own to have an in-app preference
   // for). Legal and Privacy opens the same real, hosted policy page
   // mango-mobile's own Play Console listing already points to. Taxes
-  // exports this account's own real trade history as CSV. Language stays
-  // the one honest no-op placeholder left — see its own row comment for
-  // why a picker there would be fake choice, not a built feature.
+  // exports this account's own real trade history as CSV. Language now
+  // has a real destination too (LanguageScreen.tsx) — see src/i18n's own
+  // header for why it was safe to build for real without risking the
+  // rest of the app.
   const ROWS: Row[] = [
-    {key: 'profile', label: 'Profile and Account', Icon: UserIcon, onPress: onOpenProfile},
-    {key: 'appearance', label: 'Appearance and Haptics', Icon: ContrastIcon, onPress: () => setShowAppearance(true)},
-    // Real "System" value: this app has no translated strings for any
-    // language yet, only English, so a language PICKER here would be
-    // fake choice — nothing behind it would actually change. Left as the
-    // honest no-op placeholder (this file's own header) rather than
-    // faked, unlike every other row fixed in this pass, which each had a
-    // genuine, buildable-today destination.
-    {key: 'language', label: 'Language', Icon: GlobeIcon, value: 'System'},
+    {key: 'profile', label: t('settings.profileAndAccount'), Icon: UserIcon, onPress: onOpenProfile},
+    {key: 'appearance', label: t('settings.appearanceAndHaptics'), Icon: ContrastIcon, onPress: () => setShowAppearance(true)},
+    {key: 'language', label: t('settings.language'), Icon: GlobeIcon, value: languageValue, onPress: () => setShowLanguage(true)},
     // This app sends no push notifications of its own yet — there is no
     // in-app preference to toggle. The one real, honest destination is
     // the OS's own per-app notification settings, same as what iOS/
     // Android themselves show if you long-press this app's icon.
-    {key: 'notifications', label: 'Notifications', Icon: BellIcon, onPress: () => Linking.openSettings()},
-    {key: 'security', label: 'Security', Icon: ShieldCheckIcon, onPress: () => setShowSecurity(true)},
-    {key: 'deposit', label: 'Deposit and Withdraw', Icon: LandmarkIcon, onPress: onOpenDepositWithdraw},
+    {key: 'notifications', label: t('settings.notifications'), Icon: BellIcon, onPress: () => Linking.openSettings()},
+    {key: 'security', label: t('settings.security'), Icon: ShieldCheckIcon, onPress: () => setShowSecurity(true)},
+    {key: 'deposit', label: t('settings.depositAndWithdraw'), Icon: LandmarkIcon, onPress: onOpenDepositWithdraw},
     // Diagnostic only, only meaningful for a Google-login session (see
     // this row's own destination screen for why) — a local seed-phrase
     // session already signs Solana transactions directly and has
@@ -181,19 +190,19 @@ export function SettingsScreen({
     ...(session && session.evm.privateKey.length > 0
       ? [{key: 'eip7702-test', label: 'Gasless trading test (testnet)', Icon: RepeatIcon, onPress: () => setShowEip7702Test(true)}]
       : []),
-    {key: 'legal', label: 'Legal and Privacy', Icon: ScaleIcon, onPress: () => Linking.openURL(PRIVACY_POLICY_URL)},
+    {key: 'legal', label: t('settings.legalAndPrivacy'), Icon: ScaleIcon, onPress: () => Linking.openURL(PRIVACY_POLICY_URL)},
     // Real export of this account's own trade history as CSV — no
     // fabricated cost-basis/gain-loss math (this app tracks neither), so
     // it's honest about being raw data a real tax tool can work from,
     // not a finished tax report.
-    {key: 'taxes', label: 'Taxes', Icon: FileTextIcon, onPress: handleExportTaxes},
-    {key: 'help', label: 'Help and Support', Icon: HelpCircleIcon, onPress: () => Linking.openURL(SUPPORT_MAIL_URL)},
-    {key: 'docs', label: 'Documentation', Icon: BookOpenIcon, onPress: () => setShowDocumentation(true)},
+    {key: 'taxes', label: t('settings.taxes'), Icon: FileTextIcon, onPress: handleExportTaxes},
+    {key: 'help', label: t('settings.helpAndSupport'), Icon: HelpCircleIcon, onPress: () => Linking.openURL(SUPPORT_MAIL_URL)},
+    {key: 'docs', label: t('settings.documentation'), Icon: BookOpenIcon, onPress: () => setShowDocumentation(true)},
     {key: 'x', label: 'X', Icon: XIcon, onPress: () => Linking.openURL(X_URL)},
     {key: 'telegram', label: 'Telegram', Icon: TelegramIcon, onPress: () => Linking.openURL(TELEGRAM_URL)},
     {
       key: 'log-out',
-      label: 'Log Out',
+      label: t('settings.logOut'),
       Icon: LogOutIcon,
       danger: true,
       onPress: () =>
@@ -204,7 +213,7 @@ export function SettingsScreen({
     },
     {
       key: 'delete-account',
-      label: 'Delete Account',
+      label: t('settings.deleteAccount'),
       Icon: AlertCircleIcon,
       danger: true,
       onPress: () =>
@@ -222,6 +231,9 @@ export function SettingsScreen({
   }
   if (showAppearance) {
     return <AppearanceScreen onBack={() => setShowAppearance(false)} />;
+  }
+  if (showLanguage) {
+    return <LanguageScreen onBack={() => setShowLanguage(false)} />;
   }
   if (showSolanaDevnetTest) {
     return <SolanaDevnetTestScreen onBack={() => setShowSolanaDevnetTest(false)} />;
@@ -247,7 +259,7 @@ export function SettingsScreen({
       <TouchableOpacity onPress={onBack} hitSlop={10} style={styles.backButton}>
         <ChevronLeftIcon color={colors.textMuted} />
       </TouchableOpacity>
-      <Text style={styles.title}>Settings</Text>
+      <Text style={styles.title}>{t('settings.title')}</Text>
       <ScrollView contentContainerStyle={styles.rows} showsVerticalScrollIndicator={false}>
         {ROWS.map((row, i) => (
           <TouchableOpacity key={row.key} style={styles.row} activeOpacity={0.6} onPress={row.onPress ?? (() => comingSoon(row.label))}>

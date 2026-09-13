@@ -58,17 +58,27 @@ import {fetchCashPortfolio} from './src/core/usdcBalances';
 import {checkForDeposit} from './src/wallet/depositWatcher';
 import {syncTxHistoryFromServer} from './src/wallet/txHistory';
 import {requestNotificationPermission} from './src/notifications/localNotify';
+import {initLanguage} from './src/i18n';
+import {useTranslation} from 'react-i18next';
 
 type Tab = 'home' | 'search' | 'swap' | 'profile';
 type Screen = 'tabs' | 'settings' | 'history' | 'news' | 'notifications';
 type AuthState = 'loading' | 'welcome' | 'create' | 'import' | 'locked' | 'app-locked' | 'unlocked';
 
-const TABS: {key: Tab; label: string; icon: TabIconName}[] = [
-  {key: 'home', label: 'Home', icon: 'home'},
-  {key: 'search', label: 'Search', icon: 'search'},
-  {key: 'swap', label: 'Trade', icon: 'swap'},
-  {key: 'profile', label: 'Profile', icon: 'profile'},
+// Labels come from useTranslation() at render time (TABS_META below is
+// just the static key/icon pairing) — a module-level constant can't
+// react to a language change, since it's evaluated once at import time,
+// long before any language preference is known.
+const TABS_META: {key: Tab; icon: TabIconName}[] = [
+  {key: 'home', icon: 'home'},
+  {key: 'search', icon: 'search'},
+  {key: 'swap', icon: 'swap'},
+  {key: 'profile', icon: 'profile'},
 ];
+// Tab.key !== its translation key ('swap' is labeled "Trade") — this is
+// the one place that mapping lives, so it can't drift between here and
+// src/i18n/index.ts's own resource keys.
+const TAB_LABEL_KEY: Record<Tab, string> = {home: 'tabs.home', search: 'tabs.search', swap: 'tabs.trade', profile: 'tabs.profile'};
 
 function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
   const {colors} = useTheme();
@@ -419,6 +429,7 @@ const crashStyles = StyleSheet.create({
 function AppInner(): React.JSX.Element {
   const {colors, mode} = useTheme();
   const {session} = useSession();
+  const {t} = useTranslation();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [tab, setTab] = useState<Tab>('home');
   const [screen, setScreen] = useState<Screen>('tabs');
@@ -435,6 +446,14 @@ function AppInner(): React.JSX.Element {
 
   useEffect(() => {
     readLastCrash().then(setLastCrash);
+  }, []);
+
+  // Applies the real stored (or system-detected) language preference —
+  // i18n itself already initialized synchronously with English at
+  // import time (src/i18n/index.ts), so there's no blank state to wait
+  // on here, just a switch once the real preference is known.
+  useEffect(() => {
+    initLanguage();
   }, []);
 
   // Deposit-received alerts (depositWatcher.ts / localNotify.ts) — lives
@@ -596,12 +615,12 @@ function AppInner(): React.JSX.Element {
 
               {!showingPushedScreen && (
                 <View style={styles.tabBar}>
-                  {TABS.map(t => {
-                    const active = tab === t.key;
+                  {TABS_META.map(tabMeta => {
+                    const active = tab === tabMeta.key;
                     return (
-                      <TouchableOpacity key={t.key} style={styles.tabItem} onPress={() => setTab(t.key)} activeOpacity={0.7}>
-                        <TabIcon name={t.icon} color={active ? colors.navActive : colors.textMuted} size={20} />
-                        <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>{t.label}</Text>
+                      <TouchableOpacity key={tabMeta.key} style={styles.tabItem} onPress={() => setTab(tabMeta.key)} activeOpacity={0.7}>
+                        <TabIcon name={tabMeta.icon} color={active ? colors.navActive : colors.textMuted} size={20} />
+                        <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>{t(TAB_LABEL_KEY[tabMeta.key])}</Text>
                       </TouchableOpacity>
                     );
                   })}
