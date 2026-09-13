@@ -45,6 +45,12 @@ jobs:
     # and testing THAT in the if: is the documented workaround.
     env:
       RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+    # softprops/action-gh-release below needs to create a tag + release
+    # and upload assets to it — the default GITHUB_TOKEN is read-only
+    # unless a repo has "Read and write permissions" set for Actions, so
+    # this is declared explicitly rather than depending on that setting.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -130,3 +136,26 @@ jobs:
           name: mango-pro-release-aab
           path: android/app/build/outputs/bundle/release/*.aab
           retention-days: 30
+
+      # Workflow artifacts (above) expire after 30 days and aren't
+      # browsable as "pick a version" the way a Releases page is — this
+      # publishes the same signed APK/AAB as a permanent, tagged GitHub
+      # Release instead, so testers can go to the repo's Releases tab and
+      # choose which build number to install rather than only ever
+      # grabbing the latest one from Actions. Tag combines package.json's
+      # version with the run number (package.json alone repeats across
+      # every untagged build; the run number alone means nothing at a
+      # glance) — always unique since github.run_number only increases.
+      - name: Read app version
+        id: pkgver
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.pkgver.outputs.version }}-${{ github.run_number }}
+          name: Mango Pro v${{ steps.pkgver.outputs.version }} (build ${{ github.run_number }})
+          generate_release_notes: true
+          files: |
+            android/app/build/outputs/apk/release/*.apk
+            android/app/build/outputs/bundle/release/*.aab
