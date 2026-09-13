@@ -66,6 +66,7 @@ import {markOwnAction} from '../wallet/depositWatcher';
 import {useSession} from '../wallet/SessionContext';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {TradeSettingsSheet} from '../components/TradeSettingsSheet';
+import {TradeResultModal, type TradeResultSummary} from '../components/TradeResultModal';
 import {cashLogoUrl, fetchCashPortfolio, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
 
 /**
@@ -231,6 +232,12 @@ export function TokenTradeScreen({
   const [executeError, setExecuteError] = useState<string | null>(null);
   const [executeWarnings, setExecuteWarnings] = useState<string[]>([]);
   const [executeTxHashes, setExecuteTxHashes] = useState<string[]>([]);
+  // Snapshot of what was actually traded, taken at the moment of
+  // success — never the live isBuySide/paySymbol/receiveSymbol/amount,
+  // which keep tracking whatever's currently typed and would drift the
+  // instant the modal is open and something behind it re-renders.
+  const [lastTrade, setLastTrade] = useState<TradeResultSummary | null>(null);
+  const [resultModalDismissed, setResultModalDismissed] = useState(false);
 
   // null = Auto, Relay's own front-running-aware default (no
   // slippageTolerance sent at all — see relayQuote.ts's own header).
@@ -643,6 +650,7 @@ export function TokenTradeScreen({
     setExecuteError(null);
     setExecuteWarnings([]);
     setExecuteTxHashes([]);
+    setResultModalDismissed(false);
     const fromAddress = solana ? session.solana.address : session.evm.address;
     try {
       let txHashes: string[];
@@ -690,6 +698,7 @@ export function TokenTradeScreen({
       setExecuteWarnings(warnings);
       setExecuteTxHashes(txHashes);
       setExecuteState('success');
+      setLastTrade({isBuySide, paySymbol, receiveSymbol, payAmount: amount, receivedAmountFormatted, chainKey: token.chainKey});
       // A completed Sell converts a token into cash (USDC/native) —
       // exactly the kind of balance increase App.tsx's depositWatcher
       // poll would otherwise mistake for an external deposit. Mark it
@@ -783,13 +792,14 @@ export function TokenTradeScreen({
   // below — not duplicated up here — since its position wasn't the
   // problem; see priceImpactPct's own computation in relayQuote.ts for
   // the separate bug in the NUMBER itself on some tokens.
-  const topAlert: {message: string; danger: boolean} | null = executeError
-    ? {message: executeError, danger: true}
-    : quoteError
-      ? {message: quoteError, danger: true}
-      : extremePriceImpact
-        ? {message: `Blocked: ${Math.abs(quote!.priceImpactPct!).toFixed(0)}% price impact — this pool has too little liquidity to trade safely right now.`, danger: true}
-        : null;
+  // executeError deliberately NOT included here anymore — a completed
+  // trade's own failure now shows in TradeResultModal (a real result,
+  // same weight as a success, not a pre-flight warning banner).
+  const topAlert: {message: string; danger: boolean} | null = quoteError
+    ? {message: quoteError, danger: true}
+    : extremePriceImpact
+      ? {message: `Blocked: ${Math.abs(quote!.priceImpactPct!).toFixed(0)}% price impact — this pool has too little liquidity to trade safely right now.`, danger: true}
+      : null;
 
   return (
     <View style={styles.screen}>
@@ -1037,21 +1047,23 @@ export function TokenTradeScreen({
         </View>
       )}
 
-      {executeState === 'success' && (
-        <View style={styles.executeResult}>
-          <Text style={styles.executeSuccessText}>Trade sent</Text>
-          {executeTxHashes.map(hash => (
-            <Text key={hash} style={styles.executeHashText} selectable numberOfLines={1} ellipsizeMode="middle">
-              {hash}
-            </Text>
-          ))}
-          {executeWarnings.map(warning => (
-            <Text key={warning} style={styles.executeWarningText}>
-              {warning}
-            </Text>
-          ))}
-        </View>
-      )}
+      <TradeResultModal
+        visible={(executeState === 'success' || executeState === 'error') && !resultModalDismissed}
+        isSuccess={executeState === 'success'}
+        result={lastTrade}
+        hashes={executeTxHashes}
+        warnings={executeWarnings}
+        errorMessage={executeError}
+        onDone={() => {
+          setResultModalDismissed(true);
+          // A success returns the panel to a fresh, ready-to-trade state
+          // (matching mango-mobile's SendScreen "Done" → back to the
+          // form) — an error leaves executeState as 'error', which
+          // canTrade already treats the same as idle, so "Try again"
+          // there needs no extra reset.
+          if (executeState === 'success') setExecuteState('idle');
+        }}
+      />
       <TradeSettingsSheet visible={settingsOpen} onClose={() => setSettingsOpen(false)} slippageBps={slippageBps} onSave={setSlippageBps} />
     </View>
   );
@@ -1203,11 +1215,5 @@ function makeStyles(colors: Colors) {
     priceImpactLabel: {color: colors.textMuted, fontSize: 11},
     priceImpactValue: {color: colors.textSecondary, fontSize: 11, fontWeight: '600'},
     priceImpactValueDanger: {color: colors.danger, fontWeight: '700'},
-
-    executeResult: {marginTop: 12, alignItems: 'center', gap: 4, paddingVertical: 10},
-    executeSuccessText: {color: colors.gain, fontSize: 15, fontWeight: '700'},
-    executeHashText: {color: colors.textMuted, fontSize: 11, fontFamily: 'monospace'},
-    executeWarningText: {color: colors.warning, fontSize: 10.5, textAlign: 'center', marginTop: 2},
-
   });
 }
