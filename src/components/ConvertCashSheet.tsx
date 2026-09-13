@@ -89,6 +89,12 @@ export function ConvertCashSheet({
 
   const [quote, setQuote] = useState<QuoteSummary | null>(null);
   const rawQuoteRef = useRef<Awaited<ReturnType<typeof getRelayQuote>> | null>(null);
+  // Same params rawQuoteRef's current value was requested with — lets
+  // handleConvert ask for a fresh quote if executeRelayQuote's own
+  // sponsored-retry logic finds this one reverting on-chain twice in a
+  // row (see TokenTradeScreen.tsx's lastQuoteParamsRef for the full
+  // reasoning; identical pattern here).
+  const lastQuoteParamsRef = useRef<Parameters<typeof getRelayQuote>[0] | null>(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const quoteRequestIdRef = useRef(0);
@@ -157,7 +163,7 @@ export function ConvertCashSheet({
       const userAddress = fromChain === 'solana' ? session.solana.address : session.evm.address;
       const recipientAddress = toChain === 'solana' ? session.solana.address : session.evm.address;
       const receiveDecimalsFallback = assetDecimalsForChain(toChain, cashSymbol(toChain)) ?? 6;
-      getRelayQuote({
+      const quoteParams = {
         fromChainKey: fromChain,
         toChainKey: toChain,
         originCurrency: currencyAddress(fromChain, cashSymbol(fromChain)),
@@ -167,10 +173,12 @@ export function ConvertCashSheet({
         recipientAddress,
         originAmountUsd: amtNum,
         waiveAppFee: true,
-      })
+      };
+      getRelayQuote(quoteParams)
         .then(q => {
           if (requestId !== quoteRequestIdRef.current) return;
           rawQuoteRef.current = q;
+          lastQuoteParamsRef.current = quoteParams;
           setQuote(summarizeQuote(q, receiveDecimalsFallback));
           setQuoteLoading(false);
         })
@@ -202,7 +210,10 @@ export function ConvertCashSheet({
     setExecuteError(null);
     setExecuteTxHashes([]);
     try {
-      const result = await executeRelayQuote(quoteToExecute, session, step => setExecuteState(step));
+      const quoteParamsForRetry = lastQuoteParamsRef.current;
+      const result = await executeRelayQuote(quoteToExecute, session, step => setExecuteState(step), {
+        requote: quoteParamsForRetry ? () => getRelayQuote(quoteParamsForRetry) : undefined,
+      });
       setExecuteTxHashes(result.txHashes);
       setExecuteState('success');
       addTxHistoryEntry({

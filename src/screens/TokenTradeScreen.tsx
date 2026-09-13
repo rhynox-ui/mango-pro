@@ -53,7 +53,7 @@ import {ChevronLeftIcon} from '../components/icons';
 import {NetworkIcon} from '../wallet/NetworkIcon';
 import {CHAIN_LABEL, NATIVE_SYMBOL, assetDecimalsForChain, currencyAddress, type ChainKey} from '../core/chainData';
 import {DEV_FEE_PCT} from '../core/fees';
-import {getRelayQuote, summarizeQuote, type QuoteSummary, type RelayQuote} from '../core/relayQuote';
+import {getRelayQuote, summarizeQuote, type GetRelayQuoteParams, type QuoteSummary, type RelayQuote} from '../core/relayQuote';
 import {executeRelayQuote, type ExecuteStep} from '../core/executeRelayQuote';
 import {loadGaslessTradingEnabled} from '../settings/gaslessTradingPrefs';
 import {checkFallbackRoute, sweepFallbackFeeFromNativeBalance, sweepFallbackFeeFromSolanaBalance, tryFallbackProviders, type FallbackRouteParams} from '../core/fallbackDex';
@@ -219,6 +219,13 @@ export function TokenTradeScreen({
   // needs the actual RelayQuote (steps + the intent relayQuote.ts tagged
   // it with), not the display-only numbers summarizeQuote() derives.
   const rawQuoteRef = useRef<RelayQuote | null>(null);
+  // The exact params the current rawQuoteRef was requested with — lets
+  // handleTrade ask relayQuote.ts for a fresh quote against identical
+  // inputs (same pair, same amount, same slippage) if execution's own
+  // sponsored-retry logic (executeRelayQuote.ts) finds the locked-in
+  // quote reverting on-chain twice in a row, a real sign of price drift
+  // on a thin pool rather than a one-off blip the first retry rides out.
+  const lastQuoteParamsRef = useRef<GetRelayQuoteParams | null>(null);
   // Set only when Relay itself has no route and a fallback DEX aggregator
   // (fallbackDex.ts) could quote this pair instead — mutually exclusive
   // with rawQuoteRef above (exactly one of the two is non-null whenever
@@ -525,7 +532,7 @@ export function TokenTradeScreen({
       // payOrigin can.
       const sellReceiveCurrency = receiveAsset === 'cash' ? currencyAddress(token.chainKey, CASH_ASSET_BY_CHAIN[token.chainKey] ?? 'USDC') : nativeCurrency;
       const originCurrency = isBuySide ? currencyAddress(payOrigin.chainKey, CASH_ASSET_BY_CHAIN[payOrigin.chainKey] ?? 'USDC') : token.address;
-      getRelayQuote({
+      const quoteParams: GetRelayQuoteParams = {
         fromChainKey: isBuySide ? payOrigin.chainKey : token.chainKey,
         toChainKey: token.chainKey,
         originCurrency,
@@ -535,12 +542,14 @@ export function TokenTradeScreen({
         recipientAddress,
         originAmountUsd,
         slippageTolerance: slippageBps ?? undefined,
-      })
+      };
+      getRelayQuote(quoteParams)
         .then(q => {
           // Stale-response guard — a slower earlier request landing
           // after a faster later one would otherwise flash outdated numbers.
           if (requestId !== quoteRequestIdRef.current) return;
           rawQuoteRef.current = q;
+          lastQuoteParamsRef.current = quoteParams;
           fallbackParamsRef.current = null;
           // Only used if Relay's own response omits currency.decimals on
           // the receiving side (summarizeQuote's own doc comment) — the
@@ -657,7 +666,11 @@ export function TokenTradeScreen({
       let warnings: string[];
       let receivedAmountFormatted: string | null;
       if (quoteToExecute) {
-        const result = await executeRelayQuote(quoteToExecute, session, step => setExecuteState(step), {useGaslessTrading: gaslessTradingEnabled});
+        const quoteParamsForRetry = lastQuoteParamsRef.current;
+        const result = await executeRelayQuote(quoteToExecute, session, step => setExecuteState(step), {
+          useGaslessTrading: gaslessTradingEnabled,
+          requote: quoteParamsForRetry ? () => getRelayQuote(quoteParamsForRetry) : undefined,
+        });
         txHashes = result.txHashes;
         warnings = result.warnings;
         receivedAmountFormatted = quote?.receivedAmountFormatted ?? null;

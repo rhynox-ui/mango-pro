@@ -424,7 +424,19 @@ export async function executeRelayQuote(
   quote: RelayQuote,
   session: DerivedAccounts,
   onStep?: (step: ExecuteStep) => void,
-  options?: {useGaslessTrading?: boolean},
+  options?: {
+    useGaslessTrading?: boolean;
+    /**
+     * Re-runs the exact same getRelayQuote() call the caller already made
+     * to build `quote`, for the ONE case where retrying the identical
+     * calldata isn't enough (see isTransientRevert below): the pool moved
+     * and stayed moved, not just a momentary blip. Only ever invoked
+     * before anything has broadcast (txHashes.length === 0), and at most
+     * once per call — the recursive re-entry below drops this option so
+     * a persistently-reverting route can't loop forever re-quoting.
+     */
+    requote?: () => Promise<RelayQuote>;
+  },
 ): Promise<ExecuteRelayQuoteResult> {
   const tagged = intentForQuote(quote);
   if (!tagged) {
@@ -534,6 +546,22 @@ export async function executeRelayQuote(
           try {
             hash = await sendRelayEvmStepSponsored(evmClients.sponsoredClient, evmClients.publicClient, item);
           } catch {
+            // The same calldata reverted twice a moment apart — the pool
+            // moved and STAYED moved, not just a momentary blip the first
+            // retry could ride out. Nothing has broadcast anywhere yet
+            // (txHashes is still empty at this point, since this is
+            // necessarily the first pendingItem — every earlier one would
+            // already have pushed its hash), so it's still safe to throw
+            // this quote away and get a fresh one with an up-to-date
+            // minimum-output bound, rather than downgrade to a plain
+            // transaction the wallet holds no gas to pay for by design.
+            // options.requote is cleared on the recursive call so a route
+            // that keeps reverting can re-quote at most once, not forever.
+            if (txHashes.length === 0 && options?.requote) {
+              console.warn('[smartAccount] Still reverting after retry — fetching a fresh quote and starting over.');
+              const freshQuote = await options.requote();
+              return executeRelayQuote(freshQuote, session, onStep, {...options, requote: undefined});
+            }
             hash = await fallBackToPlainTransaction(evmClients.walletClient!, evmClients.publicClient, item);
           }
         } else {
