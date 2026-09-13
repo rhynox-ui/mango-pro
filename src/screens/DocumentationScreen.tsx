@@ -30,17 +30,17 @@ const SECTIONS: Section[] = [
   {
     title: 'What Mango Pro is',
     body:
-      'Most wallets make you pick a chain first and a token second. Mango Pro flips that: search a token by name or ticker, and the app works out which chain it lives on, how to pay for it, and how to route the trade — you never have to think about chains, gas, or bridging as separate steps. It’s non-custodial the whole way through: your keys (or, for a Google login, your share of them) never leave your device and Particle’s MPC network, there’s no Mango account or password to lose, and every trade is a transaction your own device signs and a real routing service (Relay) fills — never something a Mango server executes on your behalf.',
+      'Most wallets make you pick a chain first and a token second. Mango Pro flips that: search a token by name or ticker, and the app works out which chain it lives on, how to pay for it, and how to route the trade — you never have to think about chains, gas, or bridging as separate steps. It’s non-custodial the whole way through: your keys never leave your device, there’s no Mango account or password to lose, and every trade is a transaction your own device signs and a real routing service (Relay) fills — never something a Mango server executes on your behalf.',
   },
   {
     title: 'Your wallet',
     body:
-      'You get two ways in. Create or import a recovery phrase and Mango Pro derives your keys on this device — Mango never sees them, and the seed is encrypted with the password you set before it ever touches disk. Or continue with Google: your key is split between this device and Particle’s MPC network, so no single party (including Mango) ever holds the whole thing. Either way, the addresses shown in Profile are real — signing and broadcasting happen directly from your device, with no Mango server sitting in between.',
+      'Create or import a recovery phrase and Mango Pro derives your keys on this device — Mango never sees them, and the seed is encrypted with the password you set before it ever touches disk. The addresses shown in Profile are real — signing and broadcasting happen directly from your device, with no Mango server sitting in between.',
   },
   {
     title: 'Biometric unlock and app lock',
     body:
-      'A seed-phrase wallet can enable biometric unlock in Security — your password is stored behind your device’s own fingerprint/face check (Android Keystore / iOS Keychain), so the raw password never has to be retyped. A Google-session wallet has no local password to protect that way, so Security instead offers app lock: turn it on and reopening the app after it’s been backgrounded requires your biometrics before the screen unlocks, even though the underlying Google session stays live. Auto-lock (also in Security) controls how long the app can sit in the background before either of these kicks in at all.',
+      'Your wallet can enable biometric unlock in Security — your password is stored behind your device’s own fingerprint/face check (Android Keystore / iOS Keychain), so the raw password never has to be retyped. Auto-lock (also in Security) controls how long the app can sit in the background before that kicks in.',
   },
   {
     title: 'Finding tokens',
@@ -70,7 +70,7 @@ const SECTIONS: Section[] = [
   {
     title: 'Referral and points',
     body:
-      'The share icon on Profile opens Referral & points — the same points system the Mango site and mobile app already run, so a wallet you use across any of them keeps one shared balance and history. Points come from a daily check-in (needs a seed-phrase wallet’s signature, so it isn’t available for a Google session yet) and from friends who join with your invite link. Claiming a memorable handle is optional, one-time, and one per wallet — it just replaces the raw address in your invite link, it doesn’t change how points are earned.',
+      'The share icon on Profile opens Referral & points — the same points system the Mango site and mobile app already run, so a wallet you use across any of them keeps one shared balance and history. Points come from a daily check-in (needs your wallet’s signature) and from friends who join with your invite link. Claiming a memorable handle is optional, one-time, and one per wallet — it just replaces the raw address in your invite link, it doesn’t change how points are earned.',
   },
   {
     title: 'Fees',
