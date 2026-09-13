@@ -634,12 +634,18 @@ export function withComputeUnitLimit(
  * thing abstracted, not a speculative interface for cases that don't
  * exist yet.
  */
-type SolanaTransactionSigner = {
+export type SolanaTransactionSigner = {
   publicKey: InstanceType<typeof import('@solana/web3.js').PublicKey>;
   sign: (transaction: InstanceType<typeof import('@solana/web3.js').VersionedTransaction>) => Promise<InstanceType<typeof import('@solana/web3.js').VersionedTransaction>>;
 };
 
-async function signAndSendSponsoredSolanaStep(
+// Exported so sendUsdc.ts's own Solana withdrawal can reuse this exact,
+// already-tested fee-payer path on an "insufficient lamports" shortfall
+// — same real gap trades used to have, same fix, no reason to duplicate
+// the rewrite/sign/co-sign/broadcast logic (or its cost-recovery
+// attempt, which stays opportunistic and harmless here too) a second
+// time for a different caller.
+export async function signAndSendSponsoredSolanaStep(
   instructions: InstanceType<typeof import('@solana/web3.js').TransactionInstruction>[],
   lookupTables: InstanceType<typeof import('@solana/web3.js').AddressLookupTableAccount>[],
   signer: SolanaTransactionSigner,

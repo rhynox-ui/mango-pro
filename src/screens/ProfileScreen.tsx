@@ -41,6 +41,7 @@ import {privateKeyToAccount} from 'viem/accounts';
 import {ReferralModal} from '../referral/ReferralModal';
 import {getReferralStats, setReferralHandle, type ReferralSigner} from '../referral/referralApi';
 import {signMessageViaParticle} from '../wallet/particleSigning';
+import {loadGaslessTradingEnabled} from '../settings/gaslessTradingPrefs';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {useSession} from '../wallet/SessionContext';
 import type {DemoToken} from './TokenTradeScreen';
@@ -141,6 +142,13 @@ export function ProfileScreen({
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [withdrawError, setWithdrawError] = useState<string | null>(null);
   const [withdrawTxId, setWithdrawTxId] = useState<string | null>(null);
+  // Same Security-screen opt-in every other trade path already reads
+  // (gaslessTradingPrefs.ts, defaults to true) — lets a crypto Withdraw
+  // sponsor its own EVM gas the same way Convert now does.
+  const [gaslessTradingEnabled, setGaslessTradingEnabled] = useState(false);
+  useEffect(() => {
+    loadGaslessTradingEnabled().then(setGaslessTradingEnabled);
+  }, []);
   const [cashPortfolio, setCashPortfolio] = useState<CashPortfolio | null>(null);
   const [portfolioHistory, setPortfolioHistory] = useState<PortfolioSnapshot[]>([]);
   const [usdcLoading, setUsdcLoading] = useState(false);
@@ -437,7 +445,7 @@ export function ProfileScreen({
     if (!session || !withdrawChain) return;
     setWithdrawStep('sending');
     try {
-      const {txId} = await sendUsdc(withdrawChain, session, withdrawAddress.trim(), withdrawAmount, CASH_ASSET_BY_CHAIN[withdrawChain]);
+      const {txId} = await sendUsdc(withdrawChain, session, withdrawAddress.trim(), withdrawAmount, CASH_ASSET_BY_CHAIN[withdrawChain], gaslessTradingEnabled);
       setWithdrawTxId(txId);
       setWithdrawStep('success');
       refreshCashPortfolio();

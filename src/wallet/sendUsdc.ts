@@ -25,6 +25,8 @@ import {privateKeyToAccount} from 'viem/accounts';
 import bs58 from 'bs58';
 import {getViemChain, transportFor} from '../core/chainRegistry.ts';
 import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, assetDecimalsForChain, type ChainKey} from '../core/chainData.ts';
+import {getEip7702AuthorizationIfNeeded, getSponsoredSmartAccountClient, isSmartAccountSponsorshipConfigured} from './smartAccount.ts';
+import {signAndSendSponsoredSolanaStep, type SolanaTransactionSigner} from '../core/executeRelayQuote.ts';
 import type {DerivedAccounts} from './keys';
 
 const USDC_DECIMALS = ASSET_ONCHAIN_DECIMALS.USDC;
@@ -58,7 +60,7 @@ export function isValidRecipientAddress(chainKey: ChainKey, address: string): bo
   return isAddress(address);
 }
 
-async function sendEvmCashAsset(chainKey: ChainKey, asset: CashAsset, session: DerivedAccounts, toAddress: string, amount: string): Promise<{hash: string}> {
+async function sendEvmCashAsset(chainKey: ChainKey, asset: CashAsset, session: DerivedAccounts, toAddress: string, amount: string, useGaslessTrading: boolean): Promise<{hash: string}> {
   const tokenAddress = TOKEN_ADDRESSES[asset]?.[chainKey];
   if (!tokenAddress) throw new Error(`No verified ${asset} address for ${chainKey}.`);
   const chain = getViemChain(chainKey);
@@ -88,6 +90,54 @@ async function sendEvmCashAsset(chainKey: ChainKey, asset: CashAsset, session: D
   }
 
   const account = privateKeyToAccount(session.evm.privateKey as `0x${string}`);
+
+  // Gasless withdrawal — same Security-screen opt-in and same
+  // EIP-7702/Pimlico path executeRelayQuote.ts's sendRelayEvmStepSponsored
+  // already uses for trades, deliberately WITHOUT that function's own
+  // cost-recovery instruction: a withdrawal already moves the user's
+  // exact requested amount to an external address, so there's no fee
+  // stream here to recycle a recovery transfer out of — sponsoring this
+  // is accepted as a real, uncompensated cost (covered elsewhere), not
+  // something to quietly claw back from the withdrawal itself.
+  //
+  // Real double-send risk if this were handled carelessly: catching a
+  // failure that happens AFTER sendTransaction may have already
+  // broadcast the UserOperation, then blindly retrying with a plain
+  // transaction, could withdraw the same amount twice. So this only
+  // ever falls back to the plain path below on a rejection PROVEN to
+  // have happened before anything broadcast — same discipline
+  // executeRelayQuote.ts's own dispatch already holds sponsored EVM
+  // steps to, never a broader catch-and-retry.
+  if (useGaslessTrading && isSmartAccountSponsorshipConfigured()) {
+    let sponsoredClient: Awaited<ReturnType<typeof getSponsoredSmartAccountClient>> | null = null;
+    try {
+      sponsoredClient = await getSponsoredSmartAccountClient({chain, owner: account});
+      await publicClient.call({account: sponsoredClient.account.address, to: tokenAddress as `0x${string}`, data, value: 0n});
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message && !/timeout|network|fetch|429|403/i.test(message)) {
+        throw new Error(`This withdrawal would revert: ${message}`);
+      }
+      // A transient hiccup building the client or running the pre-flight
+      // call — nothing was ever broadcast, safe to fall through to plain.
+      sponsoredClient = null;
+    }
+
+    if (sponsoredClient) {
+      try {
+        const authorization = await getEip7702AuthorizationIfNeeded(sponsoredClient, publicClient);
+        const hash = await sponsoredClient.sendTransaction({to: tokenAddress as `0x${string}`, data, value: 0n, authorization});
+        await publicClient.waitForTransactionReceipt({hash});
+        return {hash};
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const isPreBroadcastRejection = /invalid fields set on user operation|invalid useroperation|\baa[0-9]{2}\b/i.test(message);
+        if (!isPreBroadcastRejection) throw err;
+        console.warn('[sendUsdc] Sponsored withdrawal rejected before broadcast, falling back to a plain transaction:', message);
+      }
+    }
+  }
+
   const walletClient = createWalletClient({account, chain, transport});
   const [gasLimit, {maxFeePerGas, maxPriorityFeePerGas}] = await Promise.all([
     publicClient.estimateGas({account: account.address, to: tokenAddress as `0x${string}`, data}),
@@ -123,25 +173,61 @@ async function sendSolanaUsdc(session: DerivedAccounts, toAddress: string, amoun
   const toAta = await getAssociatedTokenAddress(mintPublicKey, toPublicKey);
   const toAtaInfo = await connection.getAccountInfo(toAta);
 
-  const transaction = new Transaction();
+  const instructions = [];
   if (toAtaInfo === null) {
     // Recipient has no USDC token account yet — sender pays the one-time
     // rent to create it, same as every other Solana wallet's behavior;
     // there's no way to send an SPL token into an account that can't
     // hold it.
-    transaction.add(createAssociatedTokenAccountInstruction(fromKeypair.publicKey, toAta, toPublicKey, mintPublicKey));
+    instructions.push(createAssociatedTokenAccountInstruction(fromKeypair.publicKey, toAta, toPublicKey, mintPublicKey));
   }
   const amountRaw = parseUnits(amountUsdc, USDC_DECIMALS);
-  transaction.add(createTransferInstruction(fromAta, toAta, fromKeypair.publicKey, amountRaw));
+  instructions.push(createTransferInstruction(fromAta, toAta, fromKeypair.publicKey, amountRaw));
 
+  const transaction = new Transaction();
+  transaction.add(...instructions);
   const {blockhash, lastValidBlockHeight} = await connection.getLatestBlockhash('confirmed');
   transaction.recentBlockhash = blockhash;
   transaction.feePayer = fromKeypair.publicKey;
   transaction.sign(fromKeypair);
 
-  const signature = await connection.sendRawTransaction(transaction.serialize());
-  await connection.confirmTransaction({signature, blockhash, lastValidBlockHeight}, 'confirmed');
-  return {signature};
+  try {
+    const signature = await connection.sendRawTransaction(transaction.serialize());
+    await connection.confirmTransaction({signature, blockhash, lastValidBlockHeight}, 'confirmed');
+    return {signature};
+  } catch (err) {
+    // Real gap this closes, same fix already shipped for trades: a
+    // wallet with just enough USDC to withdraw but too little SOL for
+    // the network fee (plus rent if the recipient needs a new token
+    // account) used to fail outright here. sendRawTransaction's own
+    // pre-flight simulation rejects BEFORE accepting into the mempool —
+    // nothing broadcast yet — so it's safe to retry with Mango's own
+    // fee-payer sponsoring the shortfall instead, reusing the exact same
+    // rewrite/sign/co-sign/broadcast path (and its opportunistic,
+    // never-blocking cost-recovery attempt) executeRelayQuote.ts already
+    // built and tested for trades.
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    const lamportsMatch = errorMessage.match(/insufficient lamports (\d+), need (\d+)/i);
+    if (!lamportsMatch) throw err;
+    try {
+      const localSigner: SolanaTransactionSigner = {
+        publicKey: fromKeypair.publicKey,
+        sign: async tx => {
+          tx.sign([fromKeypair]);
+          return tx;
+        },
+      };
+      const {signature} = await signAndSendSponsoredSolanaStep(instructions, [], localSigner, connection);
+      return {signature};
+    } catch (sponsorErr) {
+      const haveSol = Number(lamportsMatch[1]) / 1e9;
+      const needSol = Number(lamportsMatch[2]) / 1e9;
+      const sponsorMessage = sponsorErr instanceof Error ? sponsorErr.message : String(sponsorErr);
+      throw new Error(
+        `This wallet has ~${haveSol.toFixed(4)} SOL, short of the ~${needSol.toFixed(4)} SOL this withdrawal needs, and fee sponsorship didn't cover it: ${sponsorMessage}`,
+      );
+    }
+  }
 }
 
 /**
@@ -192,8 +278,14 @@ async function sendSolanaUsdcViaParticle(session: DerivedAccounts, toAddress: st
  * session's own account, direct to the chain. `asset` defaults to
  * 'USDC' for every existing call site; pass CASH_ASSET_BY_CHAIN[chainKey]
  * explicitly to get the real one for chains where that's not USDC.
+ *
+ * `useGaslessTrading` (default false, caller's own gaslessTradingPrefs.ts
+ * read — same as every other trade path) only affects the EVM branch's
+ * OWN gas: Solana sponsorship is separate and automatic regardless of
+ * this flag, exactly as it already is for trades — see sendSolanaUsdc's
+ * own fee-payer fallback above.
  */
-export async function sendUsdc(chainKey: ChainKey, session: DerivedAccounts, toAddress: string, amount: string, asset: CashAsset = 'USDC'): Promise<{txId: string}> {
+export async function sendUsdc(chainKey: ChainKey, session: DerivedAccounts, toAddress: string, amount: string, asset: CashAsset = 'USDC', useGaslessTrading = false): Promise<{txId: string}> {
   if (!isValidRecipientAddress(chainKey, toAddress)) {
     throw new Error(`That doesn't look like a valid ${chainKey === 'solana' ? 'Solana' : 'wallet'} address.`);
   }
@@ -203,6 +295,6 @@ export async function sendUsdc(chainKey: ChainKey, session: DerivedAccounts, toA
     const {signature} = session.authMethod === 'google' ? await sendSolanaUsdcViaParticle(session, toAddress, amount) : await sendSolanaUsdc(session, toAddress, amount);
     return {txId: signature};
   }
-  const {hash} = await sendEvmCashAsset(chainKey, asset, session, toAddress, amount);
+  const {hash} = await sendEvmCashAsset(chainKey, asset, session, toAddress, amount, useGaslessTrading);
   return {txId: hash};
 }
