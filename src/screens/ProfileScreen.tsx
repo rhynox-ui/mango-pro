@@ -11,6 +11,7 @@
 import {useEffect, useMemo, useState} from 'react';
 import {ActivityIndicator, Alert, Image, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import {launchImageLibrary} from 'react-native-image-picker';
+import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import Svg, {Defs, LinearGradient, Line as SvgLine, Path as SvgPath, Stop} from 'react-native-svg';
 import {
   ArrowUpIcon,
@@ -126,6 +127,15 @@ export function ProfileScreen({
   const {colors} = useTheme();
   const {session} = useSession();
   const styles = makeStyles(colors);
+  // This screen's Deposit/Withdraw/bio/username modals use a plain RN
+  // Modal (not components/BottomSheet.tsx, which already solves this
+  // same problem) with a static paddingBottom — that padding sits BEHIND
+  // a phone's bottom gesture bar/home indicator rather than clearing it,
+  // so the primary action button (e.g. Withdraw) could render partly
+  // underneath it. Added below at each modalCard usage rather than
+  // baked into the StyleSheet, since StyleSheet.create can't read a
+  // hook value.
+  const insets = useSafeAreaInsets();
   const [depositStep, setDepositStep] = useState<DepositStep | null>(null);
   const [depositChain, setDepositChain] = useState<ChainKey | null>(null);
   // True only for the dedicated "Robinhood Chain — ETH for gas" row —
@@ -726,7 +736,7 @@ export function ProfileScreen({
           resetWithdraw();
         }}>
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
+          <View style={[styles.modalCard, {paddingBottom: 36 + insets.bottom}]}>
             {depositStep === 'network' && (
               <>
                 <View style={styles.modalHeaderRow}>
@@ -938,7 +948,7 @@ export function ProfileScreen({
 
       <Modal visible={bioEditing} animationType="slide" transparent onRequestClose={() => setBioEditing(false)}>
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
+          <View style={[styles.modalCard, {paddingBottom: 36 + insets.bottom}]}>
             <View style={styles.modalHeaderRow}>
               <Text style={styles.modalTitle}>Bio</Text>
               <TouchableOpacity onPress={() => setBioEditing(false)} hitSlop={8}>
@@ -964,7 +974,7 @@ export function ProfileScreen({
 
       <Modal visible={usernameEditing} animationType="slide" transparent onRequestClose={() => setUsernameEditing(false)}>
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
+          <View style={[styles.modalCard, {paddingBottom: 36 + insets.bottom}]}>
             <View style={styles.modalHeaderRow}>
               <Text style={styles.modalTitle}>Username</Text>
               <TouchableOpacity onPress={() => setUsernameEditing(false)} hitSlop={8}>
@@ -1203,7 +1213,10 @@ function makeStyles(colors: Colors) {
     showHiddenText: {color: colors.textSecondary, fontSize: 12.5, fontWeight: '600'},
 
     modalBackdrop: {flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)'},
-    modalCard: {backgroundColor: colors.bg, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: 36},
+    // paddingBottom is applied inline at each usage (36 + the device's
+    // bottom safe-area inset) — not here, since StyleSheet.create has no
+    // access to useSafeAreaInsets()'s value. See its own comment above.
+    modalCard: {backgroundColor: colors.bg, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20},
     modalHeaderRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18},
     modalTitle: {color: colors.textPrimary, fontSize: 18, fontWeight: '800'},
     modalClose: {color: colors.textMuted, fontSize: 13, fontWeight: '600'},
