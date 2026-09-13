@@ -22,6 +22,11 @@
 // which conveniently lands LIGHT's near-black on the identical hex
 // DARK uses for its background — one shared "soft black" tone doing
 // the job pure black used to, in both themes.
+//
+// A THIRD real-device pass asked for still-less: "less a bit but not
+// too bright just a little" — a small further step (#1B1B1E -> #2A2A2E),
+// not a repeat of the bigger #0A0A0B -> #1B1B1E jump. DARK's own bg is
+// intentionally left alone here; only LIGHT's near-black moved again.
 
 export const DANGER = '#D92D20';
 export const WARNING = '#EAB308';
@@ -58,18 +63,18 @@ export const LIGHT: Palette = {
   panelBorder: '#E6E6E8',
   input: '#EAEAED',
   pillBg: '#EFEFF0',
-  textPrimary: '#1B1B1E',
+  textPrimary: '#2A2A2E',
   textSecondary: '#6B6B70',
   textMuted: '#A6A6AC',
   divider: '#EDEDEF',
-  ctaBg: '#1B1B1E',
+  ctaBg: '#2A2A2E',
   ctaText: '#FFFFFF',
   ctaDisabledBg: '#EDEDEF',
   ctaDisabledText: '#B8B8BC',
-  navActive: '#1B1B1E',
+  navActive: '#2A2A2E',
   navActiveText: '#FFFFFF',
-  accent: '#1B1B1E',
-  accentDeep: '#1B1B1E',
+  accent: '#2A2A2E',
+  accentDeep: '#2A2A2E',
   danger: DANGER,
   warning: WARNING,
   gain: GAIN,
