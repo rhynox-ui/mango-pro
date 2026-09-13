@@ -125,6 +125,32 @@ async function sendRelayEvmStep(
 }
 
 /**
+ * Runs the plain-transaction fallback for a sponsored EVM step that
+ * couldn't go through Pimlico, and — if that fallback ALSO fails purely
+ * on gas — makes the error honest about what actually happened. The user
+ * turned gasless ON specifically so they wouldn't need native gas; if the
+ * fallback then fails for exactly that reason, saying only "insufficient
+ * ETH" (sendRelayEvmStep's own message) hides the real story: gasless was
+ * tried first and rejected, THEN the fallback needed gas the wallet
+ * doesn't hold by design.
+ */
+async function fallBackToPlainTransaction(
+  walletClient: ReturnType<typeof createWalletClient>,
+  publicClient: ReturnType<typeof createPublicClient>,
+  item: RelayTransactionStepItem,
+): Promise<string> {
+  try {
+    return await sendRelayEvmStep(walletClient, publicClient, item);
+  } catch (fallbackErr) {
+    const fallbackMessage = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+    if (/insufficient .* for network fees/i.test(fallbackMessage)) {
+      throw new Error(`Gasless trading isn't available for this route right now, so it fell back to a normal transaction — but ${fallbackMessage.charAt(0).toLowerCase()}${fallbackMessage.slice(1)}`);
+    }
+    throw fallbackErr;
+  }
+}
+
+/**
  * Same shape as sendRelayEvmStep above (simulate first, check the
  * native balance actually covers value + worst-case gas, THEN send) but
  * for a Google-login session: there's no local account to build a
@@ -487,25 +513,32 @@ export async function executeRelayQuote(
         // with a plain transaction could double-execute it.
         const isPreBroadcastRejection = /invalid fields set on user operation|invalid useroperation|\baa[0-9]{2}\b|this transaction would revert/i.test(message);
         if (!isPreBroadcastRejection) throw err;
-        console.warn('[smartAccount] Sponsored UserOperation rejected before broadcast, falling back to a plain transaction:', message);
-        try {
-          hash = await sendRelayEvmStep(evmClients.walletClient!, evmClients.publicClient, item);
-        } catch (fallbackErr) {
-          // The user turned gasless ON specifically so they wouldn't need
-          // native gas — if the fallback then fails for exactly that
-          // reason, saying only "insufficient ETH" (sendRelayEvmStep's own
-          // message) hides the actual story: gasless was tried first and
-          // the bundler rejected it, THEN the fallback needed gas the
-          // wallet doesn't hold. Real, observed case: Pimlico sponsorship
-          // rejected on a chain it may not yet cover (unconfirmed — no
-          // network access from here to Pimlico's own chain-support docs
-          // to check), silently downgrading a "gasless" trade into one
-          // that still demands native gas with no explanation why.
-          const fallbackMessage = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
-          if (/insufficient .* for network fees/i.test(fallbackMessage)) {
-            throw new Error(`Gasless trading isn't available for this route right now, so it fell back to a normal transaction — but ${fallbackMessage.charAt(0).toLowerCase()}${fallbackMessage.slice(1)}`);
+
+        // "This transaction would revert" is OUR OWN pre-flight simulate
+        // (sendRelayEvmStepSponsored above) catching an on-chain revert —
+        // on a thin/fast-moving pool this is usually ordinary slippage
+        // drift between quote and sign, not a real incompatibility. Real,
+        // decoded case: a live trade's Pimlico log showed the router's
+        // own "Return amount is not enough" revert; the identical calldata
+        // simulated clean moments later with nothing else changed. Retry
+        // the SAME sponsored path once before giving up on it — a plain
+        // fallback can't actually save a gasless trade anyway, since a
+        // gasless-mode wallet holds no native gas to pay for one by
+        // design. A hard bundler rejection (invalid fields/an AA-code)
+        // means real incompatibility, not drift, so that skips straight
+        // to the fallback below instead of wasting a retry on it.
+        const isTransientRevert = /this transaction would revert/i.test(message);
+        if (isTransientRevert) {
+          console.warn('[smartAccount] Sponsored UserOperation reverted in simulation, retrying once before falling back:', message);
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          try {
+            hash = await sendRelayEvmStepSponsored(evmClients.sponsoredClient, evmClients.publicClient, item);
+          } catch {
+            hash = await fallBackToPlainTransaction(evmClients.walletClient!, evmClients.publicClient, item);
           }
-          throw fallbackErr;
+        } else {
+          console.warn('[smartAccount] Sponsored UserOperation rejected before broadcast, falling back to a plain transaction:', message);
+          hash = await fallBackToPlainTransaction(evmClients.walletClient!, evmClients.publicClient, item);
         }
       }
     } else {
