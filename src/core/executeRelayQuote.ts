@@ -109,16 +109,74 @@ async function pollRelayStatus(requestId: string, {intervalMs = 2000, timeoutMs 
   throw new Error('Timed out waiting for Relay to confirm completion. Your transaction was broadcast — check status manually using the requestId before retrying.');
 }
 
+const ERC20_ALLOWANCE_ABI = [
+  {type: 'function', name: 'allowance', inputs: [{name: 'owner', type: 'address'}, {name: 'spender', type: 'address'}], outputs: [{type: 'uint256'}], stateMutability: 'view'},
+] as const;
+const EVM_APPROVE_ABI = [
+  {type: 'function', name: 'approve', inputs: [{name: 'spender', type: 'address'}, {name: 'amount', type: 'uint256'}], outputs: [{type: 'bool'}], stateMutability: 'nonpayable'},
+] as const;
+
+/**
+ * Defensive recovery for a real, reproduced failure: a BNB Chain Convert
+ * reverting on Relay's own Depository contract with Solady's
+ * TransferFromFailed() (0x7939f424) — the Depository trying to pull the
+ * origin token out of this wallet without (or without enough) prior
+ * approval. Checked first, before adding this: BNB's own 18-decimal USDC
+ * deploy (unlike the usual 6) is already correctly special-cased
+ * everywhere this file and chainData.ts compute amounts, so this isn't
+ * papering over a decimals bug on our side — it's a real fallback for
+ * Relay's own quote omitting (or under-sizing) the approve step it
+ * should have included for this route.
+ *
+ * Deliberately narrow: only ever runs as a RECOVERY after the original
+ * call's own pre-flight simulate already reverted, only approves the
+ * EXACT origin currency for the EXACT amount this quote is spending, and
+ * only to the exact address the reverting call already targets — never a
+ * blanket/unlimited approval, and never invoked on a route that already
+ * works (the live allowance check below returns false immediately if
+ * it's already sufficient, meaning this revert wasn't an allowance
+ * problem at all). Any failure here (origin currency unknown/native,
+ * live allowance read fails, the approve tx itself fails) is swallowed —
+ * the caller falls back to surfacing the ORIGINAL revert exactly as it
+ * did before this existed.
+ */
+async function toppedUpOriginAllowance(
+  publicClient: ReturnType<typeof createPublicClient>,
+  owner: `0x${string}`,
+  spender: `0x${string}`,
+  originToken: `0x${string}` | undefined,
+  originAmount: bigint | undefined,
+  sendApproveTx: (data: `0x${string}`) => Promise<void>,
+): Promise<boolean> {
+  if (!originToken || !originAmount || originAmount <= 0n) return false;
+  if (originToken.toLowerCase() === spender.toLowerCase()) return false;
+  try {
+    const currentAllowance = await publicClient.readContract({address: originToken, abi: ERC20_ALLOWANCE_ABI, functionName: 'allowance', args: [owner, spender]});
+    if (currentAllowance >= originAmount) return false;
+    const data = encodeFunctionData({abi: EVM_APPROVE_ABI, functionName: 'approve', args: [spender, originAmount]});
+    await sendApproveTx(data);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Sends one EVM-side Relay step. Simulates first (publicClient.call) so
  * a route that would revert on-chain fails with a real, readable reason
  * instead of burning gas to find out; then checks the native balance
  * actually covers value + worst-case gas cost before broadcasting.
+ *
+ * `originToken`/`originAmount` (the whole quote's currencyIn — see
+ * executeRelayQuote's own top) are only ever consulted if this pre-flight
+ * simulate reverts, as the allowance-recovery fallback above.
  */
 async function sendRelayEvmStep(
   walletClient: ReturnType<typeof createWalletClient>,
   publicClient: ReturnType<typeof createPublicClient>,
   item: RelayTransactionStepItem,
+  originToken?: `0x${string}`,
+  originAmount?: bigint,
 ): Promise<string> {
   const {to, data, value} = item.data ?? {};
   if (!to) throw new Error('The routing service returned a transaction with no destination address.');
@@ -134,7 +192,16 @@ async function sendRelayEvmStep(
     // and rejected the call — a transport-level hiccup isn't evidence
     // the real transaction would fail.
     if (message && !/timeout|network|fetch|429|403/i.test(message)) {
-      throw new Error(`This transaction would revert: ${message}`);
+      const recovered = await toppedUpOriginAllowance(publicClient, account.address, tx.to, originToken, originAmount, async approveData => {
+        const hash = await walletClient.sendTransaction({account, to: originToken!, data: approveData, value: 0n, chain: walletClient.chain});
+        await publicClient.waitForTransactionReceipt({hash});
+      });
+      if (!recovered) throw new Error(`This transaction would revert: ${message}`);
+      try {
+        await publicClient.call(tx);
+      } catch (err2) {
+        throw new Error(`This transaction would revert: ${err2 instanceof Error ? err2.message : String(err2)}`);
+      }
     }
   }
 
@@ -181,9 +248,11 @@ async function fallBackToPlainTransaction(
   walletClient: ReturnType<typeof createWalletClient>,
   publicClient: ReturnType<typeof createPublicClient>,
   item: RelayTransactionStepItem,
+  originToken?: `0x${string}`,
+  originAmount?: bigint,
 ): Promise<string> {
   try {
-    return await sendRelayEvmStep(walletClient, publicClient, item);
+    return await sendRelayEvmStep(walletClient, publicClient, item, originToken, originAmount);
   } catch (fallbackErr) {
     const fallbackMessage = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
     if (/insufficient .* for network fees/i.test(fallbackMessage)) {
@@ -204,7 +273,14 @@ async function fallBackToPlainTransaction(
  * zero risk of this new path changing behavior for the existing,
  * already-relied-on local-signing one.
  */
-async function sendRelayEvmStepViaParticle(evmAddress: `0x${string}`, publicClient: ReturnType<typeof createPublicClient>, chainId: number, item: RelayTransactionStepItem): Promise<string> {
+async function sendRelayEvmStepViaParticle(
+  evmAddress: `0x${string}`,
+  publicClient: ReturnType<typeof createPublicClient>,
+  chainId: number,
+  item: RelayTransactionStepItem,
+  originToken?: `0x${string}`,
+  originAmount?: bigint,
+): Promise<string> {
   const {to, data, value} = item.data ?? {};
   if (!to) throw new Error('The routing service returned a transaction with no destination address.');
   const tx = {to: to as `0x${string}`, data: (data || undefined) as `0x${string}` | undefined, value: value ? BigInt(value) : 0n};
@@ -214,7 +290,17 @@ async function sendRelayEvmStepViaParticle(evmAddress: `0x${string}`, publicClie
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message && !/timeout|network|fetch|429|403/i.test(message)) {
-      throw new Error(`This transaction would revert: ${message}`);
+      const recovered = await toppedUpOriginAllowance(publicClient, evmAddress, tx.to, originToken, originAmount, async approveData => {
+        const {sendEvmTransactionViaParticle} = await import('../wallet/particleSigning.ts');
+        const hash = await sendEvmTransactionViaParticle(evmAddress, {chainId, to: originToken!, data: approveData, value: 0n});
+        await publicClient.waitForTransactionReceipt({hash});
+      });
+      if (!recovered) throw new Error(`This transaction would revert: ${message}`);
+      try {
+        await publicClient.call({account: evmAddress, to: tx.to, data: tx.data, value: tx.value});
+      } catch (err2) {
+        throw new Error(`This transaction would revert: ${err2 instanceof Error ? err2.message : String(err2)}`);
+      }
     }
   }
 
@@ -329,25 +415,40 @@ async function sendRelayEvmStepSponsored(
   client: Awaited<ReturnType<typeof getSponsoredSmartAccountClient>>,
   publicClient: ReturnType<typeof createPublicClient>,
   item: RelayTransactionStepItem,
+  originToken?: `0x${string}`,
+  originAmount?: bigint,
 ): Promise<string> {
   const {to, data, value} = item.data ?? {};
   if (!to) throw new Error('The routing service returned a transaction with no destination address.');
   const tx = {to: to as `0x${string}`, data: (data || undefined) as `0x${string}` | undefined, value: value ? BigInt(value) : 0n};
+
+  // See smartAccount.ts's own header for the real bug this closes: the
+  // installed viem's automatic path only ever attaches a STUB (fake)
+  // EIP-7702 authorization, which Pimlico's bundler rejects outright —
+  // a real one has to be signed and passed explicitly here. Computed up
+  // front (not only right before the final send, as before this recovery
+  // path existed) so a standalone approve UserOperation below can also
+  // carry it on a not-yet-delegated EOA.
+  const authorization = await getEip7702AuthorizationIfNeeded(client, publicClient);
 
   try {
     await publicClient.call({account: client.account.address, to: tx.to, data: tx.data, value: tx.value});
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message && !/timeout|network|fetch|429|403/i.test(message)) {
-      throw new Error(`This transaction would revert: ${message}`);
+      const recovered = await toppedUpOriginAllowance(publicClient, client.account.address, tx.to, originToken, originAmount, async approveData => {
+        const hash = await client.sendTransaction({calls: [{to: originToken!, data: approveData, value: 0n}], authorization});
+        await publicClient.waitForTransactionReceipt({hash});
+      });
+      if (!recovered) throw new Error(`This transaction would revert: ${message}`);
+      try {
+        await publicClient.call({account: client.account.address, to: tx.to, data: tx.data, value: tx.value});
+      } catch (err2) {
+        throw new Error(`This transaction would revert: ${err2 instanceof Error ? err2.message : String(err2)}`);
+      }
     }
   }
 
-  // See smartAccount.ts's own header for the real bug this closes: the
-  // installed viem's automatic path only ever attaches a STUB (fake)
-  // EIP-7702 authorization, which Pimlico's bundler rejects outright —
-  // a real one has to be signed and passed explicitly here.
-  const authorization = await getEip7702AuthorizationIfNeeded(client, publicClient);
   const swapCall = {to: tx.to, data: tx.data ?? ('0x' as const), value: tx.value};
 
   // Cost recovery — strictly opportunistic, per this section's own
@@ -993,6 +1094,28 @@ export async function executeRelayQuote(
     throw new Error('This quote is too old to sign safely — get a fresh quote and try again.');
   }
 
+  // This whole quote spends from exactly one origin currency (Relay's
+  // own currencyIn) — read once here and threaded into every EVM step
+  // sender below purely as an allowance-recovery fallback (see
+  // toppedUpOriginAllowance's own header): a real, reproduced BNB Chain
+  // Convert failure (TransferFromFailed() on Relay's Depository) traced
+  // to the deposit step pulling this exact token without enough prior
+  // approval. Left undefined (recovery becomes a no-op) whenever the
+  // origin is a native coin, not an ERC-20 — matches this codebase's own
+  // zero-address native placeholder (chainData.ts's NATIVE_TOKEN_ADDRESS).
+  const originCurrencyAddress = quote.details?.currencyIn?.currency?.address;
+  const originToken =
+    originCurrencyAddress && originCurrencyAddress.toLowerCase() !== '0x0000000000000000000000000000000000000000'
+      ? (originCurrencyAddress as `0x${string}`)
+      : undefined;
+  const originAmountRaw = quote.details?.currencyIn?.amount;
+  let originAmount: bigint | undefined;
+  try {
+    originAmount = originAmountRaw ? BigInt(originAmountRaw) : undefined;
+  } catch {
+    originAmount = undefined;
+  }
+
   onStep?.('build');
   const steps = quote.steps ?? [];
   const pendingItems: RelayTransactionStepItem[] = [];
@@ -1059,10 +1182,10 @@ export async function executeRelayQuote(
     }
     let hash: string;
     if (isGoogleSession) {
-      hash = await sendRelayEvmStepViaParticle(session.evm.address as `0x${string}`, evmClients.publicClient, chainId, item);
+      hash = await sendRelayEvmStepViaParticle(session.evm.address as `0x${string}`, evmClients.publicClient, chainId, item, originToken, originAmount);
     } else if (useGasless && evmClients.sponsoredClient) {
       try {
-        hash = await sendRelayEvmStepSponsored(evmClients.sponsoredClient, evmClients.publicClient, item);
+        hash = await sendRelayEvmStepSponsored(evmClients.sponsoredClient, evmClients.publicClient, item, originToken, originAmount);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         // Only fall back on a rejection that happened BEFORE anything was
@@ -1091,7 +1214,7 @@ export async function executeRelayQuote(
           console.warn('[smartAccount] Sponsored UserOperation reverted in simulation, retrying once before falling back:', message);
           await new Promise(resolve => setTimeout(resolve, 1500));
           try {
-            hash = await sendRelayEvmStepSponsored(evmClients.sponsoredClient, evmClients.publicClient, item);
+            hash = await sendRelayEvmStepSponsored(evmClients.sponsoredClient, evmClients.publicClient, item, originToken, originAmount);
           } catch {
             // The same calldata reverted twice a moment apart — the pool
             // moved and STAYED moved, not just a momentary blip the first
@@ -1109,15 +1232,15 @@ export async function executeRelayQuote(
               const freshQuote = await options.requote();
               return executeRelayQuote(freshQuote, session, onStep, {...options, requote: undefined});
             }
-            hash = await fallBackToPlainTransaction(evmClients.walletClient!, evmClients.publicClient, item);
+            hash = await fallBackToPlainTransaction(evmClients.walletClient!, evmClients.publicClient, item, originToken, originAmount);
           }
         } else {
           console.warn('[smartAccount] Sponsored UserOperation rejected before broadcast, falling back to a plain transaction:', message);
-          hash = await fallBackToPlainTransaction(evmClients.walletClient!, evmClients.publicClient, item);
+          hash = await fallBackToPlainTransaction(evmClients.walletClient!, evmClients.publicClient, item, originToken, originAmount);
         }
       }
     } else {
-      hash = await sendRelayEvmStep(evmClients.walletClient!, evmClients.publicClient, item);
+      hash = await sendRelayEvmStep(evmClients.walletClient!, evmClients.publicClient, item, originToken, originAmount);
     }
     txHashes.push(hash);
   }
