@@ -624,10 +624,25 @@ export function withComputeUnitLimit(
   return [computeUnitLimitInstruction, ...instructions];
 }
 
+/**
+ * Whoever is signing the user's half of a sponsored transaction — a
+ * local Keypair (signAndSendRelaySolanaStep's own fallback) or Particle
+ * MPC (signAndSendRelaySolanaStepViaParticle's own fallback, added
+ * alongside the EVM/Solana cost-recovery work above). signAndSendSponsoredSolanaStep
+ * below needs the SAME recovery/compute-budget logic regardless of
+ * which one it is — this is the one seam that differs, so it's the one
+ * thing abstracted, not a speculative interface for cases that don't
+ * exist yet.
+ */
+type SolanaTransactionSigner = {
+  publicKey: InstanceType<typeof import('@solana/web3.js').PublicKey>;
+  sign: (transaction: InstanceType<typeof import('@solana/web3.js').VersionedTransaction>) => Promise<InstanceType<typeof import('@solana/web3.js').VersionedTransaction>>;
+};
+
 async function signAndSendSponsoredSolanaStep(
   instructions: InstanceType<typeof import('@solana/web3.js').TransactionInstruction>[],
   lookupTables: InstanceType<typeof import('@solana/web3.js').AddressLookupTableAccount>[],
-  keypair: InstanceType<typeof import('@solana/web3.js').Keypair>,
+  signer: SolanaTransactionSigner,
   connection: InstanceType<typeof import('@solana/web3.js').Connection>,
 ): Promise<{signature: string; warnings: string[]}> {
   const [{PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction, ComputeBudgetProgram}, bs58Module, splToken] = await Promise.all([
@@ -660,7 +675,7 @@ async function signAndSendSponsoredSolanaStep(
       const recoveryUnits = sponsorshipRecoveryUsdcUnits(lamportsCost, prices.SOL ?? 0);
 
       if (recoveryUnits > 0) {
-        const userUsdcAta = await splToken.getAssociatedTokenAddress(usdcMint, keypair.publicKey);
+        const userUsdcAta = await splToken.getAssociatedTokenAddress(usdcMint, signer.publicKey);
         const userUsdcBalance = await connection.getTokenAccountBalance(userUsdcAta).catch(() => null);
         const userUsdcUnits = userUsdcBalance ? Number(userUsdcBalance.value.amount) : 0;
 
@@ -673,7 +688,7 @@ async function signAndSendSponsoredSolanaStep(
             // signature — no user funds touched by this instruction.
             candidateInstructions.push(splToken.createAssociatedTokenAccountInstruction(feePayerPubkey, sponsorUsdcAta, feePayerPubkey, usdcMint));
           }
-          candidateInstructions.push(splToken.createTransferInstruction(userUsdcAta, sponsorUsdcAta, keypair.publicKey, recoveryUnits));
+          candidateInstructions.push(splToken.createTransferInstruction(userUsdcAta, sponsorUsdcAta, signer.publicKey, recoveryUnits));
 
           const candidateMessage = new TransactionMessage({payerKey: feePayerPubkey, instructions: candidateInstructions, recentBlockhash: blockhash}).compileToV0Message(lookupTables);
           const candidateTransaction = new VersionedTransaction(candidateMessage);
@@ -694,18 +709,18 @@ async function signAndSendSponsoredSolanaStep(
   }
 
   const message = new TransactionMessage({payerKey: feePayerPubkey, instructions: finalInstructions, recentBlockhash: blockhash}).compileToV0Message(lookupTables);
-  const transaction = new VersionedTransaction(message);
+  const unsignedTransaction = new VersionedTransaction(message);
   // The fee payer here is deliberately Mango's own sponsor, not the
   // user — that's the whole point of this function. expectedSigner
   // still gets checked independently, so the user's own signature on
   // the real swap/transfer instructions remains required regardless of
   // who pays the fee.
-  const warnings = assertSolanaTransactionMatchesIntent(transaction, {
-    expectedSigner: keypair.publicKey.toBase58(),
+  const warnings = assertSolanaTransactionMatchesIntent(unsignedTransaction, {
+    expectedSigner: signer.publicKey.toBase58(),
     expectedFeePayer: feePayerPubkey.toBase58(),
   });
 
-  transaction.sign([keypair]);
+  const transaction = await signer.sign(unsignedTransaction);
 
   const res = await fetch(SOLANA_SPONSOR_FEE_URL, {
     method: 'POST',
@@ -771,7 +786,14 @@ async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secret
       // to the plain "add more SOL" message if sponsorship itself isn't
       // available or also fails.
       try {
-        return await signAndSendSponsoredSolanaStep(instructions, lookupTables, keypair, connection);
+        const localSigner: SolanaTransactionSigner = {
+          publicKey: keypair.publicKey,
+          sign: async tx => {
+            tx.sign([keypair]);
+            return tx;
+          },
+        };
+        return await signAndSendSponsoredSolanaStep(instructions, lookupTables, localSigner, connection);
       } catch (sponsorErr) {
         const haveSol = Number(lamportsMatch[1]) / 1e9;
         const needSol = Number(lamportsMatch[2]) / 1e9;
@@ -815,9 +837,22 @@ async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secret
  * signAndSendRelaySolanaStep above, but for a Google-login session:
  * there's no local secret key to sign with, so the built (unsigned)
  * VersionedTransaction is serialized and handed to Particle's own MPC
- * signer instead, which signs AND broadcasts in one call. Kept fully
- * separate from the local-signing function above — zero risk of this
- * path changing behavior for the existing, already-relied-on one.
+ * signer instead — via signAndSendSolanaTransactionViaParticle
+ * (sign-and-broadcast in one call) on the normal, sufficient-balance
+ * path, or via the sign-only signSolanaTransactionViaParticle when the
+ * fee-payer fallback below needs to add the sponsor's own signature
+ * before anything broadcasts.
+ *
+ * The local-signing function's own fallback detects a shortfall by
+ * catching the RPC's "insufficient lamports X, need Y" rejection text
+ * AFTER attempting to submit — Particle's own sign-and-send collapses
+ * signing and broadcast into one call with no confirmed guarantee its
+ * error surface preserves that same RPC text, so this path checks
+ * BEFORE ever calling Particle instead: compute this transaction's own
+ * real lamports need with the exact same estimateSponsorshipLamportsCost
+ * math the fee-payer's own cost-recovery uses, and compare it against a
+ * real getBalance() read. Same outcome (sponsor when short, don't when
+ * not), a more robust trigger for this specific signer.
  */
 async function signAndSendRelaySolanaStepViaParticle(item: RelayTransactionStepItem, solanaAddress: string): Promise<{signature: string; warnings: string[]}> {
   const {Connection, PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction} = await import('@solana/web3.js');
@@ -843,6 +878,44 @@ async function signAndSendRelaySolanaStepViaParticle(item: RelayTransactionStepI
   // Same real pre-sign check as the local-signing path above, run on
   // the exact object about to be serialized and handed to Particle.
   const solanaWarnings = assertSolanaTransactionMatchesIntent(transaction, {expectedSigner: solanaAddress});
+
+  // Pre-flight balance check — see this function's own header for why
+  // this replaces the local-signing path's catch-the-RPC-error approach
+  // for this specific signer.
+  try {
+    const needsTokenAccountRent = instructions.some(ix => ix.programId.toBase58() === ASSOCIATED_TOKEN_PROGRAM_ID);
+    const tokenAccountRentExemptLamports = needsTokenAccountRent ? await connection.getMinimumBalanceForRentExemption(SPL_TOKEN_ACCOUNT_SPACE) : 0;
+    const requiredLamports = estimateSponsorshipLamportsCost(instructions, message.header.numRequiredSignatures, tokenAccountRentExemptLamports);
+    const actualBalance = await connection.getBalance(payerKey, 'confirmed');
+
+    if (actualBalance < requiredLamports) {
+      const particleSigner: SolanaTransactionSigner = {
+        publicKey: payerKey,
+        sign: async tx => {
+          const {signSolanaTransactionViaParticle} = await import('../wallet/particleSigning.ts');
+          const signedBytes = await signSolanaTransactionViaParticle(tx.serialize());
+          return VersionedTransaction.deserialize(signedBytes);
+        },
+      };
+      try {
+        return await signAndSendSponsoredSolanaStep(instructions, lookupTables, particleSigner, connection);
+      } catch (sponsorErr) {
+        const sponsorMessage = sponsorErr instanceof Error ? sponsorErr.message : String(sponsorErr);
+        throw new Error(
+          `This wallet has ~${(actualBalance / 1e9).toFixed(4)} SOL, short of the ~${(requiredLamports / 1e9).toFixed(4)} SOL this route needs, and fee sponsorship didn't cover it: ${sponsorMessage}`,
+        );
+      }
+    }
+  } catch (err) {
+    // A failure in the BALANCE CHECK itself (an RPC hiccup reading
+    // getBalance/getMinimumBalanceForRentExemption, say) is not the same
+    // as a confirmed shortfall — falls through to the normal path below
+    // rather than wrongly assuming insufficient funds. A genuine
+    // shortfall's own sponsorship failure (the throw inside the try
+    // above) is a real, final error and must propagate, not be
+    // swallowed here.
+    if (err instanceof Error && /^This wallet has ~/.test(err.message)) throw err;
+  }
 
   const serialized = transaction.serialize();
 

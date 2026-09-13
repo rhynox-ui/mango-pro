@@ -109,6 +109,47 @@ export async function signAndSendSolanaTransactionViaParticle(serializedTransact
 }
 
 /**
+ * Signs a Solana transaction WITHOUT broadcasting it — the primitive
+ * signAndSendSolanaTransactionViaParticle above deliberately doesn't
+ * expose, needed for exactly one real case: Mango's own Solana
+ * fee-payer sponsorship (executeRelayQuote.ts's
+ * signAndSendSponsoredSolanaStep, mango-api's solana-fee-payer.js). That
+ * flow's own hard safety rule — the user signs first, locking the
+ * message's exact bytes, the sponsor signs LAST only after verifying the
+ * user's signature is already there — is impossible to honor through a
+ * combined sign-and-broadcast call: there'd be no way to get the user's
+ * signature onto the sponsor-funded, rewritten transaction without it
+ * already being on-chain first.
+ *
+ * The underlying primitive is real and typed
+ * (@particle-network/rn-auth-core's solana.d.ts declares
+ * `signTransaction(transaction: string): Promise<string>` as a distinct
+ * export from `signAndSendTransaction`, confirmed directly against the
+ * installed package, not assumed) — this codebase just never called it
+ * before now. What's NOT independently confirmed the way this file's
+ * other functions' wire formats are (see this file's own header): the
+ * exact encoding of the signed transaction this resolves to. Every
+ * other function here unwraps Particle's native {status,data} result to
+ * `data` and treats it as the same encoding as what was sent in
+ * (base58, per this file's own header) — signTransaction is assumed to
+ * follow that same established convention (a base58-encoded, now-signed
+ * transaction) since Particle's docs describe all of solana's
+ * transaction-shaped methods as sharing one base58 wire format, but this
+ * specific return value hasn't been proven against a real device the
+ * way this file's other functions eventually should be (see
+ * SolanaDevnetTestScreen.tsx). If that assumption is wrong, the failure
+ * mode is VersionedTransaction.deserialize() throwing on malformed
+ * bytes at the call site — a loud, caught failure (executeRelayQuote.ts
+ * treats sponsorship failures as always-safe-to-fall-back-from), never
+ * a silently wrong signature.
+ */
+export async function signSolanaTransactionViaParticle(serializedTransaction: Uint8Array): Promise<Uint8Array> {
+  const base58Transaction = bs58.encode(serializedTransaction);
+  const signedBase58 = await solana.signTransaction(base58Transaction);
+  return bs58.decode(signedBase58);
+}
+
+/**
  * Signs a plain-text message through Particle's MPC signer (standard
  * EIP-191 personal_sign) — used for the referral system's claim/daily/
  * set-handle messages (referralApi.ts), which previously only worked for
