@@ -41,6 +41,46 @@ import type {DerivedAccounts} from '../wallet/keys';
 const RELAY_STATUS_URL = 'https://api.relay.link/intents/status/v3';
 const SOLANA_RPC_URL = 'https://rpc.solanatracker.io/public';
 
+// Real fix for a structural Solana gap, confirmed via real research
+// (Solana's own cookbook, and how Alchemy/Privy's production wallet
+// infra actually implement this) — see mango-api's own
+// solana-fee-payer.js for the full reasoning and every safety check
+// enforced server-side before it ever adds its signature. This app's
+// own job, client-side: fetch that wallet's public key, REWRITE any
+// instruction that creates AND funds a new account (verified directly
+// against Solana's system_instruction.rs and the SPL Associated Token
+// Account spec — never assumed) so IT funds that account instead of
+// this wallet, THEN sign — in that order, so the fee payer only ever
+// adds a signature to a message this wallet's own key already fixed,
+// never the other way around (Relay's own docs flag the reverse order
+// as exploitable for a same-chain Solana swap; Privy's own documented
+// pattern is this same safer order).
+const SOLANA_FEE_PAYER_URL = 'https://mangoprotocol.site/api/v1/solana/fee-payer';
+const SOLANA_SPONSOR_FEE_URL = 'https://mangoprotocol.site/api/v1/solana/sponsor-fee';
+
+const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
+const ASSOCIATED_TOKEN_PROGRAM_ID = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
+// System Program instruction discriminants (the little-endian u32 at
+// the start of instruction data) for the two variants that create AND
+// fund a new account in one step — verified against the real
+// SystemInstruction enum's declared order, not assumed: CreateAccount
+// is the 1st variant (0), CreateAccountWithSeed the 4th (3). Both put
+// the funding account at account index 0, same as the Associated Token
+// Account Program's Create/CreateIdempotent — confirmed against each
+// spec directly rather than assumed to match by analogy.
+const SYSTEM_ACCOUNT_CREATING_DISCRIMINANTS = new Set([0, 3]);
+
+let cachedSolanaFeePayerPublicKey: string | null = null;
+async function getSolanaFeePayerPublicKey(): Promise<string> {
+  if (cachedSolanaFeePayerPublicKey) return cachedSolanaFeePayerPublicKey;
+  const res = await fetch(SOLANA_FEE_PAYER_URL);
+  if (!res.ok) throw new Error('Fee sponsorship is not available right now.');
+  const {data} = (await res.json()) as {data?: {publicKey?: string}};
+  if (!data?.publicKey) throw new Error('Fee sponsorship is not available right now.');
+  cachedSolanaFeePayerPublicKey = data.publicKey;
+  return cachedSolanaFeePayerPublicKey;
+}
+
 // A quote's gas/rate numbers are only fresh for a short window — this is
 // this app's own client-side clock (relayQuote.ts's quotedAt tag), not a
 // field Relay's response schema documents itself.
@@ -257,6 +297,105 @@ async function sendRelayEvmStepSponsored(
  * direct landed-check) for the well-documented case where a public
  * RPC's own simulation snapshot lags the real cluster by a moment.
  */
+/** Polls until a Solana signature confirms, fails on-chain, or times out — shared by the plain and sponsored signing paths below. */
+async function confirmSolanaSignature(connection: InstanceType<typeof import('@solana/web3.js').Connection>, signature: string): Promise<string> {
+  const deadline = Date.now() + 90_000;
+  for (;;) {
+    const {value} = await connection.getSignatureStatuses([signature]);
+    const status = value?.[0];
+    if (status) {
+      if (status.err) {
+        const error = new Error(`Transaction ${signature} failed on-chain: ${JSON.stringify(status.err)}`);
+        (error as {signature?: string}).signature = signature;
+        throw error;
+      }
+      if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') return signature;
+    }
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for transaction ${signature} to confirm.`);
+    await new Promise(r => setTimeout(r, 1200));
+  }
+}
+
+/**
+ * Retries a Solana step that failed for lack of native SOL by having
+ * Mango's own funded wallet pay the network fee AND fund any new
+ * account this route creates along the way (e.g. a temporary
+ * wrapped-SOL account for a token that only pairs against SOL, never
+ * USDC directly) — see this file's own header above for the full
+ * reasoning and mango-api's solana-fee-payer.js for every safety check
+ * enforced before that wallet ever adds its signature.
+ *
+ * Rewrites the funding account of any instruction that creates AND
+ * funds a new account to Mango's fee-payer wallet BEFORE anyone signs,
+ * then signs with this wallet's own key — locking the exact, final
+ * message — and only THEN sends it to be co-signed. That order is the
+ * whole safety property: the fee payer only ever adds a signature to a
+ * message this wallet's own key already fixed, never the reverse.
+ */
+/**
+ * Pure rewrite step, kept separate from any signing/network I/O so it's
+ * independently testable (scripts/verify-solana-fee-sponsor.mjs) — the
+ * one piece of this whole feature where getting the account index wrong
+ * either breaks the transaction or silently fails to fix anything.
+ * Detects any instruction that creates AND funds a new account
+ * (verified directly against Solana's system_instruction.rs and the
+ * SPL Associated Token Account spec, not assumed) and redirects its
+ * funding account (always account index 0 for all three shapes this
+ * checks) to `feePayerPubkey`. Every other instruction — including the
+ * actual swap/transfer instructions carrying the user's own real
+ * trade — passes through completely untouched.
+ */
+export function rewriteAccountCreationFundingInstructions(
+  instructions: InstanceType<typeof import('@solana/web3.js').TransactionInstruction>[],
+  feePayerPubkey: InstanceType<typeof import('@solana/web3.js').PublicKey>,
+  TransactionInstructionCtor: typeof import('@solana/web3.js').TransactionInstruction,
+): InstanceType<typeof import('@solana/web3.js').TransactionInstruction>[] {
+  return instructions.map(ix => {
+    const programId = ix.programId.toBase58();
+    const isAssociatedTokenAccountCreate = programId === ASSOCIATED_TOKEN_PROGRAM_ID;
+    const isSystemAccountCreate = programId === SYSTEM_PROGRAM_ID && ix.data.length >= 4 && SYSTEM_ACCOUNT_CREATING_DISCRIMINANTS.has(ix.data.readUInt32LE(0));
+    if (!isAssociatedTokenAccountCreate && !isSystemAccountCreate) return ix;
+    const keys = ix.keys.map((k, i) => (i === 0 ? {...k, pubkey: feePayerPubkey} : k));
+    return new TransactionInstructionCtor({keys, programId: ix.programId, data: ix.data});
+  });
+}
+
+async function signAndSendSponsoredSolanaStep(
+  instructions: InstanceType<typeof import('@solana/web3.js').TransactionInstruction>[],
+  lookupTables: InstanceType<typeof import('@solana/web3.js').AddressLookupTableAccount>[],
+  keypair: InstanceType<typeof import('@solana/web3.js').Keypair>,
+  connection: InstanceType<typeof import('@solana/web3.js').Connection>,
+): Promise<{signature: string; warnings: string[]}> {
+  const [{PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction}, bs58Module] = await Promise.all([import('@solana/web3.js'), import('bs58')]);
+  const bs58 = bs58Module.default;
+  const feePayerPubkey = new PublicKey(await getSolanaFeePayerPublicKey());
+  const rewrittenInstructions = rewriteAccountCreationFundingInstructions(instructions, feePayerPubkey, TransactionInstruction);
+
+  const {blockhash} = await connection.getLatestBlockhash('confirmed');
+  const message = new TransactionMessage({payerKey: feePayerPubkey, instructions: rewrittenInstructions, recentBlockhash: blockhash}).compileToV0Message(lookupTables);
+  const transaction = new VersionedTransaction(message);
+  const warnings = assertSolanaTransactionMatchesIntent(transaction, {expectedSigner: keypair.publicKey.toBase58()});
+
+  transaction.sign([keypair]);
+
+  const res = await fetch(SOLANA_SPONSOR_FEE_URL, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({transaction: Buffer.from(transaction.serialize()).toString('base64')}),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as {error?: string};
+    throw new Error(body.error || 'Fee sponsorship is not available right now.');
+  }
+  const {data} = (await res.json()) as {data?: {transaction?: string}};
+  if (!data?.transaction) throw new Error('Fee sponsorship is not available right now.');
+
+  const signedTransaction = VersionedTransaction.deserialize(Buffer.from(data.transaction, 'base64'));
+  const signature = bs58.encode(signedTransaction.signatures[0]);
+  await connection.sendRawTransaction(signedTransaction.serialize());
+  return {signature: await confirmSolanaSignature(connection, signature), warnings};
+}
+
 async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secretKeyBase58: string): Promise<{signature: string; warnings: string[]}> {
   const [{Connection, Keypair, PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction}, bs58Module] = await Promise.all([import('@solana/web3.js'), import('bs58')]);
   const bs58 = bs58Module.default;
@@ -291,37 +430,28 @@ async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secret
   transaction.sign([keypair]);
   const signature = bs58.encode(transaction.signatures[0]);
 
-  async function confirmOrTagError(): Promise<string> {
-    const deadline = Date.now() + 90_000;
-    for (;;) {
-      const {value} = await connection.getSignatureStatuses([signature]);
-      const status = value?.[0];
-      if (status) {
-        if (status.err) {
-          const error = new Error(`Transaction ${signature} failed on-chain: ${JSON.stringify(status.err)}`);
-          (error as {signature?: string}).signature = signature;
-          throw error;
-        }
-        if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') return signature;
-      }
-      if (Date.now() >= deadline) throw new Error(`Timed out waiting for transaction ${signature} to confirm.`);
-      await new Promise(r => setTimeout(r, 1200));
-    }
-  }
-
   try {
     await connection.sendRawTransaction(transaction.serialize());
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     const lamportsMatch = errorMessage.match(/insufficient lamports (\d+), need (\d+)/i);
     if (lamportsMatch) {
-      const haveSol = Number(lamportsMatch[1]) / 1e9;
-      const needSol = Number(lamportsMatch[2]) / 1e9;
-      throw new Error(`This route needs ~${needSol.toFixed(4)} SOL for network fees/rent, but this wallet only has ~${haveSol.toFixed(4)} SOL. Add more SOL and try again.`);
+      // Nothing was broadcast yet (this is our own pre-flight simulate
+      // rejecting it) — safe to retry with Mango's fee payer covering
+      // the shortfall instead of failing outright. Only falls through
+      // to the plain "add more SOL" message if sponsorship itself isn't
+      // available or also fails.
+      try {
+        return await signAndSendSponsoredSolanaStep(instructions, lookupTables, keypair, connection);
+      } catch {
+        const haveSol = Number(lamportsMatch[1]) / 1e9;
+        const needSol = Number(lamportsMatch[2]) / 1e9;
+        throw new Error(`This route needs ~${needSol.toFixed(4)} SOL for network fees/rent, but this wallet only has ~${haveSol.toFixed(4)} SOL. Add more SOL and try again.`);
+      }
     }
     try {
       await connection.sendRawTransaction(transaction.serialize(), {skipPreflight: true});
-      const confirmedSignature = await confirmOrTagError();
+      const confirmedSignature = await confirmSolanaSignature(connection, signature);
       return {signature: confirmedSignature, warnings: solanaWarnings};
     } catch {
       // The retry itself failed to submit — fall through to a direct
@@ -339,7 +469,7 @@ async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secret
       throw err;
     }
   }
-  return {signature: await confirmOrTagError(), warnings: solanaWarnings};
+  return {signature: await confirmSolanaSignature(connection, signature), warnings: solanaWarnings};
 }
 
 /**
