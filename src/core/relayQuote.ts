@@ -214,6 +214,15 @@ export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQ
     ...(sponsorshipActive
       ? {
           subsidizeFees: true,
+          // Separate from subsidizeFees, per Relay's own docs: covers
+          // the SOL rent a new destination-side token account needs
+          // (e.g. this wallet's first time receiving a given SPL token)
+          // — the real, ground-truth cause of a live "insufficient
+          // lamports" failure on a Solana destination. Only meaningful
+          // when Solana is actually the destination; omitted otherwise
+          // so an EVM destination never sends a field Relay has no use
+          // for there.
+          ...(toChainKey === 'solana' ? {subsidizeRent: true} : {}),
           // Relay refuses to sponsor AT ALL past this cap (not a partial
           // sponsor) — generous relative to real cost so normal trades
           // always clear it, but still a real ceiling on what one
