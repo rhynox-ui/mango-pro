@@ -18,13 +18,11 @@ import {Image, Linking, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, V
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {explorerUrlFor} from '../wallet/txHistory';
 import type {ChainKey} from '../core/chainData';
-import {MangoMark} from './MangoMark';
 
-// The real brand mark (same asset onboarding/AppLockScreen use), not the
-// flat-color MangoMark SVG — a trade result is a moment worth the actual
-// logo, not a tinted icon standing in for it. Only used for the success
-// case: the PNG is fixed black, so failure keeps the SVG mark in red to
-// carry that signal.
+// The real brand mark (same asset onboarding/AppLockScreen use), always
+// black — used for both success and failure. The title/message text and
+// the (still-red) "View transaction"/error copy carry the outcome, not
+// the logo.
 const MANGO_MARK = require('../assets/mango-mark.png');
 
 export type TradeResultSummary = {
@@ -66,11 +64,7 @@ export function TradeResultModal({
       <View style={styles.overlay}>
         <View style={styles.card}>
           <View style={styles.iconWrap}>
-            {isSuccess ? (
-              <Image source={MANGO_MARK} style={styles.logoImage} resizeMode="contain" />
-            ) : (
-              <MangoMark size={56} color={colors.danger} />
-            )}
+            <Image source={MANGO_MARK} style={styles.logoImage} resizeMode="contain" />
           </View>
           <Text style={styles.title}>
             {isSuccess && result ? `${result.isBuySide ? 'Bought' : 'Sold'} ${result.isBuySide ? result.receiveSymbol : result.paySymbol}` : isSuccess ? 'Trade sent' : 'Trade failed'}

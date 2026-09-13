@@ -20,11 +20,18 @@
 // WHAT IT DOES. One thing that cannot legitimately be wrong, as a hard
 // block, and an inventory of things worth knowing as warnings:
 //
-//   BLOCK — the fee payer (the first required signature) must be the
-//   user's own account. This is the account that pays and, in every
-//   route this app builds, the account that funds the trade. A
-//   transaction presented to this wallet whose fee payer is somebody
-//   else is not this user's trade.
+//   BLOCK — the fee payer must be either the user's own account, or an
+//   explicitly-passed sponsor (Mango's own fee-payer service, fetched
+//   from our own backend — see executeRelayQuote.ts's sponsored-signing
+//   path). A transaction presented to this wallet whose fee payer is
+//   neither is not this user's trade.
+//
+//   BLOCK — the user's own account must appear as a REQUIRED SIGNER
+//   somewhere in the transaction. This is what still ties a
+//   sponsor-paid transaction back to the user: the sponsor covering the
+//   fee doesn't mean the sponsor is authorizing the trade — the user's
+//   own signature, on the actual swap/transfer instructions, still has
+//   to be there.
 //
 //   WARN — an spl-token Approve, which hands a delegate standing
 //   authority over the user's token account (Solana's equivalent of an
@@ -59,6 +66,11 @@ export class SolanaIntentError extends Error {
 
 export type DescribedSolanaTransaction = {
   feePayer: string | null;
+  // Every account this transaction requires a real signature from — the
+  // fee payer is always one of these, but for a sponsored transaction
+  // it is not the ONLY one: the user's own account has to be here too,
+  // via whichever swap/transfer instruction actually moves their funds.
+  requiredSigners: string[];
   instructions: {programId: string | null; firstDataByte: number | null}[];
 };
 
@@ -67,9 +79,10 @@ export type DescribedSolanaTransaction = {
 // file stays a pure, dependency-free structural check, same as the
 // original it's ported from.
 type Base58Key = {toBase58?: () => string} | string | null | undefined;
-type LegacyLikeTransaction = {feePayer?: Base58Key; instructions?: {programId?: Base58Key; data?: Uint8Array}[]};
+type LegacyLikeTransaction = {feePayer?: Base58Key; instructions?: {programId?: Base58Key; data?: Uint8Array; keys?: {pubkey?: Base58Key; isSigner?: boolean}[]}[]};
 type VersionedLikeTransaction = {
   message?: {
+    header?: {numRequiredSignatures?: number};
     staticAccountKeys?: Base58Key[];
     compiledInstructions?: {programIdIndex: number; data?: Uint8Array}[];
   };
@@ -93,11 +106,16 @@ export function describeSolanaTransaction(transaction: SolanaLikeTransaction | n
   if (!transaction || typeof transaction !== 'object') return null;
 
   // VersionedTransaction: a compiled message with a static key table.
+  // The first `numRequiredSignatures` keys (fee payer always at index 0)
+  // are exactly the accounts this transaction requires a signature from
+  // — that's how @solana/web3.js itself orders the table when compiling.
   const message = transaction.message;
   if (message && Array.isArray(message.staticAccountKeys) && Array.isArray(message.compiledInstructions)) {
     const keys = message.staticAccountKeys.map(k => keyToBase58(k) ?? String(k));
+    const numRequiredSignatures = message.header?.numRequiredSignatures ?? 1;
     return {
       feePayer: keys[0] ?? null,
+      requiredSigners: keys.slice(0, numRequiredSignatures),
       instructions: message.compiledInstructions.map(ix => ({
         programId: keys[ix.programIdIndex] ?? null,
         firstDataByte: ix.data?.length ? ix.data[0] : null,
@@ -105,10 +123,25 @@ export function describeSolanaTransaction(transaction: SolanaLikeTransaction | n
     };
   }
 
-  // Legacy Transaction: instructions carry their own program ids.
+  // Legacy Transaction: instructions carry their own program ids. There
+  // is no single header to read required signers from, so they're
+  // derived the same way @solana/web3.js's own Message compiler does —
+  // the fee payer, plus the union of every account any instruction
+  // marks isSigner.
   if (Array.isArray(transaction.instructions)) {
+    const feePayer = keyToBase58(transaction.feePayer);
+    const requiredSigners = new Set<string>();
+    if (feePayer) requiredSigners.add(feePayer);
+    for (const ix of transaction.instructions) {
+      for (const key of ix.keys ?? []) {
+        if (!key.isSigner) continue;
+        const pubkey = keyToBase58(key.pubkey);
+        if (pubkey) requiredSigners.add(pubkey);
+      }
+    }
     return {
-      feePayer: keyToBase58(transaction.feePayer),
+      feePayer,
+      requiredSigners: [...requiredSigners],
       instructions: transaction.instructions.map(ix => ({
         programId: keyToBase58(ix.programId),
         firstDataByte: ix.data?.length ? ix.data[0] : null,
@@ -120,14 +153,24 @@ export function describeSolanaTransaction(transaction: SolanaLikeTransaction | n
 }
 
 /**
- * Blocks on the one condition that cannot legitimately hold; returns
+ * Blocks on the conditions that cannot legitimately hold; returns
  * warning strings for the rest.
  *
- * expectedSigner is the user's own base58 address. base58 is
- * case-sensitive, so these are compared exactly — never lowercased the
- * way an EVM address safely can be.
+ * expectedSigner is the user's own base58 address — this is always
+ * required to be a real signer of the transaction, sponsored or not.
+ * expectedFeePayer defaults to expectedSigner (the normal, user-pays
+ * case) but can be set to a different, explicitly-trusted address (see
+ * executeRelayQuote.ts's sponsored-signing path, which passes Mango's
+ * own fee-payer address here) — sponsoring the fee is not the same
+ * thing as authorizing the trade, so the two are checked separately.
+ *
+ * base58 is case-sensitive, so these are compared exactly — never
+ * lowercased the way an EVM address safely can be.
  */
-export function assertSolanaTransactionMatchesIntent(transaction: SolanaLikeTransaction | null | undefined, {expectedSigner}: {expectedSigner?: string | null}): string[] {
+export function assertSolanaTransactionMatchesIntent(
+  transaction: SolanaLikeTransaction | null | undefined,
+  {expectedSigner, expectedFeePayer}: {expectedSigner?: string | null; expectedFeePayer?: string | null},
+): string[] {
   const described = describeSolanaTransaction(transaction);
   if (!described) {
     // Not a refusal: an unrecognised shape means this check couldn't
@@ -136,9 +179,18 @@ export function assertSolanaTransactionMatchesIntent(transaction: SolanaLikeTran
     return ["This trade's transaction could not be inspected before signing (unrecognised transaction format)."];
   }
 
-  if (expectedSigner && described.feePayer && described.feePayer !== expectedSigner) {
+  const allowedFeePayer = expectedFeePayer ?? expectedSigner;
+  if (allowedFeePayer && described.feePayer && described.feePayer !== allowedFeePayer) {
+    const expectedWho = expectedFeePayer ? `the expected fee payer (${allowedFeePayer})` : `your wallet (${allowedFeePayer})`;
     throw new SolanaIntentError(
-      `This transaction would be paid for by ${described.feePayer}, not by your wallet (${expectedSigner}). ` +
+      `This transaction would be paid for by ${described.feePayer}, not by ${expectedWho}. ` +
+        'It was stopped before signing; nothing was sent and nothing was spent.',
+    );
+  }
+
+  if (expectedSigner && !described.requiredSigners.includes(expectedSigner)) {
+    throw new SolanaIntentError(
+      `This transaction does not require a signature from your wallet (${expectedSigner}) — it would not actually be authorized by you. ` +
         'It was stopped before signing; nothing was sent and nothing was spent.',
     );
   }

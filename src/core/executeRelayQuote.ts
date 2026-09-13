@@ -374,7 +374,15 @@ async function signAndSendSponsoredSolanaStep(
   const {blockhash} = await connection.getLatestBlockhash('confirmed');
   const message = new TransactionMessage({payerKey: feePayerPubkey, instructions: rewrittenInstructions, recentBlockhash: blockhash}).compileToV0Message(lookupTables);
   const transaction = new VersionedTransaction(message);
-  const warnings = assertSolanaTransactionMatchesIntent(transaction, {expectedSigner: keypair.publicKey.toBase58()});
+  // The fee payer here is deliberately Mango's own sponsor, not the
+  // user — that's the whole point of this function. expectedSigner
+  // still gets checked independently, so the user's own signature on
+  // the real swap/transfer instructions remains required regardless of
+  // who pays the fee.
+  const warnings = assertSolanaTransactionMatchesIntent(transaction, {
+    expectedSigner: keypair.publicKey.toBase58(),
+    expectedFeePayer: feePayerPubkey.toBase58(),
+  });
 
   transaction.sign([keypair]);
 
@@ -443,10 +451,19 @@ async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secret
       // available or also fails.
       try {
         return await signAndSendSponsoredSolanaStep(instructions, lookupTables, keypair, connection);
-      } catch {
+      } catch (sponsorErr) {
         const haveSol = Number(lamportsMatch[1]) / 1e9;
         const needSol = Number(lamportsMatch[2]) / 1e9;
-        throw new Error(`This route needs ~${needSol.toFixed(4)} SOL for network fees/rent, but this wallet only has ~${haveSol.toFixed(4)} SOL. Add more SOL and try again.`);
+        // Surface the real sponsorship failure instead of always
+        // blaming the user's balance — sponsorship can fail for reasons
+        // that have nothing to do with SOL (missing config, rate limit,
+        // a rejected/failed simulation), and hiding that behind "add
+        // more SOL" makes every one of those look identical and
+        // impossible to debug.
+        const sponsorMessage = sponsorErr instanceof Error ? sponsorErr.message : String(sponsorErr);
+        throw new Error(
+          `This wallet has ~${haveSol.toFixed(4)} SOL, short of the ~${needSol.toFixed(4)} SOL this route needs, and fee sponsorship didn't cover it: ${sponsorMessage}`,
+        );
       }
     }
     try {

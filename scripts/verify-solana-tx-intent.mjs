@@ -58,6 +58,19 @@ const versioned = (feePayer, instructions) => ({
     })),
   },
 });
+// A sponsored VersionedTransaction: fee payer is index 0 as always, but
+// numRequiredSignatures is 2 and the SECOND required signer is the real
+// user — the shape signAndSendSponsoredSolanaStep actually produces.
+const sponsored = (feePayer, userKey, instructions) => ({
+  message: {
+    header: {numRequiredSignatures: 2},
+    staticAccountKeys: [{toBase58: () => feePayer}, {toBase58: () => userKey}, {toBase58: () => TOKEN_PROGRAM}, {toBase58: () => TOKEN_2022}, {toBase58: () => SYSTEM_PROGRAM}],
+    compiledInstructions: instructions.map(({programIndex, dataByte}) => ({
+      programIdIndex: programIndex,
+      data: dataByte === null ? new Uint8Array() : Uint8Array.from([dataByte]),
+    })),
+  },
+});
 // A legacy Transaction: instructions carry their own program ids.
 const legacy = (feePayer, instructions) => ({
   feePayer: {toBase58: () => feePayer},
@@ -140,6 +153,40 @@ check('the same byte under a NON-token program is not flagged', () => {
 check('an unparseable transaction warns rather than blocking the trade', () => {
   const warnings = assertSolanaTransactionMatchesIntent({nonsense: true}, {expectedSigner: USER});
   assert(warnings.length === 1 && warnings[0].includes('could not be inspected'), JSON.stringify(warnings));
+});
+
+// ---- sponsored transactions: fee payer != user, by design ----------
+// Regression coverage for a real, confirmed bug: signAndSendSponsoredSolanaStep
+// builds the transaction with Mango's OWN sponsor as fee payer, then used
+// to call this exact function with only {expectedSigner: <the user>} —
+// which always threw, because the fee payer (the sponsor) never equals
+// the user. Every sponsored trade failed closed, and the failure got
+// swallowed into a misleading "add more SOL" message one layer up.
+const SPONSOR = '7c9x2h9F1EPBaK2mgd5uhTZDDA1LX2CU1M9V4EbxVj44';
+check('a sponsored transaction (fee payer = sponsor, user still a required signer) is allowed', () => {
+  const warnings = assertSolanaTransactionMatchesIntent(sponsored(SPONSOR, USER, [{programIndex: 4, dataByte: 2}]), {
+    expectedSigner: USER,
+    expectedFeePayer: SPONSOR,
+  });
+  assert(warnings.length === 0, JSON.stringify(warnings));
+});
+check('BLOCKS a sponsored transaction if the user is NOT actually a required signer', () => {
+  // Same fee payer as an honest sponsorship, but the user's key never
+  // appears — the sponsor covering the fee must never be mistaken for
+  // the user having authorized anything.
+  blocks(
+    () => assertSolanaTransactionMatchesIntent(sponsored(SPONSOR, STRANGER, [{programIndex: 4, dataByte: 2}]), {expectedSigner: USER, expectedFeePayer: SPONSOR}),
+    'does not require a signature from your wallet',
+  );
+});
+check('BLOCKS a transaction paid for by neither the user nor the approved sponsor', () => {
+  blocks(
+    () => assertSolanaTransactionMatchesIntent(sponsored(STRANGER, USER, [{programIndex: 4, dataByte: 2}]), {expectedSigner: USER, expectedFeePayer: SPONSOR}),
+    'the expected fee payer',
+  );
+});
+check('without expectedFeePayer, a sponsor-paid transaction is still blocked (the pre-fix, user-pays-only behavior)', () => {
+  blocks(() => assertSolanaTransactionMatchesIntent(sponsored(SPONSOR, USER, [{programIndex: 4, dataByte: 2}]), {expectedSigner: USER}), 'not by your wallet');
 });
 
 console.log(`${passed}/${passed + failures.length} checks passed`);
