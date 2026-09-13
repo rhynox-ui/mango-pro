@@ -14,11 +14,18 @@
 // not split between a corner box and a banner.
 
 import {useMemo} from 'react';
-import {Linking, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
+import {Image, Linking, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {explorerUrlFor} from '../wallet/txHistory';
 import type {ChainKey} from '../core/chainData';
 import {MangoMark} from './MangoMark';
+
+// The real brand mark (same asset onboarding/AppLockScreen use), not the
+// flat-color MangoMark SVG — a trade result is a moment worth the actual
+// logo, not a tinted icon standing in for it. Only used for the success
+// case: the PNG is fixed black, so failure keeps the SVG mark in red to
+// carry that signal.
+const MANGO_MARK = require('../assets/mango-mark.png');
 
 export type TradeResultSummary = {
   isBuySide: boolean;
@@ -59,7 +66,11 @@ export function TradeResultModal({
       <View style={styles.overlay}>
         <View style={styles.card}>
           <View style={styles.iconWrap}>
-            <MangoMark size={56} color={isSuccess ? colors.textPrimary : colors.danger} />
+            {isSuccess ? (
+              <Image source={MANGO_MARK} style={styles.logoImage} resizeMode="contain" />
+            ) : (
+              <MangoMark size={56} color={colors.danger} />
+            )}
           </View>
           <Text style={styles.title}>
             {isSuccess && result ? `${result.isBuySide ? 'Bought' : 'Sold'} ${result.isBuySide ? result.receiveSymbol : result.paySymbol}` : isSuccess ? 'Trade sent' : 'Trade failed'}
@@ -105,6 +116,7 @@ function makeStyles(colors: Colors) {
     overlay: {flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', padding: 40},
     card: {backgroundColor: colors.panel, borderColor: colors.panelBorder, borderWidth: 1, borderRadius: 18, padding: 20, alignItems: 'center'},
     iconWrap: {marginBottom: 10},
+    logoImage: {width: 56, height: 56},
     title: {color: colors.textPrimary, fontSize: 14.5, fontWeight: '800', textAlign: 'center'},
     subtitle: {color: colors.textSecondary, fontSize: 12, textAlign: 'center', marginTop: 4},
     errorScroll: {maxHeight: 90, marginTop: 6},
