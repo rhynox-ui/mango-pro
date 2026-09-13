@@ -14,6 +14,14 @@
 // while keeping every existing contrast relationship intact — text on
 // panel, panel on bg, CTA on bg all still resolve the same way, just
 // against a brighter base.
+//
+// LIGHT's own near-black (textPrimary/ctaBg/navActive/accent) got the
+// same real-device complaint a second time — solid black pills/buttons/
+// nav on a white ground read as too harsh. Softened by the exact same
+// delta DARK's own bg shift above already used (#0A0A0B -> #1B1B1E),
+// which conveniently lands LIGHT's near-black on the identical hex
+// DARK uses for its background — one shared "soft black" tone doing
+// the job pure black used to, in both themes.
 
 export const DANGER = '#D92D20';
 export const WARNING = '#EAB308';
@@ -50,18 +58,18 @@ export const LIGHT: Palette = {
   panelBorder: '#E6E6E8',
   input: '#EAEAED',
   pillBg: '#EFEFF0',
-  textPrimary: '#0A0A0B',
+  textPrimary: '#1B1B1E',
   textSecondary: '#6B6B70',
   textMuted: '#A6A6AC',
   divider: '#EDEDEF',
-  ctaBg: '#0A0A0B',
+  ctaBg: '#1B1B1E',
   ctaText: '#FFFFFF',
   ctaDisabledBg: '#EDEDEF',
   ctaDisabledText: '#B8B8BC',
-  navActive: '#0A0A0B',
+  navActive: '#1B1B1E',
   navActiveText: '#FFFFFF',
-  accent: '#0A0A0B',
-  accentDeep: '#0A0A0B',
+  accent: '#1B1B1E',
+  accentDeep: '#1B1B1E',
   danger: DANGER,
   warning: WARNING,
   gain: GAIN,
