@@ -122,8 +122,8 @@ export function SecurityScreen({onBack}: {onBack: () => void}) {
             <View style={styles.switchLabelWrap}>
               <Text style={styles.rowLabel}>Sponsor my trade gas</Text>
               <Text style={styles.sectionHint}>
-                Delegates this wallet to a smart-account via EIP-7702 so Pimlico covers origin-chain gas on your trades — no
-                native ETH/BNB/etc. needed to trade. Off by default; trades exactly as before if you leave this off.
+                Enable gasless trading to use Mango Pro. Your wallet is delegated to a smart account via EIP-7702, allowing
+                Pimlico to cover transaction gas — no native ETH/BNB required.
               </Text>
             </View>
             <Switch

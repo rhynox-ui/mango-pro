@@ -35,6 +35,8 @@ import {DEFAULT_AUTO_LOCK_MS, loadAutoLockMs, setAutoLockMs as persistAutoLockMs
 import {getBiometricPassword, getBiometryLabel, isBiometricAvailable, isBiometricUnlockEnabled} from './src/wallet/biometricAuth';
 import {isAppLockEnabled, verifyAppLock} from './src/wallet/appLockAuth';
 import {RecommendBiometricModal} from './src/wallet/RecommendBiometricModal';
+import {GaslessTradingIntroModal} from './src/onboarding/GaslessTradingIntroModal';
+import {setGaslessTradingEnabled} from './src/settings/gaslessTradingPrefs';
 import {WelcomeScreen} from './src/onboarding/WelcomeScreen';
 import {CreateWalletFlow} from './src/onboarding/CreateWalletFlow';
 import {ImportWalletFlow} from './src/onboarding/ImportWalletFlow';
@@ -84,6 +86,11 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
   // to use it; cleared as soon as the modal closes either way.
   const [showRecommendBiometric, setShowRecommendBiometric] = useState(false);
   const freshPasswordRef = useRef('');
+  // Shown once, right after finishOnboarding, BEFORE the biometric
+  // recommendation — this app's whole premise is not needing native gas
+  // to trade, so a user shouldn't reach a trade screen before ever
+  // learning that. See GaslessTradingIntroModal's own header.
+  const [showGaslessIntro, setShowGaslessIntro] = useState(false);
   // Determines the post-intro screen AND which intro to play at all —
   // IntroSplash isn't mounted until this resolves (a fast AsyncStorage
   // read, not the deliberate animation), so a returning user gets the
@@ -270,11 +277,28 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
   async function finishOnboarding(mnemonic: string, password: string) {
     const accounts = deriveAccounts(mnemonic);
     await createVault(mnemonic, password);
+    // Explicit, not just relying on gaslessTradingPrefs.ts's own default:
+    // this is the one place a brand-new seed wallet's preference gets
+    // written, so it's set here in the open rather than left to whatever
+    // the next unrelated read of loadGaslessTradingEnabled() happens to
+    // default to.
+    await setGaslessTradingEnabled(true);
     setSession(accounts);
     setAuthState('unlocked');
+    freshPasswordRef.current = password;
+    setShowGaslessIntro(true);
+  }
+
+  // Gasless trading's own intro is shown first (see showGaslessIntro's
+  // declaration) — the biometric recommendation, if applicable, only
+  // follows once that's dismissed, so the two post-onboarding modals
+  // never stack.
+  function handleGaslessIntroDone() {
+    setShowGaslessIntro(false);
     if (biometricAvailable && !biometricEnabled) {
-      freshPasswordRef.current = password;
       setShowRecommendBiometric(true);
+    } else {
+      freshPasswordRef.current = '';
     }
   }
 
@@ -342,6 +366,7 @@ function AuthGate({children}: {children: React.ReactNode}): React.JSX.Element {
       <AuthActionsContext.Provider value={{logout: handleLock, deleteWallet: handleWalletWipe}}>
         <BiometricContext.Provider value={{biometricAvailable, biometricEnabled, biometryLabel, setBiometricEnabled, appLockEnabled, setAppLockEnabled}}>
           {children}
+          <GaslessTradingIntroModal visible={showGaslessIntro} onDone={handleGaslessIntroDone} />
           <RecommendBiometricModal
             visible={showRecommendBiometric}
             biometryLabel={biometryLabel}
