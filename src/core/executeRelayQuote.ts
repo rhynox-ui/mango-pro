@@ -36,6 +36,8 @@ import {assertQuoteSafeToSign} from './txIntentFirewall.ts';
 import {assertSolanaTransactionMatchesIntent} from './solanaTxIntent.ts';
 import {intentForQuote, type RelayQuote, type RelayTransactionStepItem} from './relayQuote.ts';
 import {getEip7702AuthorizationIfNeeded, getSponsoredSmartAccountClient, isSmartAccountSponsorshipConfigured} from '../wallet/smartAccount.ts';
+import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS} from './chainData.ts';
+import {fetchWalletPrices} from './walletPrices.ts';
 import type {DerivedAccounts} from '../wallet/keys';
 
 const RELAY_STATUS_URL = 'https://api.relay.link/intents/status/v3';
@@ -360,19 +362,227 @@ export function rewriteAccountCreationFundingInstructions(
   });
 }
 
+// ---------------------------------------------------------------------
+// Sponsorship cost recovery — closing the loop the fee-payer wallet's
+// own header (mango-api's solana-fee-payer.js) explicitly leaves open:
+// with the per-address/daily caps removed, this wallet keeps covering
+// sponsored trades until it runs dry, with no other backstop. This
+// section is what refills it, WITHOUT ever risking the trade it's
+// supposed to be protecting — see the design contract below.
+//
+// Design, per real precedent (Kora/Circle Gas Station/Openfort docs —
+// all recover cost with an SPL transfer to the fee payer's own account,
+// executed INSIDE the same sponsored transaction, not a quote-time %):
+//
+//  1. RECOVER EXACTLY REAL COST, PLUS A NON-PROFIT BUFFER. The amount is
+//     this transaction's own measured lamports cost (base fee + any
+//     rent this fee payer is now funding — read from the ORIGINAL,
+//     pre-rewrite instructions, not guessed), priced live via
+//     walletPrices.ts's SOL/USD feed (so it tracks SOL's own volatility
+//     instead of a stale $ constant), plus SPONSORSHIP_RECOVERY_BUFFER_PCT
+//     — sized only to cover the eventual USDC->SOL conversion cost when
+//     this wallet's accumulated USDC gets swept back into SOL, never a
+//     margin on top of real cost. Explicit product decision: recovering
+//     MORE than what sponsorship actually cost is the same "cheating"
+//     the flat appFeeBpsForSponsoredTrade()/sponsoredFeeFloorUsd() path
+//     in fees.ts already exists to avoid on the Relay-sponsorship side.
+//
+//  2. NEVER IN THE WAY OF THE TRADE. Recovery is denominated in USDC and
+//     paid from whatever USDC the user's wallet already holds (checked
+//     against a live balance, not assumed) — deliberately NOT tied to
+//     this specific swap's own origin/destination currency, so it works
+//     the same whether the swap is a Buy or a Sell, paid in USDC or in
+//     anything else. If the user doesn't hold enough USDC, or ANYTHING
+//     about the augmented transaction fails to simulate clean (a stale
+//     balance snapshot, a compute-budget conflict, whatever), the whole
+//     recovery attempt is dropped and the plain, already-working
+//     sponsored transaction is sent instead — recovery is strictly
+//     opportunistic, the trade succeeding is not.
+//
+//  3. MEASURE, DON'T GUESS, THE COMPUTE BUDGET. An added SPL transfer
+//     costs real compute units Relay's own route never budgeted for
+//     (https://57blocks.com/blog/deep-dive-into-resource-limitations-in-solana-development-cu-edition).
+//     The augmented instruction set is simulated BEFORE it's ever
+//     signed (sigVerify: false, replaceRecentBlockhash: true — the same
+//     pattern mango-api's own coSignAsFeePayer already uses server-side)
+//     and, only if that simulation comes back clean, its real
+//     unitsConsumed is used to correct (or add) a SetComputeUnitLimit
+//     instruction to ~110% of that measured value
+//     (https://docs.chainstack.com/docs/solana-compute-budget) — never a
+//     flat guessed number.
+//
+// The sponsor's own USDC associated token account is created lazily,
+// idempotently, the first time it's needed — funded by the fee payer's
+// OWN signature for its OWN account, so there's no user-funds risk in
+// that half of it either.
+
+const LAMPORTS_PER_SIGNATURE = 5000;
+// Real SPL Token account size, verified against the SPL Token program's
+// own account layout (same 165-byte constant already relied on
+// elsewhere in this codebase's fee-sponsorship work) — the Associated
+// Token Account program computes this rent internally via a CPI, so
+// unlike SystemProgram.createAccount's own explicit `lamports` field
+// (read directly from instruction data below), there's nothing to read
+// off an ATA-Create instruction itself; this is what
+// getMinimumBalanceForRentExemption is actually pricing.
+const SPL_TOKEN_ACCOUNT_SPACE = 165;
+const COMPUTE_BUDGET_PROGRAM_ID = 'ComputeBudget111111111111111111111111111111';
+// ComputeBudgetInstruction enum's SetComputeUnitLimit variant.
+const COMPUTE_BUDGET_SET_UNIT_LIMIT_DISCRIMINANT = 2;
+// Not profit — see this section's own header, point 1. Sized to cover
+// the real, if modest, cost of eventually converting this wallet's
+// accumulated USDC back into the SOL it actually needs to keep
+// sponsoring trades with.
+const SPONSORSHIP_RECOVERY_BUFFER_PCT = 0.01;
+// Simulate-then-correct margin over the REAL measured compute units —
+// never a guessed absolute number. See this section's own header,
+// point 3.
+const COMPUTE_BUDGET_SAFETY_MULTIPLE = 1.1;
+
+/**
+ * Real lamports cost of sponsoring this specific transaction: the base
+ * network fee (one signature per required signer) plus any account-rent
+ * this fee payer is now funding, per the account-creation rewrite above.
+ * Reads directly off the ORIGINAL (pre-rewrite) instructions — a
+ * SystemProgram.createAccount/-WithSeed instruction's own `lamports`
+ * field (the u64 immediately after the 4-byte discriminant, per
+ * system_instruction.rs) already carries the exact rent-exempt amount
+ * whoever built this route funded it with; an Associated Token Account
+ * Create/CreateIdempotent instruction carries no such field (the program
+ * computes it internally), so that case is priced via
+ * `tokenAccountRentExemptLamports` — resolved once, live, by the caller
+ * (connection.getMinimumBalanceForRentExemption), never hardcoded.
+ * Pure and independently testable — no network I/O of its own.
+ */
+export function estimateSponsorshipLamportsCost(
+  instructions: InstanceType<typeof import('@solana/web3.js').TransactionInstruction>[],
+  numRequiredSignatures: number,
+  tokenAccountRentExemptLamports: number,
+): number {
+  let rentCost = 0;
+  let needsTokenAccountRent = false;
+  for (const ix of instructions) {
+    const programId = ix.programId.toBase58();
+    if (programId === SYSTEM_PROGRAM_ID && ix.data.length >= 12 && SYSTEM_ACCOUNT_CREATING_DISCRIMINANTS.has(ix.data.readUInt32LE(0))) {
+      rentCost += Number(ix.data.readBigUInt64LE(4));
+    } else if (programId === ASSOCIATED_TOKEN_PROGRAM_ID) {
+      needsTokenAccountRent = true;
+    }
+  }
+  if (needsTokenAccountRent) rentCost += tokenAccountRentExemptLamports;
+  return Math.max(0, numRequiredSignatures) * LAMPORTS_PER_SIGNATURE + rentCost;
+}
+
+/**
+ * Real cost -> USDC base units, live-priced (never a hardcoded $
+ * estimate — SOL is too volatile for that, per the product decision
+ * this implements) plus the non-profit conversion buffer. Pure — the
+ * live price itself is fetched by the caller (walletPrices.ts) and
+ * passed in, so this stays independently testable against fixed inputs.
+ * Returns 0 (meaning: skip recovery, don't guess) whenever either input
+ * isn't a real positive number.
+ */
+export function sponsorshipRecoveryUsdcUnits(lamportsCost: number, solPriceUsd: number): number {
+  if (!(lamportsCost > 0) || !(solPriceUsd > 0)) return 0;
+  const solCost = lamportsCost / 1_000_000_000;
+  const recoveryUsd = solCost * solPriceUsd * (1 + SPONSORSHIP_RECOVERY_BUFFER_PCT);
+  return Math.round(recoveryUsd * 10 ** ASSET_ONCHAIN_DECIMALS.USDC);
+}
+
+/**
+ * Sets (or corrects) this instruction set's compute-unit budget to
+ * `units`, IN PLACE OF any existing SetComputeUnitLimit instruction
+ * Relay's own route may already include — two such instructions in one
+ * transaction is a runtime error, not additive, so this replaces rather
+ * than appends when one is already present. Prepends a new one
+ * (ComputeBudget instructions are conventionally first, though the
+ * runtime scans for them regardless of position) when none exists.
+ * Pure, independently testable.
+ */
+export function withComputeUnitLimit(
+  instructions: InstanceType<typeof import('@solana/web3.js').TransactionInstruction>[],
+  units: number,
+  computeUnitLimitInstruction: InstanceType<typeof import('@solana/web3.js').TransactionInstruction>,
+): InstanceType<typeof import('@solana/web3.js').TransactionInstruction>[] {
+  const existingIndex = instructions.findIndex(ix => ix.programId.toBase58() === COMPUTE_BUDGET_PROGRAM_ID && ix.data.length >= 1 && ix.data[0] === COMPUTE_BUDGET_SET_UNIT_LIMIT_DISCRIMINANT);
+  if (existingIndex >= 0) {
+    const copy = [...instructions];
+    copy[existingIndex] = computeUnitLimitInstruction;
+    return copy;
+  }
+  return [computeUnitLimitInstruction, ...instructions];
+}
+
 async function signAndSendSponsoredSolanaStep(
   instructions: InstanceType<typeof import('@solana/web3.js').TransactionInstruction>[],
   lookupTables: InstanceType<typeof import('@solana/web3.js').AddressLookupTableAccount>[],
   keypair: InstanceType<typeof import('@solana/web3.js').Keypair>,
   connection: InstanceType<typeof import('@solana/web3.js').Connection>,
 ): Promise<{signature: string; warnings: string[]}> {
-  const [{PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction}, bs58Module] = await Promise.all([import('@solana/web3.js'), import('bs58')]);
+  const [{PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction, ComputeBudgetProgram}, bs58Module, splToken] = await Promise.all([
+    import('@solana/web3.js'),
+    import('bs58'),
+    import('@solana/spl-token'),
+  ]);
   const bs58 = bs58Module.default;
   const feePayerPubkey = new PublicKey(await getSolanaFeePayerPublicKey());
   const rewrittenInstructions = rewriteAccountCreationFundingInstructions(instructions, feePayerPubkey, TransactionInstruction);
 
   const {blockhash} = await connection.getLatestBlockhash('confirmed');
-  const message = new TransactionMessage({payerKey: feePayerPubkey, instructions: rewrittenInstructions, recentBlockhash: blockhash}).compileToV0Message(lookupTables);
+  let finalInstructions = rewrittenInstructions;
+
+  // Cost recovery — strictly opportunistic, per this file's own header
+  // above. Any failure anywhere in this block (no live price, no/not
+  // enough USDC, a bad simulation) is caught and logged; it never
+  // prevents the plain sponsored transaction below from going out.
+  try {
+    const usdcMintAddress = TOKEN_ADDRESSES.USDC?.solana;
+    if (usdcMintAddress) {
+      const probeMessage = new TransactionMessage({payerKey: feePayerPubkey, instructions: rewrittenInstructions, recentBlockhash: blockhash}).compileToV0Message(lookupTables);
+      const numRequiredSignatures = probeMessage.header.numRequiredSignatures;
+      const usdcMint = new PublicKey(usdcMintAddress);
+      const needsTokenAccountRent = instructions.some(ix => ix.programId.toBase58() === ASSOCIATED_TOKEN_PROGRAM_ID);
+      const tokenAccountRentExemptLamports = needsTokenAccountRent ? await connection.getMinimumBalanceForRentExemption(SPL_TOKEN_ACCOUNT_SPACE) : 0;
+      const lamportsCost = estimateSponsorshipLamportsCost(instructions, numRequiredSignatures, tokenAccountRentExemptLamports);
+
+      const prices = await fetchWalletPrices().catch(() => ({}) as Record<string, number>);
+      const recoveryUnits = sponsorshipRecoveryUsdcUnits(lamportsCost, prices.SOL ?? 0);
+
+      if (recoveryUnits > 0) {
+        const userUsdcAta = await splToken.getAssociatedTokenAddress(usdcMint, keypair.publicKey);
+        const userUsdcBalance = await connection.getTokenAccountBalance(userUsdcAta).catch(() => null);
+        const userUsdcUnits = userUsdcBalance ? Number(userUsdcBalance.value.amount) : 0;
+
+        if (userUsdcUnits >= recoveryUnits) {
+          const sponsorUsdcAta = await splToken.getAssociatedTokenAddress(usdcMint, feePayerPubkey);
+          const sponsorAtaInfo = await connection.getAccountInfo(sponsorUsdcAta);
+          const candidateInstructions = [...rewrittenInstructions];
+          if (!sponsorAtaInfo) {
+            // The sponsor funds its OWN receiving account with its OWN
+            // signature — no user funds touched by this instruction.
+            candidateInstructions.push(splToken.createAssociatedTokenAccountInstruction(feePayerPubkey, sponsorUsdcAta, feePayerPubkey, usdcMint));
+          }
+          candidateInstructions.push(splToken.createTransferInstruction(userUsdcAta, sponsorUsdcAta, keypair.publicKey, recoveryUnits));
+
+          const candidateMessage = new TransactionMessage({payerKey: feePayerPubkey, instructions: candidateInstructions, recentBlockhash: blockhash}).compileToV0Message(lookupTables);
+          const candidateTransaction = new VersionedTransaction(candidateMessage);
+          const simulation = await connection.simulateTransaction(candidateTransaction, {sigVerify: false, replaceRecentBlockhash: true});
+
+          if (!simulation.value.err && typeof simulation.value.unitsConsumed === 'number') {
+            const safeUnits = Math.ceil(simulation.value.unitsConsumed * COMPUTE_BUDGET_SAFETY_MULTIPLE);
+            const computeUnitLimitInstruction = ComputeBudgetProgram.setComputeUnitLimit({units: safeUnits});
+            finalInstructions = withComputeUnitLimit(candidateInstructions, safeUnits, computeUnitLimitInstruction);
+          } else if (simulation.value.err) {
+            console.warn('[sponsorshipRecovery] Augmented transaction did not simulate clean — sending the plain sponsored transaction instead:', JSON.stringify(simulation.value.err));
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[sponsorshipRecovery] Skipping cost recovery for this trade:', err instanceof Error ? err.message : String(err));
+  }
+
+  const message = new TransactionMessage({payerKey: feePayerPubkey, instructions: finalInstructions, recentBlockhash: blockhash}).compileToV0Message(lookupTables);
   const transaction = new VersionedTransaction(message);
   // The fee payer here is deliberately Mango's own sponsor, not the
   // user — that's the whole point of this function. expectedSigner

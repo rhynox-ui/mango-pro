@@ -17,9 +17,14 @@
 // Run: node --experimental-strip-types scripts/verify-solana-fee-sponsor.mjs
 
 import assert from 'node:assert/strict';
-import {Keypair, PublicKey, SystemProgram, TransactionInstruction} from '@solana/web3.js';
-import {createAssociatedTokenAccountInstruction, getAssociatedTokenAddressSync} from '@solana/spl-token';
-import {rewriteAccountCreationFundingInstructions} from '../src/core/executeRelayQuote.ts';
+import {ComputeBudgetProgram, Keypair, PublicKey, SystemProgram, TransactionInstruction} from '@solana/web3.js';
+import {createAssociatedTokenAccountInstruction, createTransferInstruction, getAssociatedTokenAddressSync} from '@solana/spl-token';
+import {
+  estimateSponsorshipLamportsCost,
+  rewriteAccountCreationFundingInstructions,
+  sponsorshipRecoveryUsdcUnits,
+  withComputeUnitLimit,
+} from '../src/core/executeRelayQuote.ts';
 
 let n = 0;
 function check(label, fn) {
@@ -117,6 +122,89 @@ check('A multi-instruction transaction only rewrites the account-creation instru
   const [rewrittenCreate, rewrittenTransfer] = rewriteAccountCreationFundingInstructions([createIx, transferIx], feePayer, TransactionInstruction);
   assert.ok(fundingAccountOf(rewrittenCreate).equals(feePayer), 'the account-creation instruction is rewritten');
   assert.ok(fundingAccountOf(rewrittenTransfer).equals(user), 'the real transfer instruction keeps the real user as sender');
+});
+
+// ---------------------------------------------------------------------
+// Sponsorship cost recovery — estimateSponsorshipLamportsCost,
+// sponsorshipRecoveryUsdcUnits, withComputeUnitLimit. See
+// executeRelayQuote.ts's own header on this feature for the full design
+// contract; these checks pin the pure math, not the network-dependent
+// simulate-and-decide flow around it (untestable offline by nature).
+
+check('estimateSponsorshipLamportsCost: base fee only, no account creation', () => {
+  const transferIx = SystemProgram.transfer({fromPubkey: user, toPubkey: recipient, lamports: 500_000});
+  const cost = estimateSponsorshipLamportsCost([transferIx], 2, 2_039_280);
+  assert.equal(cost, 2 * 5000, 'no account creation means no rent added, regardless of the token-account-rent argument passed in');
+});
+
+check('estimateSponsorshipLamportsCost: SystemProgram.createAccount — reads the REAL lamports field off the instruction, not the passed-in rent argument', () => {
+  const createIx = SystemProgram.createAccount({fromPubkey: user, newAccountPubkey: newAccount, lamports: 2_039_280, space: 165, programId: TOKEN_LIKE_PROGRAM_ID()});
+  const cost = estimateSponsorshipLamportsCost([createIx], 2, 999); // a deliberately wrong rent argument
+  assert.equal(cost, 2 * 5000 + 2_039_280, 'System.createAccount rent must come from the instruction data itself, never the ATA-rent argument');
+});
+
+check('estimateSponsorshipLamportsCost: Associated Token Account create — uses the passed-in rent-exempt lamports (the program computes this internally, so there is nothing to read off the instruction)', () => {
+  const ata = getAssociatedTokenAddressSync(mint, recipient);
+  const ataIx = createAssociatedTokenAccountInstruction(user, ata, recipient, mint);
+  const cost = estimateSponsorshipLamportsCost([ataIx], 2, 2_039_280);
+  assert.equal(cost, 2 * 5000 + 2_039_280);
+});
+
+check('estimateSponsorshipLamportsCost: both a System.createAccount AND an ATA-create in the same route — costs add', () => {
+  const createIx = SystemProgram.createAccount({fromPubkey: user, newAccountPubkey: newAccount, lamports: 2_039_280, space: 165, programId: TOKEN_LIKE_PROGRAM_ID()});
+  const ata = getAssociatedTokenAddressSync(mint, recipient);
+  const ataIx = createAssociatedTokenAccountInstruction(user, ata, recipient, mint);
+  const cost = estimateSponsorshipLamportsCost([createIx, ataIx], 2, 2_039_280);
+  assert.equal(cost, 2 * 5000 + 2_039_280 + 2_039_280);
+});
+
+check('sponsorshipRecoveryUsdcUnits: real numbers — ~0.00205 SOL at $150/SOL, plus the 1% conversion buffer', () => {
+  const lamportsCost = 2_049_280; // ~0.00205 SOL: base fee (2 sigs) + one token account's rent
+  const units = sponsorshipRecoveryUsdcUnits(lamportsCost, 150);
+  const solCost = lamportsCost / 1e9;
+  const expectedUsd = solCost * 150 * 1.01;
+  assert.equal(units, Math.round(expectedUsd * 1_000_000), 'must track the live price and the documented 1% buffer exactly, not an independently-rounded approximation');
+});
+
+check('sponsorshipRecoveryUsdcUnits: no live SOL price (0, NaN, or missing) never guesses — returns 0, meaning "skip recovery"', () => {
+  assert.equal(sponsorshipRecoveryUsdcUnits(2_049_280, 0), 0);
+  assert.equal(sponsorshipRecoveryUsdcUnits(2_049_280, NaN), 0);
+  assert.equal(sponsorshipRecoveryUsdcUnits(2_049_280, -5), 0);
+});
+
+check('sponsorshipRecoveryUsdcUnits: zero or negative cost never guesses — returns 0', () => {
+  assert.equal(sponsorshipRecoveryUsdcUnits(0, 150), 0);
+  assert.equal(sponsorshipRecoveryUsdcUnits(-1, 150), 0);
+});
+
+check('withComputeUnitLimit: no existing SetComputeUnitLimit — prepends one', () => {
+  const transferIx = SystemProgram.transfer({fromPubkey: user, toPubkey: recipient, lamports: 500_000});
+  const budgetIx = ComputeBudgetProgram.setComputeUnitLimit({units: 42_000});
+  const result = withComputeUnitLimit([transferIx], 42_000, budgetIx);
+  assert.equal(result.length, 2);
+  assert.ok(result[0] === budgetIx, 'the compute-budget instruction must be prepended, not appended');
+  assert.ok(result[1] === transferIx, 'the real instruction must be untouched and still present');
+});
+
+check('withComputeUnitLimit: an existing SetComputeUnitLimit from Relay\'s own route is REPLACED, not duplicated (two would be a runtime error)', () => {
+  const existingBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({units: 200_000});
+  const transferIx = SystemProgram.transfer({fromPubkey: user, toPubkey: recipient, lamports: 500_000});
+  const newBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({units: 42_000});
+  const result = withComputeUnitLimit([existingBudgetIx, transferIx], 42_000, newBudgetIx);
+  assert.equal(result.length, 2, 'must not grow — replace in place, never append a second ComputeBudget instruction');
+  assert.ok(result[0] === newBudgetIx, 'the stale limit must be replaced with the newly measured one');
+  assert.ok(result[1] === transferIx, 'every other instruction, and its position, must be untouched');
+});
+
+check('withComputeUnitLimit: a real SPL transfer instruction (the actual recovery instruction) is left alone alongside the budget fix', () => {
+  const ata1 = getAssociatedTokenAddressSync(mint, user);
+  const ata2 = getAssociatedTokenAddressSync(mint, recipient);
+  const transferIx = createTransferInstruction(ata1, ata2, user, 1_000_000);
+  const budgetIx = ComputeBudgetProgram.setComputeUnitLimit({units: 4_500});
+  const result = withComputeUnitLimit([transferIx], 4_500, budgetIx);
+  assert.equal(result.length, 2);
+  assert.ok(result.includes(transferIx));
+  assert.ok(result.includes(budgetIx));
 });
 
 // A stand-in programId for the two SystemProgram.createAccount*
