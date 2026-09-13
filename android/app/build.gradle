@@ -142,7 +142,18 @@ android {
         // -PVERSION_CODE=<github.run_number> (always increasing, no
         // tracked state to forget to update); a local/manual build with
         // no property set stays at 1, same as before.
-        versionCode (project.findProperty('VERSION_CODE') ?: '1').toInteger()
+        // Isolated into a local var rather than inlined as
+        // `versionCode (project.findProperty('VERSION_CODE') ?: '1').toInteger()`
+        // — that inline form built and pushed clean but was never
+        // actually exercised by a real CI run until the workflow's own
+        // separate YAML bug (see android-debug-apk.yml's own commit
+        // history) got fixed; the very first real run then failed with
+        // "A problem occurred evaluating project ':app' > Value is
+        // null" at this exact line. Splitting the elvis+toInteger()
+        // chain out of the single-argument DSL "command" call removes
+        // whatever ambiguity AGP's newer Groovy DSL parsing hit.
+        def resolvedVersionCode = (project.hasProperty('VERSION_CODE') ? project.property('VERSION_CODE') : '1').toString().toInteger()
+        versionCode resolvedVersionCode
         versionName "1.0"
 
         // Particle Auth (Google login) — read from android/gradle.properties
