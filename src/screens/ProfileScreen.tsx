@@ -43,6 +43,7 @@ import {getReferralStats, setReferralHandle, type ReferralSigner} from '../refer
 import {signMessageViaParticle} from '../wallet/particleSigning';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {useSession} from '../wallet/SessionContext';
+import type {DemoToken} from './TokenTradeScreen';
 
 function formatUsd(n: number): string {
   return n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
@@ -108,12 +109,15 @@ export function ProfileScreen({
   onOpenSettings,
   onOpenHistory,
   onOpenNotifications,
+  onOpenToken,
   pendingAction,
   onPendingActionHandled,
 }: {
   onOpenSettings: () => void;
   onOpenHistory: () => void;
   onOpenNotifications: () => void;
+  /** Tapping a position (Open or Closed) — hands the token straight to the Trade screen, same shape HomeScreen/SearchScreen already use to get there. */
+  onOpenToken?: (token: DemoToken) => void;
   /** Set by App.tsx when navigation here should also open a specific action (e.g. Settings' "Deposit and Withdraw" row, or Home's own Deposit button) — consumed once below, not a persistent mode. */
   pendingAction?: 'withdraw' | 'deposit' | null;
   onPendingActionHandled?: () => void;
@@ -647,7 +651,12 @@ export function ProfileScreen({
       {positionTab === 'Open' && assetFilter !== 'Perps' && openPositions.length > 0 ? (
         <View style={styles.closedTradesList}>
           {openPositions.map(position => (
-            <View key={position.key} style={styles.closedTradeRow}>
+            <TouchableOpacity
+              key={position.key}
+              style={styles.closedTradeRow}
+              activeOpacity={0.6}
+              disabled={!onOpenToken}
+              onPress={() => onOpenToken?.({chainKey: position.chainKey, address: position.tokenAddress, symbol: position.symbol, imageUrl: position.imageUrl})}>
               <AssetIcon symbol={position.symbol} imageUrl={position.imageUrl} size={30} />
               <View style={styles.closedTradeMain}>
                 <Text style={styles.closedTradeTitle} numberOfLines={1}>
@@ -660,7 +669,7 @@ export function ProfileScreen({
               <View style={styles.closedTradeRight}>
                 <Text style={styles.closedTradeTitle}>{position.valueUsd != null ? `$${formatUsd(position.valueUsd)}` : '—'}</Text>
               </View>
-            </View>
+            </TouchableOpacity>
           ))}
         </View>
       ) : positionTab === 'Closed' && assetFilter !== 'Perps' && closedPositions.length > 0 ? (
@@ -670,7 +679,12 @@ export function ProfileScreen({
               row per trade — matches the Open tab's own per-token shape
               instead of showing a raw, unfiltered trade log here. */}
           {closedPositions.map(position => (
-            <View key={position.key} style={styles.closedTradeRow}>
+            <TouchableOpacity
+              key={position.key}
+              style={styles.closedTradeRow}
+              activeOpacity={0.6}
+              disabled={!onOpenToken}
+              onPress={() => onOpenToken?.({chainKey: position.chainKey, address: position.tokenAddress, symbol: position.symbol, imageUrl: position.imageUrl})}>
               <AssetIcon symbol={position.symbol} imageUrl={position.imageUrl} size={30} />
               <View style={styles.closedTradeMain}>
                 <Text style={styles.closedTradeTitle} numberOfLines={1}>
@@ -683,7 +697,7 @@ export function ProfileScreen({
               <View style={styles.closedTradeRight}>
                 <Text style={styles.closedTradeWhen}>{formatWhen(position.lastTradeAt)}</Text>
               </View>
-            </View>
+            </TouchableOpacity>
           ))}
         </View>
       ) : (

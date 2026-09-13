@@ -139,6 +139,35 @@ check('multiple round-trips on the same token collapse into ONE closed row, not 
   assert.equal(closed[0].lastTradeAt, 4);
 });
 
+check('a real round-trip with rounding leftover (not exactly zero) still shows as closed', () => {
+  // Regression: DUST_EPSILON used to be a fixed 1e-9, but payAmount/
+  // receivedAmountFormatted are already-rounded display strings, not
+  // base units — a real sell of a large-amount buy routinely leaves a
+  // remainder many orders of magnitude bigger than 1e-9 (slippage
+  // between the buy and sell price, formatting rounding on both sides).
+  // A wallet that had genuinely fully exited never showed as closed.
+  const closed = computeClosedPositions([
+    buy({timestamp: 1, tokenAddress: '0xToken', symbol: 'BREW', amount: 1_284_991.4213}),
+    sell({timestamp: 2, tokenAddress: '0xToken', symbol: 'BREW', amount: 1_284_988.7706}), // leftover ~2.65, not ~0
+  ]);
+  assert.equal(closed.length, 1, 'a real-world rounding leftover should still read as closed');
+  const open = computeOpenPositions([
+    buy({timestamp: 1, tokenAddress: '0xToken', symbol: 'BREW', amount: 1_284_991.4213}),
+    sell({timestamp: 2, tokenAddress: '0xToken', symbol: 'BREW', amount: 1_284_988.7706}),
+  ]);
+  assert.equal(open.length, 0, 'the same trade pair should not ALSO show as open');
+});
+
+check('a genuinely large remainder (not just rounding) still shows as open, not closed', () => {
+  // The relative threshold must not swallow a real, meaningful holding
+  // just because it's small relative to a huge original buy.
+  const closed = computeClosedPositions([buy({timestamp: 1, tokenAddress: '0xToken', symbol: 'BREW', amount: 1_000_000}), sell({timestamp: 2, tokenAddress: '0xToken', symbol: 'BREW', amount: 900_000})]);
+  assert.equal(closed.length, 0, 'a real 10% remaining holding must not be marked closed');
+  const open = computeOpenPositions([buy({timestamp: 1, tokenAddress: '0xToken', symbol: 'BREW', amount: 1_000_000}), sell({timestamp: 2, tokenAddress: '0xToken', symbol: 'BREW', amount: 900_000})]);
+  assert.equal(open.length, 1);
+  assert.equal(open[0].amountHeld, 100_000);
+});
+
 check('closed positions across different tokens sort newest-closed first', () => {
   const closed = computeClosedPositions([
     buy({timestamp: 1, tokenAddress: '0xTokenA', symbol: 'AAA', amount: 10}),

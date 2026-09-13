@@ -525,6 +525,14 @@ function AppInner(): React.JSX.Element {
     setTab('swap');
   }
 
+  // Profile's own Open/Closed position rows — tapping one takes you
+  // straight to trading that exact token, same destination Home's
+  // discovery feed and Search results already land on.
+  function openPositionToken(token: DemoToken) {
+    setSelectedToken(token);
+    setTab('swap');
+  }
+
   return (
     <SafeAreaProvider>
       {/* backgroundColor is gone from RN 0.87's StatusBar types — recent
@@ -579,6 +587,7 @@ function AppInner(): React.JSX.Element {
                     onOpenSettings={openSettings}
                     onOpenHistory={openHistory}
                     onOpenNotifications={openNotifications}
+                    onOpenToken={openPositionToken}
                     pendingAction={pendingProfileAction}
                     onPendingActionHandled={() => setPendingProfileAction(null)}
                   />

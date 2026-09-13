@@ -59,6 +59,17 @@ function normalizedTokenKey(chainKey: ChainKey, tokenAddress: string): string {
 // not base units — so exact-zero cancellation isn't guaranteed).
 const DUST_EPSILON = 1e-9;
 
+// A real round-trip's leftover almost never lands within 1e-9 of zero —
+// slippage between the buy and sell prices, and the buy/sell amounts
+// both being independently-rounded display strings, routinely leave a
+// remainder many orders of magnitude larger than that, especially for
+// tokens traded in the thousands/millions. Fixed EPSILON alone meant a
+// token someone had genuinely fully exited almost never registered as
+// closed. Judging "closed" relative to how much was ever bought (a
+// leftover under 0.5% of the total position) absorbs that real-world
+// rounding without needing an exact zero.
+const CLOSED_DUST_FRACTION = 0.005;
+
 /**
  * Aggregates net-held amount per (chainKey, tokenAddress) across every
  * successful trade — shared by computeOpenPositions (still held) and
@@ -68,8 +79,13 @@ const DUST_EPSILON = 1e-9;
  * scoped to one account (filterTxHistoryForAccount) — this function
  * doesn't re-check ownership.
  */
-function aggregatePositionsByToken(entries: TxHistoryEntry[]): OpenPosition[] {
-  const byKey = new Map<string, OpenPosition>();
+// Internal only — totalBought is what CLOSED_DUST_FRACTION needs to
+// judge "closed" relative to position size; neither OpenPosition nor
+// ClosedPosition expose it publicly.
+type AggregatedPosition = OpenPosition & {totalBought: number};
+
+function aggregatePositionsByToken(entries: TxHistoryEntry[]): AggregatedPosition[] {
+  const byKey = new Map<string, AggregatedPosition>();
   // Oldest first, so a later trade's symbol/imageUrl (a search index
   // that resolved an icon after an earlier trade didn't) is what wins,
   // and lastTradeAt naturally ends up as the most recent timestamp.
@@ -86,6 +102,7 @@ function aggregatePositionsByToken(entries: TxHistoryEntry[]): OpenPosition[] {
     const existing = byKey.get(key);
     if (existing) {
       existing.amountHeld += delta;
+      if (entry.isBuySide) existing.totalBought += amount;
       existing.symbol = symbol;
       existing.lastTradeAt = entry.timestamp;
       if (entry.tokenImageUrl) existing.imageUrl = entry.tokenImageUrl;
@@ -98,6 +115,7 @@ function aggregatePositionsByToken(entries: TxHistoryEntry[]): OpenPosition[] {
         symbol,
         imageUrl: entry.tokenImageUrl ?? null,
         amountHeld: delta,
+        totalBought: entry.isBuySide ? amount : 0,
         lastTradeAt: entry.timestamp,
       });
     }
@@ -106,9 +124,17 @@ function aggregatePositionsByToken(entries: TxHistoryEntry[]): OpenPosition[] {
   return [...byKey.values()];
 }
 
+// Shared by both functions below so a position can never land in BOTH
+// tabs at once (or neither) — "closed" and "still held" are each
+// other's exact complement, not two independently-tuned thresholds that
+// could disagree on the same position.
+function isDust(position: AggregatedPosition): boolean {
+  return Math.abs(position.amountHeld) <= Math.max(DUST_EPSILON, position.totalBought * CLOSED_DUST_FRACTION);
+}
+
 /** Tokens still genuinely held — a real, non-dust net amount left after every Buy/Sell nets out. */
 export function computeOpenPositions(entries: TxHistoryEntry[]): OpenPosition[] {
-  return aggregatePositionsByToken(entries).filter(p => p.amountHeld > DUST_EPSILON);
+  return aggregatePositionsByToken(entries).filter(p => p.amountHeld > 0 && !isDust(p));
 }
 
 /**
@@ -125,9 +151,9 @@ export function computeOpenPositions(entries: TxHistoryEntry[]): OpenPosition[] 
  */
 export function computeClosedPositions(entries: TxHistoryEntry[]): ClosedPosition[] {
   return aggregatePositionsByToken(entries)
-    .filter(p => Math.abs(p.amountHeld) <= DUST_EPSILON)
+    .filter(p => p.totalBought > 0 && isDust(p))
     .sort((a, b) => b.lastTradeAt - a.lastTradeAt)
-    .map(({amountHeld: _amountHeld, ...closed}) => closed);
+    .map(({amountHeld: _amountHeld, totalBought: _totalBought, ...closed}) => closed);
 }
 
 /** Attaches a live $ value to each position, in parallel, one DexScreener lookup per position (already short-lived-cached there). */
