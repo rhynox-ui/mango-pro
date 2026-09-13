@@ -173,10 +173,22 @@ export function assertSolanaTransactionMatchesIntent(
 ): string[] {
   const described = describeSolanaTransaction(transaction);
   if (!described) {
-    // Not a refusal: an unrecognised shape means this check couldn't
-    // run, and blocking a trade on our own inability to parse it would
-    // be a self-inflicted outage. Said out loud instead of swallowed.
-    return ["This trade's transaction could not be inspected before signing (unrecognised transaction format)."];
+    // Promoted from a warning to a hard block (real, confirmed finding
+    // from an uploaded audit's MANGO-H02, verified against this exact
+    // function before acting): an inability to inspect a transaction is
+    // not evidence it's safe, and a wallet should never sign what it
+    // cannot verify. Low risk of blocking a legitimate trade — every
+    // transaction this app itself ever builds (from Relay's returned
+    // instructions, via @solana/web3.js's own TransactionMessage/
+    // VersionedTransaction, or a legacy Transaction) always matches one
+    // of the two shapes describeSolanaTransaction recognizes; reaching
+    // this branch means something already went wrong upstream (a
+    // malformed/tampered object), which is exactly the case a wallet
+    // should refuse, not warn about and sign anyway.
+    throw new SolanaIntentError(
+      "This trade's transaction could not be inspected before signing (unrecognised transaction format). " +
+        'It was stopped before signing; nothing was sent and nothing was spent.',
+    );
   }
 
   const allowedFeePayer = expectedFeePayer ?? expectedSigner;
@@ -195,15 +207,42 @@ export function assertSolanaTransactionMatchesIntent(
     );
   }
 
+  // Promoted from warnings to hard blocks (real, confirmed finding from
+  // an uploaded audit's MANGO-H03, verified against this exact function
+  // before acting) — this file's own header already concluded "None of
+  // the three belongs in a swap route" when these were first added as
+  // warnings; that conclusion hasn't changed, only the enforcement has.
+  // This app's own two Solana transaction sources were checked directly
+  // before promoting: executeRelayQuote.ts's cost-recovery addition only
+  // ever appends an SPL Transfer (discriminant 3) and, at most, an
+  // Associated-Token-Account Create — neither is one of these four — and
+  // this app requests Solana's native-SOL identifier from Relay, never
+  // WSOL (see executeRelayQuote.ts's own header), so there's no
+  // wrap/unwrap step of this app's own construction that would need a
+  // CloseAccount either. A legitimate route hitting this block produces
+  // a loud, specific, immediately-actionable error naming exactly which
+  // instruction tripped it — recoverable by relaxing that one case —
+  // which is safer than the alternative this replaces: a warning nothing
+  // in this app's UI surfaced, on an instruction class real Solana
+  // wallet-drain patterns actually use.
   const warnings: string[] = [];
   for (const ix of described.instructions) {
     if (ix.programId !== SPL_TOKEN_PROGRAM_ID && ix.programId !== SPL_TOKEN_2022_PROGRAM_ID) continue;
     if (ix.firstDataByte === SPL_APPROVE || ix.firstDataByte === SPL_APPROVE_CHECKED) {
-      warnings.push('This route grants a delegate standing authority over one of your token accounts, which a swap does not normally need.');
+      throw new SolanaIntentError(
+        'This route grants a delegate standing authority over one of your token accounts, which a swap does not normally need. ' +
+          'It was stopped before signing; nothing was sent and nothing was spent.',
+      );
     } else if (ix.firstDataByte === SPL_SET_AUTHORITY) {
-      warnings.push('This route changes the authority on one of your token accounts.');
+      throw new SolanaIntentError(
+        'This route changes the authority on one of your token accounts, which a swap does not normally need. ' +
+          'It was stopped before signing; nothing was sent and nothing was spent.',
+      );
     } else if (ix.firstDataByte === SPL_CLOSE_ACCOUNT) {
-      warnings.push('This route closes one of your token accounts.');
+      throw new SolanaIntentError(
+        'This route closes one of your token accounts, which a swap does not normally need. ' +
+          'It was stopped before signing; nothing was sent and nothing was spent.',
+      );
     }
   }
   return warnings;

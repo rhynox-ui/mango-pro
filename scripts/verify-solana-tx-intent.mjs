@@ -122,37 +122,42 @@ check('an empty-data instruction does not crash the parser', () => {
   assertSolanaTransactionMatchesIntent(versioned(USER, [{programIndex: 1, dataByte: null}]), {expectedSigner: USER});
 });
 
-// ---- the warnings ---------------------------------------------------
-check("WARNS on an spl-token Approve (Solana's unlimited-allowance shape)", () => {
-  const warnings = assertSolanaTransactionMatchesIntent(versioned(USER, [{programIndex: 1, dataByte: 4}]), {expectedSigner: USER});
-  assert(warnings.length === 1 && warnings[0].includes('delegate'), JSON.stringify(warnings));
+// ---- the hard blocks --------------------------------------------------
+// Promoted from warnings to hard blocks (real, confirmed finding from an
+// uploaded audit's MANGO-H03, verified against solanaTxIntent.ts before
+// acting — see that file's own updated comment). Regression coverage
+// updated to match: these four instruction classes must now throw, not
+// return a warning string nobody's UI necessarily surfaced.
+check("BLOCKS an spl-token Approve (Solana's unlimited-allowance shape)", () => {
+  blocks(() => assertSolanaTransactionMatchesIntent(versioned(USER, [{programIndex: 1, dataByte: 4}]), {expectedSigner: USER}), 'delegate');
 });
-check('WARNS on ApproveChecked as well', () => {
-  const warnings = assertSolanaTransactionMatchesIntent(versioned(USER, [{programIndex: 1, dataByte: 13}]), {expectedSigner: USER});
-  assert(warnings.length === 1 && warnings[0].includes('delegate'), JSON.stringify(warnings));
+check('BLOCKS ApproveChecked as well', () => {
+  blocks(() => assertSolanaTransactionMatchesIntent(versioned(USER, [{programIndex: 1, dataByte: 13}]), {expectedSigner: USER}), 'delegate');
 });
-check('WARNS on SetAuthority', () => {
-  const warnings = assertSolanaTransactionMatchesIntent(versioned(USER, [{programIndex: 1, dataByte: 6}]), {expectedSigner: USER});
-  assert(warnings.length === 1 && warnings[0].includes('authority'), JSON.stringify(warnings));
+check('BLOCKS SetAuthority', () => {
+  blocks(() => assertSolanaTransactionMatchesIntent(versioned(USER, [{programIndex: 1, dataByte: 6}]), {expectedSigner: USER}), 'authority');
 });
-check('WARNS on CloseAccount', () => {
-  const warnings = assertSolanaTransactionMatchesIntent(versioned(USER, [{programIndex: 1, dataByte: 9}]), {expectedSigner: USER});
-  assert(warnings.length === 1 && warnings[0].includes('closes'), JSON.stringify(warnings));
+check('BLOCKS CloseAccount', () => {
+  blocks(() => assertSolanaTransactionMatchesIntent(versioned(USER, [{programIndex: 1, dataByte: 9}]), {expectedSigner: USER}), 'closes');
 });
 check('Token-2022 is checked, not just the classic token program', () => {
-  const warnings = assertSolanaTransactionMatchesIntent(versioned(USER, [{programIndex: 2, dataByte: 4}]), {expectedSigner: USER});
-  assert(warnings.length === 1, JSON.stringify(warnings));
+  blocks(() => assertSolanaTransactionMatchesIntent(versioned(USER, [{programIndex: 2, dataByte: 4}]), {expectedSigner: USER}), 'delegate');
 });
 check('the same byte under a NON-token program is not flagged', () => {
   // Byte 4 means something entirely different to the system program;
-  // matching on data bytes alone, without the program id, would produce
-  // a warning on every ordinary route.
+  // matching on data bytes alone, without the program id, would block
+  // every ordinary route.
   const warnings = assertSolanaTransactionMatchesIntent(versioned(USER, [{programIndex: 3, dataByte: 4}]), {expectedSigner: USER});
   assert(warnings.length === 0, JSON.stringify(warnings));
 });
-check('an unparseable transaction warns rather than blocking the trade', () => {
-  const warnings = assertSolanaTransactionMatchesIntent({nonsense: true}, {expectedSigner: USER});
-  assert(warnings.length === 1 && warnings[0].includes('could not be inspected'), JSON.stringify(warnings));
+check('an unparseable transaction is now a hard block, not a warning', () => {
+  // Promoted from warning to hard block (MANGO-H02, same verification
+  // discipline as above): an inability to inspect a transaction is not
+  // evidence it's safe. See solanaTxIntent.ts's own updated comment for
+  // why this is low-risk to legitimate trades — every shape this app
+  // itself ever builds is one of the two describeSolanaTransaction
+  // already recognizes.
+  blocks(() => assertSolanaTransactionMatchesIntent({nonsense: true}, {expectedSigner: USER}), 'could not be inspected');
 });
 
 // ---- sponsored transactions: fee payer != user, by design ----------
