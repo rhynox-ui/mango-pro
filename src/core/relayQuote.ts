@@ -238,8 +238,7 @@ export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQ
 
   const res = await postRelayQuote(body);
   if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`Relay quote failed (${res.status}): ${text || res.statusText}`);
+    throw new Error('Quote failed');
   }
   const quote = (await res.json()) as RelayQuote;
 
