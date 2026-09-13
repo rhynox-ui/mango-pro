@@ -488,7 +488,25 @@ export async function executeRelayQuote(
         const isPreBroadcastRejection = /invalid fields set on user operation|invalid useroperation|\baa[0-9]{2}\b|this transaction would revert/i.test(message);
         if (!isPreBroadcastRejection) throw err;
         console.warn('[smartAccount] Sponsored UserOperation rejected before broadcast, falling back to a plain transaction:', message);
-        hash = await sendRelayEvmStep(evmClients.walletClient!, evmClients.publicClient, item);
+        try {
+          hash = await sendRelayEvmStep(evmClients.walletClient!, evmClients.publicClient, item);
+        } catch (fallbackErr) {
+          // The user turned gasless ON specifically so they wouldn't need
+          // native gas — if the fallback then fails for exactly that
+          // reason, saying only "insufficient ETH" (sendRelayEvmStep's own
+          // message) hides the actual story: gasless was tried first and
+          // the bundler rejected it, THEN the fallback needed gas the
+          // wallet doesn't hold. Real, observed case: Pimlico sponsorship
+          // rejected on a chain it may not yet cover (unconfirmed — no
+          // network access from here to Pimlico's own chain-support docs
+          // to check), silently downgrading a "gasless" trade into one
+          // that still demands native gas with no explanation why.
+          const fallbackMessage = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+          if (/insufficient .* for network fees/i.test(fallbackMessage)) {
+            throw new Error(`Gasless trading isn't available for this route right now, so it fell back to a normal transaction — but ${fallbackMessage.charAt(0).toLowerCase()}${fallbackMessage.slice(1)}`);
+          }
+          throw fallbackErr;
+        }
       }
     } else {
       hash = await sendRelayEvmStep(evmClients.walletClient!, evmClients.publicClient, item);
