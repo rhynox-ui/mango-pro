@@ -48,6 +48,11 @@ export function TradeResultModal({
 }) {
   const {colors} = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
+  // A multi-step Solana trade (e.g. a wrap-then-swap) pushes one hash per
+  // step, but they're visually indistinguishable "View transaction" links
+  // to the user — only the last one (the actual settling trade) is worth
+  // surfacing; earlier steps are setup, not the trade itself.
+  const lastHash = hashes.length > 0 ? hashes[hashes.length - 1] : null;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onDone}>
@@ -70,16 +75,17 @@ export function TradeResultModal({
             </ScrollView>
           )}
           {isSuccess &&
-            hashes.map(hash => {
-              const url = result ? explorerUrlFor(result.chainKey, hash) : null;
+            lastHash &&
+            (() => {
+              const url = result ? explorerUrlFor(result.chainKey, lastHash) : null;
               return (
-                <TouchableOpacity key={hash} disabled={!url} onPress={() => url && Linking.openURL(url)} activeOpacity={0.7}>
+                <TouchableOpacity disabled={!url} onPress={() => url && Linking.openURL(url)} activeOpacity={0.7}>
                   <Text style={url ? styles.hashLink : styles.hashText} numberOfLines={1} ellipsizeMode="middle">
-                    {url ? 'View transaction →' : hash}
+                    {url ? 'View transaction →' : lastHash}
                   </Text>
                 </TouchableOpacity>
               );
-            })}
+            })()}
           {warnings.map(warning => (
             <Text key={warning} style={styles.warningText}>
               {warning}
@@ -96,19 +102,19 @@ export function TradeResultModal({
 
 function makeStyles(colors: Colors) {
   return StyleSheet.create({
-    overlay: {flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', padding: 32},
-    card: {backgroundColor: colors.panel, borderColor: colors.panelBorder, borderWidth: 1, borderRadius: 16, padding: 16, alignItems: 'center'},
-    iconCircle: {width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', marginBottom: 10},
+    overlay: {flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', padding: 40},
+    card: {backgroundColor: colors.panel, borderColor: colors.panelBorder, borderWidth: 1, borderRadius: 18, padding: 20, alignItems: 'center'},
+    iconCircle: {width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginBottom: 8},
     iconCircleSuccess: {backgroundColor: `${colors.gain}22`},
     iconCircleError: {backgroundColor: `${colors.danger}22`},
-    title: {color: colors.textPrimary, fontSize: 15, fontWeight: '800', textAlign: 'center'},
-    subtitle: {color: colors.textSecondary, fontSize: 12.5, textAlign: 'center', marginTop: 6},
+    title: {color: colors.textPrimary, fontSize: 14.5, fontWeight: '800', textAlign: 'center'},
+    subtitle: {color: colors.textSecondary, fontSize: 12, textAlign: 'center', marginTop: 4},
     errorScroll: {maxHeight: 90, marginTop: 6},
     errorText: {color: colors.danger, fontSize: 12.5, textAlign: 'center'},
-    hashLink: {color: colors.accent, fontSize: 12, fontWeight: '600', marginTop: 10, textAlign: 'center'},
-    hashText: {color: colors.textMuted, fontSize: 11, marginTop: 10, textAlign: 'center'},
+    hashLink: {color: colors.gain, fontSize: 12, fontWeight: '600', marginTop: 12, textAlign: 'center'},
+    hashText: {color: colors.textMuted, fontSize: 11, marginTop: 12, textAlign: 'center'},
     warningText: {color: colors.warning, fontSize: 11, textAlign: 'center', marginTop: 6},
-    doneButton: {backgroundColor: colors.ctaBg, borderRadius: 12, paddingVertical: 11, alignItems: 'center', alignSelf: 'stretch', marginTop: 14},
+    doneButton: {backgroundColor: colors.ctaBg, borderRadius: 12, paddingVertical: 12, alignItems: 'center', alignSelf: 'stretch', marginTop: 16},
     doneButtonText: {color: colors.ctaText, fontSize: 14, fontWeight: '700'},
   });
 }
