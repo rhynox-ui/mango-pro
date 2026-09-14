@@ -1160,6 +1160,25 @@ export async function executeRelayQuote(
     }
   }
 
+  // Pure observation, no effect on execution: a Base Convert reverted on
+  // the Depository with no decodable reason, and it's still unconfirmed
+  // whether Relay's own quote already included a separate approve step
+  // (it should, per Relay's docs, whenever usePermit isn't requested —
+  // this app never requests it) or whether the deposit item's approval
+  // needs to go to a different spender (e.g. Permit2) than the deposit
+  // call's own `to`. Logging exactly what pendingItems contains, before
+  // anything is signed, settles that on the next occurrence instead of
+  // requiring another guess.
+  console.warn(
+    '[executeRelayQuote] pendingItems:',
+    pendingItems.map(item => ({
+      chainId: item.data?.chainId,
+      to: item.data?.to,
+      selector: typeof item.data?.data === 'string' ? item.data.data.slice(0, 10) : undefined,
+      value: item.data?.value,
+    })),
+  );
+
   const warnings = assertQuoteSafeToSign(quote, tagged.intent, pendingItems);
   for (const warning of warnings) {
     console.warn(`[txIntentFirewall] ${warning}`);
