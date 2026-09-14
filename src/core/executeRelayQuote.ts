@@ -135,11 +135,22 @@ const EVM_APPROVE_ABI = [
  * blanket/unlimited approval, and never invoked on a route that already
  * works (the live allowance check below returns false immediately if
  * it's already sufficient, meaning this revert wasn't an allowance
- * problem at all). Any failure here (origin currency unknown/native,
- * live allowance read fails, the approve tx itself fails) is swallowed —
- * the caller falls back to surfacing the ORIGINAL revert exactly as it
- * did before this existed.
+ * problem at all).
+ *
+ * Returns WHY it didn't recover, not just whether it did — a Base Convert
+ * failure surfaced the gap this closes: every "didn't recover" case used
+ * to collapse into the same silent `false`, so a revert that survived
+ * recovery and one that was never an allowance problem at all were
+ * indistinguishable from the error the user saw. That made a second,
+ * different-chain failure with the same generic message undiagnosable
+ * without a live RPC trace this sandbox can't make. The reason is folded
+ * into the final error text below so the NEXT occurrence is self-
+ * explaining instead of needing another round of guessing.
  */
+type AllowanceRecoveryResult =
+  | {recovered: true}
+  | {recovered: false; reason: string};
+
 async function toppedUpOriginAllowance(
   publicClient: ReturnType<typeof createPublicClient>,
   owner: `0x${string}`,
@@ -147,18 +158,34 @@ async function toppedUpOriginAllowance(
   originToken: `0x${string}` | undefined,
   originAmount: bigint | undefined,
   sendApproveTx: (data: `0x${string}`) => Promise<void>,
-): Promise<boolean> {
-  if (!originToken || !originAmount || originAmount <= 0n) return false;
-  if (originToken.toLowerCase() === spender.toLowerCase()) return false;
+): Promise<AllowanceRecoveryResult> {
+  if (!originToken || !originAmount || originAmount <= 0n) {
+    return {recovered: false, reason: 'the origin currency for this quote is native, not an ERC-20 — an allowance can\'t be the cause'};
+  }
+  if (originToken.toLowerCase() === spender.toLowerCase()) {
+    return {recovered: false, reason: 'the reverting call already targets the origin token itself, not a spender that could need an allowance'};
+  }
+  let currentAllowance: bigint;
   try {
-    const currentAllowance = await publicClient.readContract({address: originToken, abi: ERC20_ALLOWANCE_ABI, functionName: 'allowance', args: [owner, spender]});
-    if (currentAllowance >= originAmount) return false;
+    currentAllowance = await publicClient.readContract({address: originToken, abi: ERC20_ALLOWANCE_ABI, functionName: 'allowance', args: [owner, spender]});
+  } catch (err) {
+    return {recovered: false, reason: `could not read the live allowance to check: ${err instanceof Error ? err.message : String(err)}`};
+  }
+  if (currentAllowance >= originAmount) {
+    return {recovered: false, reason: 'the allowance is already sufficient for this amount — not an approval problem'};
+  }
+  try {
     const data = encodeFunctionData({abi: EVM_APPROVE_ABI, functionName: 'approve', args: [spender, originAmount]});
     await sendApproveTx(data);
-    return true;
-  } catch {
-    return false;
+    return {recovered: true};
+  } catch (err) {
+    return {recovered: false, reason: `the approval transaction itself failed: ${err instanceof Error ? err.message : String(err)}`};
   }
+}
+
+/** Appends WHY the allowance-recovery attempt didn't save this call, so the final error is self-explaining instead of a bare repeat of the same revert. */
+function revertMessageAfterFailedRecovery(message: string, recovery: {recovered: false; reason: string}): string {
+  return `${message} (Checked for a missing allowance first: ${recovery.reason}.)`;
 }
 
 /**
@@ -192,15 +219,16 @@ async function sendRelayEvmStep(
     // and rejected the call — a transport-level hiccup isn't evidence
     // the real transaction would fail.
     if (message && !/timeout|network|fetch|429|403/i.test(message)) {
-      const recovered = await toppedUpOriginAllowance(publicClient, account.address, tx.to, originToken, originAmount, async approveData => {
+      const recovery = await toppedUpOriginAllowance(publicClient, account.address, tx.to, originToken, originAmount, async approveData => {
         const hash = await walletClient.sendTransaction({account, to: originToken!, data: approveData, value: 0n, chain: walletClient.chain});
         await publicClient.waitForTransactionReceipt({hash});
       });
-      if (!recovered) throw new Error(`This transaction would revert: ${message}`);
+      if (!recovery.recovered) throw new Error(`This transaction would revert: ${revertMessageAfterFailedRecovery(message, recovery)}`);
       try {
         await publicClient.call(tx);
       } catch (err2) {
-        throw new Error(`This transaction would revert: ${err2 instanceof Error ? err2.message : String(err2)}`);
+        const message2 = err2 instanceof Error ? err2.message : String(err2);
+        throw new Error(`This transaction would revert: ${message2} (An allowance top-up was sent first, but the retry still reverted the same way.)`);
       }
     }
   }
@@ -290,16 +318,17 @@ async function sendRelayEvmStepViaParticle(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message && !/timeout|network|fetch|429|403/i.test(message)) {
-      const recovered = await toppedUpOriginAllowance(publicClient, evmAddress, tx.to, originToken, originAmount, async approveData => {
+      const recovery = await toppedUpOriginAllowance(publicClient, evmAddress, tx.to, originToken, originAmount, async approveData => {
         const {sendEvmTransactionViaParticle} = await import('../wallet/particleSigning.ts');
         const hash = await sendEvmTransactionViaParticle(evmAddress, {chainId, to: originToken!, data: approveData, value: 0n});
         await publicClient.waitForTransactionReceipt({hash});
       });
-      if (!recovered) throw new Error(`This transaction would revert: ${message}`);
+      if (!recovery.recovered) throw new Error(`This transaction would revert: ${revertMessageAfterFailedRecovery(message, recovery)}`);
       try {
         await publicClient.call({account: evmAddress, to: tx.to, data: tx.data, value: tx.value});
       } catch (err2) {
-        throw new Error(`This transaction would revert: ${err2 instanceof Error ? err2.message : String(err2)}`);
+        const message2 = err2 instanceof Error ? err2.message : String(err2);
+        throw new Error(`This transaction would revert: ${message2} (An allowance top-up was sent first, but the retry still reverted the same way.)`);
       }
     }
   }
@@ -436,15 +465,16 @@ async function sendRelayEvmStepSponsored(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message && !/timeout|network|fetch|429|403/i.test(message)) {
-      const recovered = await toppedUpOriginAllowance(publicClient, client.account.address, tx.to, originToken, originAmount, async approveData => {
+      const recovery = await toppedUpOriginAllowance(publicClient, client.account.address, tx.to, originToken, originAmount, async approveData => {
         const hash = await client.sendTransaction({calls: [{to: originToken!, data: approveData, value: 0n}], authorization});
         await publicClient.waitForTransactionReceipt({hash});
       });
-      if (!recovered) throw new Error(`This transaction would revert: ${message}`);
+      if (!recovery.recovered) throw new Error(`This transaction would revert: ${revertMessageAfterFailedRecovery(message, recovery)}`);
       try {
         await publicClient.call({account: client.account.address, to: tx.to, data: tx.data, value: tx.value});
       } catch (err2) {
-        throw new Error(`This transaction would revert: ${err2 instanceof Error ? err2.message : String(err2)}`);
+        const message2 = err2 instanceof Error ? err2.message : String(err2);
+        throw new Error(`This transaction would revert: ${message2} (An allowance top-up was sent first, but the retry still reverted the same way.)`);
       }
     }
   }
