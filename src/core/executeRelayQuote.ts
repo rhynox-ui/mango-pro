@@ -528,9 +528,40 @@ async function sendRelayEvmStepSponsored(
     console.warn('[sponsorshipRecovery] Skipping EVM cost recovery for this trade:', err instanceof Error ? err.message : String(err));
   }
 
-  const hash = await client.sendTransaction({calls, authorization});
-  await publicClient.waitForTransactionReceipt({hash});
-  return hash;
+  try {
+    const hash = await client.sendTransaction({calls, authorization});
+    await publicClient.waitForTransactionReceipt({hash});
+    return hash;
+  } catch (err) {
+    // Real gap this closes, live-reproduced (a BNB Convert reverting with
+    // the exact TransferFromFailed() this function's own pre-flight
+    // simulate above is meant to catch and recover from — but didn't).
+    // Pimlico's bundler runs its OWN simulation as part of actually
+    // broadcasting the UserOperation, a separate check from this
+    // function's own `publicClient.call()` pre-flight above — a route
+    // that simulates clean via a plain eth_call can still be rejected
+    // here, and until now a revert caught ONLY at this later point never
+    // got a chance at allowance-recovery at all, surfacing instead as
+    // whatever raw error shape the bundler SDK happens to produce
+    // (unrecovered AND un-narrated — exactly what a live failure showed).
+    // Same guard, same recovery call, same retry-once shape as the
+    // pre-flight block above, just applied to this later checkpoint too.
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message || /timeout|network|fetch|429|403/i.test(message)) throw err;
+    const recovery = await toppedUpOriginAllowance(publicClient, client.account.address, swapCall.to, originToken, originAmount, async approveData => {
+      const approveHash = await client.sendTransaction({calls: [{to: originToken!, data: approveData, value: 0n}], authorization});
+      await publicClient.waitForTransactionReceipt({hash: approveHash});
+    });
+    if (!recovery.recovered) throw new Error(`This transaction would revert: ${revertMessageAfterFailedRecovery(message, recovery)}`);
+    try {
+      const hash = await client.sendTransaction({calls, authorization});
+      await publicClient.waitForTransactionReceipt({hash});
+      return hash;
+    } catch (err2) {
+      const message2 = err2 instanceof Error ? err2.message : String(err2);
+      throw new Error(`This transaction would revert: ${message2} (An allowance top-up was sent first, but the retry still reverted the same way.)`);
+    }
+  }
 }
 
 /**
@@ -1160,15 +1191,20 @@ export async function executeRelayQuote(
     }
   }
 
-  // Pure observation, no effect on execution: a Base Convert reverted on
-  // the Depository with no decodable reason, and it's still unconfirmed
-  // whether Relay's own quote already included a separate approve step
-  // (it should, per Relay's docs, whenever usePermit isn't requested —
-  // this app never requests it) or whether the deposit item's approval
-  // needs to go to a different spender (e.g. Permit2) than the deposit
-  // call's own `to`. Logging exactly what pendingItems contains, before
-  // anything is signed, settles that on the next occurrence instead of
-  // requiring another guess.
+  // Diagnostic only, no effect on execution — kept from when a Base
+  // Convert reverted on the Depository with no decodable reason. Since
+  // resolved: Relay's own EVM Depository Reference (its real Solidity
+  // API docs) confirms depositErc20 does a plain, direct
+  // transferFrom(msg.sender, address(this), amount) — no Permit2
+  // anywhere in it, ruling out the "different spender" guess this
+  // comment used to make. The actual gap (see sendRelayEvmStepSponsored's
+  // own header on its broadcast-time recovery) was that Pimlico's
+  // bundler runs its own separate simulation during the real broadcast,
+  // which can catch a revert this function's own pre-flight simulate
+  // missed — and until that broadcast-time recovery was added, such a
+  // revert never got a chance at allowance-recovery at all. Left in
+  // place since it costs nothing and is still useful for diagnosing
+  // anything else pendingItems might reveal in the future.
   console.warn(
     '[executeRelayQuote] pendingItems:',
     pendingItems.map(item => ({
