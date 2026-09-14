@@ -41,6 +41,7 @@ import {CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '..
 import {getRelayQuote, summarizeQuote, type QuoteSummary} from '../core/relayQuote';
 import {executeRelayQuote, type ExecuteStep} from '../core/executeRelayQuote';
 import {TransactionIntentError} from '../core/txIntentFirewall';
+import {describeTradeError} from '../core/tradeErrors';
 import {addTxHistoryEntry} from '../wallet/txHistory';
 import {formatAmountForInput} from '../wallet/useAvailableBalance';
 import {loadGaslessTradingEnabled} from '../settings/gaslessTradingPrefs';
@@ -255,7 +256,14 @@ export function ConvertCashSheet({
       onConverted();
     } catch (err) {
       setExecuteState('idle');
-      const message = err instanceof TransactionIntentError ? err.message : err instanceof Error ? err.message : 'Conversion failed — try again.';
+      // TransactionIntentError carries its own complete, user-facing
+      // explanation — shown as thrown. Anything else (a raw viem/
+      // permissionless error) goes through describeTradeError, same as
+      // TokenTradeScreen.tsx's own catch — this sheet built its own
+      // separate handling that never adopted that fix, so a full
+      // viem dump (Raw Call Arguments, Details, Version) was rendering
+      // straight onto the screen on any on-chain revert.
+      const message = err instanceof TransactionIntentError ? err.message : describeTradeError(err).message;
       setExecuteError(message);
       addTxHistoryEntry({
         status: 'error',
