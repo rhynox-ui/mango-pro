@@ -618,6 +618,21 @@ export function TokenTradeScreen({
                 setQuoteError(relayErrorMessage);
                 return;
               }
+              // Real UX gap this closes: on Solana, when the pair isn't
+              // even SOL<->token shaped, checkFallbackRoute now says so
+              // explicitly instead of returning a bare null indistinguishable
+              // from "the fallback tried and found nothing" — surface
+              // that instead of Relay's own generic message, which used
+              // to read as "nothing exists for this trade" rather than
+              // "the one fallback here only covers a narrower case."
+              if ('unsupportedReason' in fallback) {
+                rawQuoteRef.current = null;
+                fallbackParamsRef.current = null;
+                setQuote(null);
+                setQuoteLoading(false);
+                setQuoteError(fallback.unsupportedReason);
+                return;
+              }
               rawQuoteRef.current = null;
               fallbackParamsRef.current = fallbackParams;
               let receivedAmountFormatted: string | null = null;

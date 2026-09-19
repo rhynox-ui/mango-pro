@@ -355,11 +355,26 @@ export type FallbackRouteParams = {
  * blank "—" receive amount right up to the moment a trade is attempted,
  * even though a fallback provider could actually quote and execute it.
  * null means neither provider can quote this pair, never a guess.
+ *
+ * unsupportedReason is set only for the Solana case where the pair
+ * isn't even SOL<->token shaped (`parsed === null`) — pump.fun/PumpSwap
+ * cover exactly that one shape, nothing else, so a USDC<->token pair on
+ * this USDC-first product silently has no fallback at all the instant
+ * Relay fails. Without this, the UI showed only Relay's own "no route"
+ * message with no hint the fallback was even tried, reading as "nothing
+ * exists for this trade" rather than "the one fallback here only covers
+ * a narrower case than yours." Left unset when the pair IS SOL<->token
+ * shaped but pump.fun/PumpSwap simply had nothing to quote — that case
+ * has nothing extra worth saying beyond Relay's own message.
  */
-export async function checkFallbackRoute(params: FallbackRouteParams): Promise<{provider: FallbackProvider; buyAmount: string} | null> {
+export async function checkFallbackRoute(params: FallbackRouteParams): Promise<{provider: FallbackProvider; buyAmount: string} | {unsupportedReason: string} | null> {
   if (params.chainKey === 'solana') {
-    const {entries} = await quoteSolanaFallbackEntries(params).catch(() => ({entries: [] as SolanaFallbackEntry[], parsed: null}));
-    if (entries.length === 0) return null;
+    const {entries, parsed} = await quoteSolanaFallbackEntries(params).catch(() => ({entries: [] as SolanaFallbackEntry[], parsed: null}));
+    if (entries.length === 0) {
+      return parsed === null
+        ? {unsupportedReason: 'Mango can only auto-route a Solana trade through pump.fun/PumpSwap when it pays or receives SOL directly — this pair needs a route Relay itself has to provide.'}
+        : null;
+    }
     const winner = entries[0];
     return {provider: winner.provider, buyAmount: winner.buyAmount.toString()};
   }
