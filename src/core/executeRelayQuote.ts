@@ -183,9 +183,23 @@ async function toppedUpOriginAllowance(
   }
 }
 
-/** Appends WHY the allowance-recovery attempt didn't save this call, so the final error is self-explaining instead of a bare repeat of the same revert. */
+/**
+ * Prepends WHY the allowance-recovery attempt didn't save this call, so the
+ * final error is self-explaining instead of a bare repeat of the same
+ * revert. Real, confirmed bug this closes: viem's own `err.message` for a
+ * failed `.call()` is itself multi-line (a one-line summary, then a blank
+ * line, then "Raw Call Arguments:", "Docs:", "Version:", etc.) —
+ * describeTradeError's own `firstLine()` exists specifically to avoid
+ * dumping that block on screen, so it keeps only the text before the
+ * FIRST newline. Putting this note AFTER `message` (as this used to) means
+ * it lands past that first newline and gets silently discarded — a live
+ * BNB Chain Convert failure showed exactly the bare revert reason with
+ * none of this context, even though the recovery logic below had already
+ * run and recorded why it didn't help. Putting the note first keeps it on
+ * the same line firstLine() actually keeps.
+ */
 function revertMessageAfterFailedRecovery(message: string, recovery: {recovered: false; reason: string}): string {
-  return `${message} (Checked for a missing allowance first: ${recovery.reason}.)`;
+  return `(Checked for a missing allowance first: ${recovery.reason}.) ${message}`;
 }
 
 /**
@@ -228,7 +242,7 @@ async function sendRelayEvmStep(
         await publicClient.call(tx);
       } catch (err2) {
         const message2 = err2 instanceof Error ? err2.message : String(err2);
-        throw new Error(`This transaction would revert: ${message2} (An allowance top-up was sent first, but the retry still reverted the same way.)`);
+        throw new Error(`This transaction would revert: (An allowance top-up was sent first, but the retry still reverted the same way.) ${message2}`);
       }
     }
   }
@@ -328,7 +342,7 @@ async function sendRelayEvmStepViaParticle(
         await publicClient.call({account: evmAddress, to: tx.to, data: tx.data, value: tx.value});
       } catch (err2) {
         const message2 = err2 instanceof Error ? err2.message : String(err2);
-        throw new Error(`This transaction would revert: ${message2} (An allowance top-up was sent first, but the retry still reverted the same way.)`);
+        throw new Error(`This transaction would revert: (An allowance top-up was sent first, but the retry still reverted the same way.) ${message2}`);
       }
     }
   }
@@ -474,7 +488,7 @@ async function sendRelayEvmStepSponsored(
         await publicClient.call({account: client.account.address, to: tx.to, data: tx.data, value: tx.value});
       } catch (err2) {
         const message2 = err2 instanceof Error ? err2.message : String(err2);
-        throw new Error(`This transaction would revert: ${message2} (An allowance top-up was sent first, but the retry still reverted the same way.)`);
+        throw new Error(`This transaction would revert: (An allowance top-up was sent first, but the retry still reverted the same way.) ${message2}`);
       }
     }
   }
@@ -559,7 +573,7 @@ async function sendRelayEvmStepSponsored(
       return hash;
     } catch (err2) {
       const message2 = err2 instanceof Error ? err2.message : String(err2);
-      throw new Error(`This transaction would revert: ${message2} (An allowance top-up was sent first, but the retry still reverted the same way.)`);
+      throw new Error(`This transaction would revert: (An allowance top-up was sent first, but the retry still reverted the same way.) ${message2}`);
     }
   }
 }
