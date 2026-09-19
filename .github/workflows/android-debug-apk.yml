@@ -66,7 +66,18 @@ jobs:
       # First run revealed ubuntu-latest does NOT ship sdkmanager on PATH
       # (that assumption was wrong) — this action installs the cmdline-
       # tools and sets ANDROID_HOME/ANDROID_SDK_ROOT.
-      - uses: android-actions/setup-android@v3
+      #
+      # Third run (this line) revealed @v3 itself unconditionally
+      # installs the standalone `tools` package as part of its own setup,
+      # independent of this step's own `packages` input (which only ever
+      # controls ADDITIONAL packages on top of that) — Google removed
+      # `tools` from the SDK repository, so every run started failing at
+      # "Failed to find package 'tools'" with no source change involved
+      # (confirmed: android-actions/setup-android#537, fixed in #538,
+      # released as v4.0.2 — "drops tools from the defaults"). Bumped to
+      # @v4 to pick that up; this step passes no `with:` block, so the
+      # only behavior change is the removal of that broken install.
+      - uses: android-actions/setup-android@v4
 
       # Second run revealed hand-picking "platforms;android-37" here was
       # also wrong — that exact platform isn't in the SDK repository this

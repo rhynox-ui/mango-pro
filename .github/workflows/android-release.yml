@@ -76,7 +76,14 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      # @v3 unconditionally installs the standalone `tools` package as
+      # part of its own setup (independent of this step's own `packages`
+      # input, which only ever adds packages on top of that) — Google
+      # removed `tools` from the SDK repository, breaking this and
+      # android-debug-apk.yml's identical step with no source change
+      # involved (android-actions/setup-android#537, fixed in #538,
+      # released as v4.0.2 — "drops tools from the defaults").
+      - uses: android-actions/setup-android@v4
 
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses > /dev/null || true
