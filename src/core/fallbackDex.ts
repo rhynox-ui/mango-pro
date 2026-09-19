@@ -383,6 +383,9 @@ async function executeFallbackQuote({
 }): Promise<{hash: string}> {
   const {signer, publicClient} = signerAndPublicClientForChain(chainIdFor(chainKey), session);
 
+  // Tracked so a swap that reverts below can clean up after itself — see
+  // that catch block's own comment for why.
+  let approvalJustSent = false;
   if (quote.allowanceTarget) {
     const currentAllowance = (await publicClient.readContract({
       address: sellTokenAddress as `0x${string}`,
@@ -399,6 +402,7 @@ async function executeFallbackQuote({
         args: [quote.allowanceTarget as `0x${string}`, requiredAmount],
       });
       await publicClient.waitForTransactionReceipt({hash: approveHash});
+      approvalJustSent = true;
     }
   }
 
@@ -421,6 +425,17 @@ async function executeFallbackQuote({
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message && !/timeout|network|fetch|429|403/i.test(message)) {
+      // Real, bounded cleanup: the approval above can only ever be
+      // spent by this exact provider's own router, for exactly the
+      // amount just approved (never unlimited) — so a leftover
+      // allowance here is low-risk, not a drain vector. Still worth
+      // reverting rather than leaving it live, since this quote is
+      // being abandoned. Best-effort and fire-and-forget: never lets a
+      // revoke failure change or delay the real error below, which is
+      // what the caller actually needs to see.
+      if (approvalJustSent && quote.allowanceTarget) {
+        writeContractAs(signer, {address: sellTokenAddress as `0x${string}`, abi: ERC20_ALLOWANCE_ABI, functionName: 'approve', args: [quote.allowanceTarget as `0x${string}`, 0n]}).catch(() => {});
+      }
       throw new Error(`This fallback transaction would revert: ${message}`);
     }
   }
