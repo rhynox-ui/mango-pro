@@ -77,7 +77,7 @@ type DepositStep = 'network' | 'address';
 // Same reasoning as DepositStep above, applied to FOMO's own "Choose
 // withdraw method" screen — no bank-account or finance-app row, just
 // the one real method (this app's non-custodial sendUsdc.ts).
-type WithdrawStep = 'network' | 'form' | 'sending' | 'success' | 'error';
+type WithdrawStep = 'network' | 'form' | 'review' | 'sending' | 'success' | 'error';
 
 const TIME_RANGES = ['24h', '7d', '30d', 'All'] as const;
 type TimeRange = (typeof TIME_RANGES)[number];
@@ -958,9 +958,53 @@ export function ProfileScreen({
                 <TouchableOpacity
                   style={[styles.sendButton, !canSubmitWithdraw && styles.sendButtonDisabled]}
                   disabled={!canSubmitWithdraw}
-                  onPress={handleConfirmWithdraw}
+                  onPress={() => setWithdrawStep('review')}
                   activeOpacity={0.8}>
-                  <Text style={styles.sendButtonText}>Withdraw</Text>
+                  <Text style={styles.sendButtonText}>Review withdrawal</Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            {/* Real gap this closes: this modal used to go straight from
+                the form to broadcasting on one tap — no screen showing
+                network/asset/amount/recipient together before a
+                withdrawal (final, on-chain, no undo) actually goes out.
+                Adds nothing to the send path itself: handleConfirmWithdraw
+                below is the exact same function the form's own button
+                used to call directly. */}
+            {withdrawStep === 'review' && withdrawChain && (
+              <>
+                <View style={styles.modalHeaderRow}>
+                  <TouchableOpacity onPress={() => setWithdrawStep('form')} hitSlop={8}>
+                    <ChevronLeftIcon color={colors.textPrimary} size={20} />
+                  </TouchableOpacity>
+                  <Text style={styles.modalTitle}>Review withdrawal</Text>
+                  <View style={styles.modalHeaderSpacer} />
+                </View>
+
+                <View style={styles.reviewRow}>
+                  <Text style={styles.reviewRowLabel}>Network</Text>
+                  <Text style={styles.reviewRowValue}>{CHAIN_LABEL[withdrawChain]}</Text>
+                </View>
+                <View style={styles.reviewRow}>
+                  <Text style={styles.reviewRowLabel}>Asset</Text>
+                  <Text style={styles.reviewRowValue}>{CASH_ASSET_BY_CHAIN[withdrawChain] ?? 'USDC'}</Text>
+                </View>
+                <View style={styles.reviewRow}>
+                  <Text style={styles.reviewRowLabel}>Amount</Text>
+                  <Text style={styles.reviewRowValue}>
+                    {withdrawAmount} {CASH_ASSET_BY_CHAIN[withdrawChain] ?? 'USDC'}
+                  </Text>
+                </View>
+                <View style={styles.reviewAddressBlock}>
+                  <Text style={styles.reviewRowLabel}>To</Text>
+                  <Text style={styles.reviewAddressValue}>{withdrawAddress.trim()}</Text>
+                </View>
+
+                <Text style={styles.modalWarning}>Sends are final. Double-check the network and address above — sending to the wrong network or address may permanently lose funds.</Text>
+
+                <TouchableOpacity style={styles.sendButton} onPress={handleConfirmWithdraw} activeOpacity={0.8}>
+                  <Text style={styles.sendButtonText}>Confirm withdrawal</Text>
                 </TouchableOpacity>
               </>
             )}
@@ -1298,6 +1342,11 @@ function makeStyles(colors: Colors) {
     withdrawDisabledReason: {color: colors.danger, fontSize: 12, lineHeight: 16, marginTop: 10},
     modalSubtitle: {color: colors.textSecondary, fontSize: 13, marginBottom: 16},
     modalHeaderSpacer: {width: 20},
+    reviewRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.divider},
+    reviewRowLabel: {color: colors.textMuted, fontSize: 13, fontWeight: '600'},
+    reviewRowValue: {color: colors.textPrimary, fontSize: 14, fontWeight: '700'},
+    reviewAddressBlock: {marginTop: 14},
+    reviewAddressValue: {color: colors.textPrimary, fontSize: 13, fontWeight: '600', marginTop: 8, backgroundColor: colors.panel, borderWidth: 1, borderColor: colors.panelBorder, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12},
 
     networkRow: {
       flexDirection: 'row',
