@@ -720,7 +720,30 @@ export function TokenTradeScreen({
         originAmountUsd: leg,
         waiveAppFee: true,
       });
-      await executeRelayQuote(legQuote, session, () => {}, {useGaslessTrading: gaslessTradingEnabled});
+      const legResult = await executeRelayQuote(legQuote, session, () => {}, {useGaslessTrading: gaslessTradingEnabled});
+      // Real gap this closes: a leg that lands here is done — real
+      // funds already moved on-chain — regardless of whether a LATER
+      // leg in this same loop then fails. Recording it the moment it
+      // succeeds (same as ConvertCashSheet.tsx's own addTxHistoryEntry
+      // call for a user-initiated Convert) means its real hash survives
+      // in History even if the app crashes or closes before this
+      // function returns, rather than living only in the `movedFrom`
+      // string built below — human-readable, but never durably stored,
+      // so a partial failure's own successful legs would otherwise be
+      // unrecoverable from this app's own record of what happened.
+      addTxHistoryEntry({
+        status: 'success',
+        chainKey: payOrigin.chainKey,
+        chainLabel: CHAIN_LABEL[payOrigin.chainKey],
+        isBuySide: true,
+        kind: 'convert',
+        paySymbol: fromSymbol,
+        receiveSymbol: toSymbol,
+        payAmount: leg.toFixed(2),
+        receivedAmountFormatted: null,
+        hashes: legResult.txHashes,
+        fromAddress: userAddress,
+      });
       movedFrom.push(`$${leg.toFixed(2)} from ${CHAIN_LABEL[contributor.chainKey]}`);
       remaining -= leg;
     }
@@ -738,7 +761,7 @@ export function TokenTradeScreen({
   }
 
   async function handleTrade() {
-    const quoteToExecute = rawQuoteRef.current;
+    let quoteToExecute = rawQuoteRef.current;
     const fallbackParams = fallbackParamsRef.current;
     if ((!quoteToExecute && !fallbackParams) || !session) return;
     setExecuteError(null);
@@ -754,6 +777,29 @@ export function TokenTradeScreen({
         setExecuteError(err instanceof Error ? err.message : 'Could not consolidate your balance across chains.');
         setExecuteState('error');
         return;
+      }
+      // Real gap this closes: consolidation is itself real Relay
+      // execution across however many other chains hold spare balance —
+      // that can easily take real wall-clock seconds per leg. The Buy
+      // quote in rawQuoteRef was obtained BEFORE any of that ran, so by
+      // the time consolidation finishes it can have crossed
+      // executeRelayQuote's own RELAY_QUOTE_MAX_AGE_MS (2 minutes).
+      // That firewall already fails closed on a stale quote — it would
+      // never sign one — but for a multi-leg consolidation this is a
+      // real, avoidable failure mode, not just a theoretical one: the
+      // user did everything right and consolidation itself succeeded,
+      // only to have the Buy refused for staleness a moment later.
+      // Re-quote here with the exact same params instead of waiting to
+      // find out at the firewall.
+      if (quoteToExecute && lastQuoteParamsRef.current) {
+        try {
+          quoteToExecute = await getRelayQuote(lastQuoteParamsRef.current);
+          rawQuoteRef.current = quoteToExecute;
+        } catch (err) {
+          setExecuteError(err instanceof Error ? err.message : 'Your balance was moved into place, but getting a fresh quote for the buy failed — try again.');
+          setExecuteState('error');
+          return;
+        }
       }
     }
     try {
