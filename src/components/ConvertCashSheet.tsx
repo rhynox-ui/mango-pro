@@ -39,7 +39,7 @@ import {NetworkIcon} from '../wallet/NetworkIcon';
 import {CHAIN_LABEL, assetDecimalsForChain, currencyAddress, type ChainKey} from '../core/chainData';
 import {CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
 import {getRelayQuote, summarizeQuote, type QuoteSummary} from '../core/relayQuote';
-import {executeRelayQuote, type ExecuteStep} from '../core/executeRelayQuote';
+import {executeRelayQuote, getPartialTxHashes, type ExecuteStep} from '../core/executeRelayQuote';
 import {TransactionIntentError} from '../core/txIntentFirewall';
 import {describeTradeError} from '../core/tradeErrors';
 import {addTxHistoryEntry} from '../wallet/txHistory';
@@ -264,7 +264,16 @@ export function ConvertCashSheet({
       // separate handling that never adopted that fix, so a full
       // viem dump (Raw Call Arguments, Details, Version) was rendering
       // straight onto the screen on any on-chain revert.
-      const message = err instanceof TransactionIntentError ? err.message : describeTradeError(err).message;
+      let message = err instanceof TransactionIntentError ? err.message : describeTradeError(err).message;
+      // Real gap this closes, same as TokenTradeScreen.tsx's own catch:
+      // a multi-step Relay quote that failed on step 2+ used to report
+      // only the error, discarding that an earlier step had already
+      // landed for real on-chain. getPartialTxHashes reads back
+      // whatever executeRelayQuote already tagged onto this exact error.
+      const partialTxHashes = getPartialTxHashes(err);
+      if (partialTxHashes.length > 0) {
+        message = `Partially completed: ${message} (${partialTxHashes.length === 1 ? 'one step' : `${partialTxHashes.length} steps`} of this conversion already landed on-chain — check History.)`;
+      }
       setExecuteError(message);
       addTxHistoryEntry({
         status: 'error',
@@ -276,7 +285,7 @@ export function ConvertCashSheet({
         receiveSymbol: cashSymbol(toChain),
         payAmount: amount,
         receivedAmountFormatted: null,
-        hashes: [],
+        hashes: partialTxHashes,
         errorMessage: message,
         fromAddress: fromChain === 'solana' ? session.solana.address : session.evm.address,
       });

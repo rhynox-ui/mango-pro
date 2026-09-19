@@ -1126,6 +1126,34 @@ async function signAndSendRelaySolanaStepViaParticle(item: RelayTransactionStepI
 
 export type ExecuteRelayQuoteResult = {txHashes: string[]; warnings: string[]};
 
+// Real gap this closes: a multi-step Relay quote (more than one
+// transaction to sign/broadcast) that fails on step 2+ used to just
+// throw, discarding every hash already pushed onto the local txHashes
+// array from steps that landed for real on-chain — a caller's catch
+// block only ever saw the error, never what had already gone through.
+// That's the exact same "moved for real but no record of it" gap
+// TokenTradeScreen.tsx's own consolidateIntoPayOrigin closed for its
+// own multi-leg loop; this closes it at the source, for every caller.
+//
+// Deliberately a property tagged onto the SAME thrown error object
+// (never a new Error wrapping it) — preserves the original's identity
+// exactly, so every existing `instanceof TransactionIntentError` (or
+// any other) check downstream keeps working unchanged. Purely additive
+// metadata, not a new control-flow path.
+const PARTIAL_TX_HASHES_KEY = 'mangoPartialTxHashes';
+
+function attachPartialTxHashes(err: unknown, hashes: string[]): void {
+  if (hashes.length === 0 || !err || typeof err !== 'object') return;
+  (err as Record<string, unknown>)[PARTIAL_TX_HASHES_KEY] = hashes;
+}
+
+/** Reads back the hashes attachPartialTxHashes recorded, or an empty array if this error never carried any (the common case — most failures happen before anything broadcasts). */
+export function getPartialTxHashes(err: unknown): string[] {
+  if (!err || typeof err !== 'object') return [];
+  const value = (err as Record<string, unknown>)[PARTIAL_TX_HASHES_KEY];
+  return Array.isArray(value) ? value.filter((h): h is string => typeof h === 'string') : [];
+}
+
 /**
  * Executes a quote from getRelayQuote(): checks the pre-sign firewall
  * against every still-pending item BEFORE signing the first one (so a
@@ -1249,99 +1277,107 @@ export async function executeRelayQuote(
     sponsoredClient: Awaited<ReturnType<typeof getSponsoredSmartAccountClient>> | null;
   } | null = null;
 
-  for (const item of pendingItems) {
-    if (isSolanaShaped(item)) {
-      const {signature, warnings: solanaStepWarnings} = isGoogleSession
-        ? await signAndSendRelaySolanaStepViaParticle(item, session.solana.address)
-        : await signAndSendRelaySolanaStep(item, session.solana.privateKey);
-      txHashes.push(signature);
-      for (const warning of solanaStepWarnings) {
-        console.warn(`[solanaTxIntent] ${warning}`);
+  try {
+    for (const item of pendingItems) {
+      if (isSolanaShaped(item)) {
+        const {signature, warnings: solanaStepWarnings} = isGoogleSession
+          ? await signAndSendRelaySolanaStepViaParticle(item, session.solana.address)
+          : await signAndSendRelaySolanaStep(item, session.solana.privateKey);
+        txHashes.push(signature);
+        for (const warning of solanaStepWarnings) {
+          console.warn(`[solanaTxIntent] ${warning}`);
+        }
+        warnings.push(...solanaStepWarnings);
+        continue;
       }
-      warnings.push(...solanaStepWarnings);
-      continue;
-    }
-    const chainId = item.data?.chainId;
-    if (!chainId) throw new Error('The routing service returned a transaction with no chain.');
-    if (!evmClients || evmClients.publicClient.chain?.id !== chainId) {
-      const viemChain = viemChainForChainId(chainId);
-      if (!viemChain) throw new Error(`No EVM chain configured for chain id ${chainId}.`);
-      const transport = transportFor(chainId);
-      const publicClient = createPublicClient({chain: viemChain, transport});
-      const owner = isGoogleSession ? null : privateKeyToAccount(session.evm.privateKey as `0x${string}`);
-      // Built unconditionally, not just when gasless trading is off — the
-      // sponsored path below always needs a plain-transaction fallback to
-      // drop back to. Gasless trading is still an opt-in beta
-      // (ARCHITECTURE.md §1, never end-to-end proven before this shipped)
-      // and a bundler/paymaster rejection must never strand an otherwise-
-      // tradeable quote.
-      const walletClient = owner ? createWalletClient({account: owner, chain: viemChain, transport}) : null;
-      const sponsoredClient = owner && useGasless ? await getSponsoredSmartAccountClient({chain: viemChain, owner}) : null;
-      evmClients = {walletClient, publicClient, sponsoredClient};
-    }
-    let hash: string;
-    if (isGoogleSession) {
-      hash = await sendRelayEvmStepViaParticle(session.evm.address as `0x${string}`, evmClients.publicClient, chainId, item, originToken, originAmount);
-    } else if (useGasless && evmClients.sponsoredClient) {
-      try {
-        hash = await sendRelayEvmStepSponsored(evmClients.sponsoredClient, evmClients.publicClient, item, originToken, originAmount);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        // Only fall back on a rejection that happened BEFORE anything was
-        // broadcast (the bundler's own field validation, or our own
-        // pre-flight simulate) — never on an ambiguous failure after the
-        // UserOperation may already have been accepted, where retrying
-        // with a plain transaction could double-execute it.
-        const isPreBroadcastRejection = /invalid fields set on user operation|invalid useroperation|\baa[0-9]{2}\b|this transaction would revert/i.test(message);
-        if (!isPreBroadcastRejection) throw err;
+      const chainId = item.data?.chainId;
+      if (!chainId) throw new Error('The routing service returned a transaction with no chain.');
+      if (!evmClients || evmClients.publicClient.chain?.id !== chainId) {
+        const viemChain = viemChainForChainId(chainId);
+        if (!viemChain) throw new Error(`No EVM chain configured for chain id ${chainId}.`);
+        const transport = transportFor(chainId);
+        const publicClient = createPublicClient({chain: viemChain, transport});
+        const owner = isGoogleSession ? null : privateKeyToAccount(session.evm.privateKey as `0x${string}`);
+        // Built unconditionally, not just when gasless trading is off — the
+        // sponsored path below always needs a plain-transaction fallback to
+        // drop back to. Gasless trading is still an opt-in beta
+        // (ARCHITECTURE.md §1, never end-to-end proven before this shipped)
+        // and a bundler/paymaster rejection must never strand an otherwise-
+        // tradeable quote.
+        const walletClient = owner ? createWalletClient({account: owner, chain: viemChain, transport}) : null;
+        const sponsoredClient = owner && useGasless ? await getSponsoredSmartAccountClient({chain: viemChain, owner}) : null;
+        evmClients = {walletClient, publicClient, sponsoredClient};
+      }
+      let hash: string;
+      if (isGoogleSession) {
+        hash = await sendRelayEvmStepViaParticle(session.evm.address as `0x${string}`, evmClients.publicClient, chainId, item, originToken, originAmount);
+      } else if (useGasless && evmClients.sponsoredClient) {
+        try {
+          hash = await sendRelayEvmStepSponsored(evmClients.sponsoredClient, evmClients.publicClient, item, originToken, originAmount);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          // Only fall back on a rejection that happened BEFORE anything was
+          // broadcast (the bundler's own field validation, or our own
+          // pre-flight simulate) — never on an ambiguous failure after the
+          // UserOperation may already have been accepted, where retrying
+          // with a plain transaction could double-execute it.
+          const isPreBroadcastRejection = /invalid fields set on user operation|invalid useroperation|\baa[0-9]{2}\b|this transaction would revert/i.test(message);
+          if (!isPreBroadcastRejection) throw err;
 
-        // "This transaction would revert" is OUR OWN pre-flight simulate
-        // (sendRelayEvmStepSponsored above) catching an on-chain revert —
-        // on a thin/fast-moving pool this is usually ordinary slippage
-        // drift between quote and sign, not a real incompatibility. Real,
-        // decoded case: a live trade's Pimlico log showed the router's
-        // own "Return amount is not enough" revert; the identical calldata
-        // simulated clean moments later with nothing else changed. Retry
-        // the SAME sponsored path once before giving up on it — a plain
-        // fallback can't actually save a gasless trade anyway, since a
-        // gasless-mode wallet holds no native gas to pay for one by
-        // design. A hard bundler rejection (invalid fields/an AA-code)
-        // means real incompatibility, not drift, so that skips straight
-        // to the fallback below instead of wasting a retry on it.
-        const isTransientRevert = /this transaction would revert/i.test(message);
-        if (isTransientRevert) {
-          console.warn('[smartAccount] Sponsored UserOperation reverted in simulation, retrying once before falling back:', message);
-          await new Promise(resolve => setTimeout(resolve, 1500));
-          try {
-            hash = await sendRelayEvmStepSponsored(evmClients.sponsoredClient, evmClients.publicClient, item, originToken, originAmount);
-          } catch {
-            // The same calldata reverted twice a moment apart — the pool
-            // moved and STAYED moved, not just a momentary blip the first
-            // retry could ride out. Nothing has broadcast anywhere yet
-            // (txHashes is still empty at this point, since this is
-            // necessarily the first pendingItem — every earlier one would
-            // already have pushed its hash), so it's still safe to throw
-            // this quote away and get a fresh one with an up-to-date
-            // minimum-output bound, rather than downgrade to a plain
-            // transaction the wallet holds no gas to pay for by design.
-            // options.requote is cleared on the recursive call so a route
-            // that keeps reverting can re-quote at most once, not forever.
-            if (txHashes.length === 0 && options?.requote) {
-              console.warn('[smartAccount] Still reverting after retry — fetching a fresh quote and starting over.');
-              const freshQuote = await options.requote();
-              return executeRelayQuote(freshQuote, session, onStep, {...options, requote: undefined});
+          // "This transaction would revert" is OUR OWN pre-flight simulate
+          // (sendRelayEvmStepSponsored above) catching an on-chain revert —
+          // on a thin/fast-moving pool this is usually ordinary slippage
+          // drift between quote and sign, not a real incompatibility. Real,
+          // decoded case: a live trade's Pimlico log showed the router's
+          // own "Return amount is not enough" revert; the identical calldata
+          // simulated clean moments later with nothing else changed. Retry
+          // the SAME sponsored path once before giving up on it — a plain
+          // fallback can't actually save a gasless trade anyway, since a
+          // gasless-mode wallet holds no native gas to pay for one by
+          // design. A hard bundler rejection (invalid fields/an AA-code)
+          // means real incompatibility, not drift, so that skips straight
+          // to the fallback below instead of wasting a retry on it.
+          const isTransientRevert = /this transaction would revert/i.test(message);
+          if (isTransientRevert) {
+            console.warn('[smartAccount] Sponsored UserOperation reverted in simulation, retrying once before falling back:', message);
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            try {
+              hash = await sendRelayEvmStepSponsored(evmClients.sponsoredClient, evmClients.publicClient, item, originToken, originAmount);
+            } catch {
+              // The same calldata reverted twice a moment apart — the pool
+              // moved and STAYED moved, not just a momentary blip the first
+              // retry could ride out. Nothing has broadcast anywhere yet
+              // (txHashes is still empty at this point, since this is
+              // necessarily the first pendingItem — every earlier one would
+              // already have pushed its hash), so it's still safe to throw
+              // this quote away and get a fresh one with an up-to-date
+              // minimum-output bound, rather than downgrade to a plain
+              // transaction the wallet holds no gas to pay for by design.
+              // options.requote is cleared on the recursive call so a route
+              // that keeps reverting can re-quote at most once, not forever.
+              if (txHashes.length === 0 && options?.requote) {
+                console.warn('[smartAccount] Still reverting after retry — fetching a fresh quote and starting over.');
+                const freshQuote = await options.requote();
+                return executeRelayQuote(freshQuote, session, onStep, {...options, requote: undefined});
+              }
+              hash = await fallBackToPlainTransaction(evmClients.walletClient!, evmClients.publicClient, item, originToken, originAmount);
             }
+          } else {
+            console.warn('[smartAccount] Sponsored UserOperation rejected before broadcast, falling back to a plain transaction:', message);
             hash = await fallBackToPlainTransaction(evmClients.walletClient!, evmClients.publicClient, item, originToken, originAmount);
           }
-        } else {
-          console.warn('[smartAccount] Sponsored UserOperation rejected before broadcast, falling back to a plain transaction:', message);
-          hash = await fallBackToPlainTransaction(evmClients.walletClient!, evmClients.publicClient, item, originToken, originAmount);
         }
+      } else {
+        hash = await sendRelayEvmStep(evmClients.walletClient!, evmClients.publicClient, item, originToken, originAmount);
       }
-    } else {
-      hash = await sendRelayEvmStep(evmClients.walletClient!, evmClients.publicClient, item, originToken, originAmount);
+      txHashes.push(hash);
     }
-    txHashes.push(hash);
+  } catch (err) {
+    // See attachPartialTxHashes's own header above — tags the SAME
+    // error object with whatever hashes already landed before this
+    // step failed, never replacing or rewrapping it.
+    attachPartialTxHashes(err, txHashes);
+    throw err;
   }
 
   if (requestId) {

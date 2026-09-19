@@ -54,7 +54,7 @@ import {NetworkIcon} from '../wallet/NetworkIcon';
 import {CHAIN_LABEL, NATIVE_SYMBOL, assetDecimalsForChain, currencyAddress, type ChainKey} from '../core/chainData';
 import {DEV_FEE_PCT} from '../core/fees';
 import {getRelayQuote, summarizeQuote, type GetRelayQuoteParams, type QuoteSummary, type RelayQuote} from '../core/relayQuote';
-import {executeRelayQuote, type ExecuteStep} from '../core/executeRelayQuote';
+import {executeRelayQuote, getPartialTxHashes, type ExecuteStep} from '../core/executeRelayQuote';
 import {loadGaslessTradingEnabled} from '../settings/gaslessTradingPrefs';
 import {checkFallbackRoute, fetchLiveTokenPriceUsd, sweepFallbackFeeFromNativeBalance, sweepFallbackFeeFromSolanaBalance, tryFallbackProviders, type FallbackRouteParams} from '../core/fallbackDex';
 import {fetchWalletPrices} from '../core/walletPrices';
@@ -938,7 +938,19 @@ export function TokenTradeScreen({
       // describeTradeError so a multi-hundred-character hex dump never
       // renders straight onto the screen — see tradeErrors.ts's header
       // for the real trade that motivated this.
-      const message = err instanceof TransactionIntentError ? err.message : describeTradeError(err).message;
+      let message = err instanceof TransactionIntentError ? err.message : describeTradeError(err).message;
+      // Real gap this closes: a multi-step Relay quote (Buy/Sell can
+      // both have more than one transaction to sign) that failed on
+      // step 2+ used to report only the error — the fact that an
+      // earlier step had already landed for real on-chain, with a real
+      // hash, was silently discarded. getPartialTxHashes reads back
+      // whatever executeRelayQuote already tagged onto this exact error
+      // (see that file's own header) without needing to know anything
+      // about which step failed.
+      const partialTxHashes = getPartialTxHashes(err);
+      if (partialTxHashes.length > 0) {
+        message = `Partially completed: ${message} (${partialTxHashes.length === 1 ? 'one step' : `${partialTxHashes.length} steps`} of this trade already landed on-chain — check History.)`;
+      }
       setExecuteError(message);
       setExecuteState('error');
       addTxHistoryEntry({
@@ -950,7 +962,7 @@ export function TokenTradeScreen({
         receiveSymbol,
         payAmount: amount,
         receivedAmountFormatted: null,
-        hashes: [],
+        hashes: partialTxHashes,
         errorMessage: message,
         fromAddress,
       });
