@@ -31,7 +31,7 @@ import {fetchCashPortfolio, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type Cas
 import {ConvertCashSheet} from '../components/ConvertCashSheet';
 import {NetworkIcon} from '../wallet/NetworkIcon';
 import {sendUsdc, isValidRecipientAddress} from '../wallet/sendUsdc';
-import {filterTxHistoryForAccount, getTxHistory, subscribeTxHistory} from '../wallet/txHistory';
+import {addTxHistoryEntry, filterTxHistoryForAccount, getTxHistory, subscribeTxHistory} from '../wallet/txHistory';
 import {getAvatarUri, getBio, getUsername, isValidUsername, setAvatarUri as saveAvatarUri, setBio as saveBio, setUsername as saveUsername} from '../wallet/profileLocal';
 import {computePortfolioChange, filterHistoryByRange, getPortfolioHistory, recordPortfolioSnapshot, type PortfolioSnapshot} from '../wallet/portfolioHistory';
 import {markOwnAction} from '../wallet/depositWatcher';
@@ -454,14 +454,50 @@ export function ProfileScreen({
   async function handleConfirmWithdraw() {
     if (!session || !withdrawChain) return;
     setWithdrawStep('sending');
+    const symbol = CASH_ASSET_BY_CHAIN[withdrawChain] ?? 'USDC';
+    const fromAddress = withdrawChain === 'solana' ? session.solana.address : session.evm.address;
     try {
-      const {txId} = await sendUsdc(withdrawChain, session, withdrawAddress.trim(), withdrawAmount, CASH_ASSET_BY_CHAIN[withdrawChain], gaslessTradingEnabled);
+      const {txId} = await sendUsdc(withdrawChain, session, withdrawAddress.trim(), withdrawAmount, symbol, gaslessTradingEnabled);
       setWithdrawTxId(txId);
       setWithdrawStep('success');
+      // Real gap this closes: a successful withdrawal broadcast fine but
+      // was never recorded here — Convert's own addTxHistoryEntry call
+      // right after execution was the only reason its own history worked
+      // at all; this one was simply missing, so a completed withdrawal
+      // could disappear from Mango's own History screen even though it
+      // landed on-chain.
+      addTxHistoryEntry({
+        status: 'success',
+        chainKey: withdrawChain,
+        chainLabel: CHAIN_LABEL[withdrawChain],
+        isBuySide: false,
+        kind: 'withdrawal',
+        paySymbol: symbol,
+        receiveSymbol: symbol,
+        payAmount: withdrawAmount,
+        receivedAmountFormatted: null,
+        hashes: [txId],
+        fromAddress,
+      });
       refreshCashPortfolio();
     } catch (err) {
-      setWithdrawError(err instanceof Error ? err.message : 'The send failed. Nothing left this wallet.');
+      const message = err instanceof Error ? err.message : 'The send failed. Nothing left this wallet.';
+      setWithdrawError(message);
       setWithdrawStep('error');
+      addTxHistoryEntry({
+        status: 'error',
+        chainKey: withdrawChain,
+        chainLabel: CHAIN_LABEL[withdrawChain],
+        isBuySide: false,
+        kind: 'withdrawal',
+        paySymbol: symbol,
+        receiveSymbol: symbol,
+        payAmount: withdrawAmount,
+        receivedAmountFormatted: null,
+        hashes: [],
+        errorMessage: message,
+        fromAddress,
+      });
     }
   }
 

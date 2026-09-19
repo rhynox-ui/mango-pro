@@ -62,7 +62,7 @@ function tradeHistoryCsv(entries: ReturnType<typeof getTxHistory>): string {
   const header = 'Date,Type,Chain,Status,Pay amount,Pay asset,Received amount,Received asset,Transaction hash';
   const rows = entries.map(e => {
     const date = new Date(e.timestamp).toISOString();
-    const type = e.isBuySide ? 'Buy' : 'Sell';
+    const type = e.kind === 'convert' ? 'Convert' : e.kind === 'withdrawal' ? 'Withdrawal' : e.isBuySide ? 'Buy' : 'Sell';
     const received = e.status === 'success' ? (e.receivedAmountFormatted ?? '') : '';
     const hash = e.hashes[0] ?? '';
     return [date, type, e.chainLabel, e.status, e.payAmount, e.paySymbol, received, e.receiveSymbol, hash].map(v => `"${String(v).replace(/"/g, '""')}"`).join(',');

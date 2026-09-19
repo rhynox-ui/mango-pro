@@ -49,6 +49,19 @@ export type TxHistoryEntry = {
   errorMessage?: string;
   fromAddress?: string;
   /**
+   * Real gap this closes: every entry used to be forced through the
+   * binary isBuySide (Bought/Sold) label, which was never true for a
+   * Convert (cash-to-cash, no token traded) and — before this — a
+   * Withdrawal wasn't recorded here at all. Optional and additive so
+   * every entry already on a device before this field existed (they all
+   * predate it) keeps rendering exactly as it did: every read site below
+   * falls back to the old isBuySide-based label when `kind` is absent.
+   * 'buy'/'sell' are set for parity but not actually read anywhere yet
+   * (isBuySide already covers that case) — included so a future read
+   * site doesn't have to special-case "no kind means buy/sell".
+   */
+  kind?: 'buy' | 'sell' | 'convert' | 'withdrawal';
+  /**
    * The TRADED token's own contract/mint address — the receive side on
    * a Buy, the pay side on a Sell — added for openPositions.ts to
    * aggregate real net-held amounts per token. Optional: entries
@@ -138,10 +151,11 @@ export function addTxHistoryEntry(entry: Omit<TxHistoryEntry, 'id' | 'timestamp'
       body: JSON.stringify({
         address: record.fromAddress,
         // The backend's validateHistoryEntry requires chainKey/kind/status
-        // plus a hash — this app's own entry shape has no `kind` field
-        // (isBuySide instead), so one is synthesized here purely for the
-        // synced copy; nothing local ever reads it back.
-        entry: {...record, kind: record.isBuySide ? 'buy' : 'sell'},
+        // plus a hash. record.kind (added for Convert/Withdrawal entries —
+        // see this file's own TxHistoryEntry type) is the real kind when a
+        // caller set one; falls back to synthesizing buy/sell from
+        // isBuySide for the entries that predate `kind` or never set it.
+        entry: {...record, kind: record.kind ?? (record.isBuySide ? 'buy' : 'sell')},
       }),
     }).catch(() => {});
   }
@@ -178,6 +192,26 @@ export async function syncTxHistoryFromServer(address: string | undefined): Prom
   } catch {
     // Best-effort only — see this function's own comment.
   }
+}
+
+/**
+ * Shared title/subtitle logic for HistoryScreen.tsx and
+ * NotificationHistoryScreen.tsx — kept in one place so the two views
+ * can't drift on how a Convert or Withdrawal entry reads, the way they
+ * would if each screen re-derived its own label from isBuySide.
+ */
+export function historyEntryTitle(entry: TxHistoryEntry): string {
+  if (entry.kind === 'convert') return `Converted ${entry.paySymbol} → ${entry.receiveSymbol} on ${entry.chainLabel}`;
+  if (entry.kind === 'withdrawal') return `Withdrew ${entry.paySymbol} on ${entry.chainLabel}`;
+  return `${entry.isBuySide ? 'Bought' : 'Sold'} ${entry.isBuySide ? entry.receiveSymbol : entry.paySymbol} on ${entry.chainLabel}`;
+}
+
+export function historyEntrySubtitle(entry: TxHistoryEntry): string {
+  if (entry.status === 'error') {
+    return entry.errorMessage ?? (entry.kind === 'withdrawal' ? 'Withdrawal failed' : entry.kind === 'convert' ? 'Conversion failed' : 'Trade failed');
+  }
+  if (entry.kind === 'withdrawal') return `${entry.payAmount} ${entry.paySymbol} sent`;
+  return `${entry.payAmount} ${entry.paySymbol} → ${entry.receivedAmountFormatted ?? '?'} ${entry.receiveSymbol}`;
 }
 
 const SOLANA_EXPLORER_TX_BASE = 'https://solscan.io/tx/';

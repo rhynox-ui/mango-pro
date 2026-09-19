@@ -13,7 +13,7 @@ import {Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'rea
 import {ChevronLeftIcon} from '../components/icons';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {useSession} from '../wallet/SessionContext';
-import {explorerUrlFor, filterTxHistoryForAccount, getTxHistory, subscribeTxHistory, type TxHistoryEntry} from '../wallet/txHistory';
+import {explorerUrlFor, filterTxHistoryForAccount, getTxHistory, historyEntrySubtitle, historyEntryTitle, subscribeTxHistory, type TxHistoryEntry} from '../wallet/txHistory';
 
 function formatWhen(timestamp: number): string {
   const diffMs = Date.now() - timestamp;
@@ -35,13 +35,9 @@ function HistoryRow({entry}: {entry: TxHistoryEntry}) {
     <TouchableOpacity style={styles.row} activeOpacity={url ? 0.6 : 1} disabled={!url} onPress={() => url && Linking.openURL(url)}>
       <View style={[styles.statusDot, entry.status === 'error' && styles.statusDotError]} />
       <View style={styles.rowMain}>
-        <Text style={styles.rowTitle}>
-          {entry.isBuySide ? 'Bought' : 'Sold'} {entry.isBuySide ? entry.receiveSymbol : entry.paySymbol} on {entry.chainLabel}
-        </Text>
+        <Text style={styles.rowTitle}>{historyEntryTitle(entry)}</Text>
         <Text style={styles.rowSubtitle} numberOfLines={1}>
-          {entry.status === 'error'
-            ? (entry.errorMessage ?? 'Trade failed')
-            : `${entry.payAmount} ${entry.paySymbol} → ${entry.receivedAmountFormatted ?? '?'} ${entry.receiveSymbol}`}
+          {historyEntrySubtitle(entry)}
         </Text>
       </View>
       <Text style={styles.rowWhen}>{formatWhen(entry.timestamp)}</Text>

@@ -27,7 +27,7 @@ import {Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'rea
 import {ChevronLeftIcon} from '../components/icons';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {useSession} from '../wallet/SessionContext';
-import {explorerUrlFor, filterTxHistoryForAccount, getTxHistory, subscribeTxHistory, type TxHistoryEntry} from '../wallet/txHistory';
+import {explorerUrlFor, filterTxHistoryForAccount, getTxHistory, historyEntrySubtitle, historyEntryTitle, subscribeTxHistory, type TxHistoryEntry} from '../wallet/txHistory';
 import type {ChainKey} from '../core/chainData';
 import {
   getNotificationHistory,
@@ -39,11 +39,9 @@ import {
 
 /** A completed trade, reshaped into the same {title, body, chainKey, txHash} rows deposit alerts already render as — same Row component, same explorer-link behavior, no special-casing needed downstream. */
 function tradeToEntry(trade: TxHistoryEntry): NotificationHistoryEntry {
-  const title = trade.status === 'error' ? 'Trade failed' : `${trade.isBuySide ? 'Bought' : 'Sold'} ${trade.isBuySide ? trade.receiveSymbol : trade.paySymbol} on ${trade.chainLabel}`;
-  const body =
-    trade.status === 'error'
-      ? (trade.errorMessage ?? 'This trade did not go through.')
-      : `${trade.payAmount} ${trade.paySymbol} → ${trade.receivedAmountFormatted ?? '?'} ${trade.receiveSymbol}`;
+  const title =
+    trade.status === 'error' ? (trade.kind === 'withdrawal' ? 'Withdrawal failed' : trade.kind === 'convert' ? 'Conversion failed' : 'Trade failed') : historyEntryTitle(trade);
+  const body = trade.status === 'error' ? (trade.errorMessage ?? 'This did not go through.') : historyEntrySubtitle(trade);
   return {id: `trade:${trade.id}`, timestamp: trade.timestamp, title, body, chainKey: trade.chainKey, txHash: trade.hashes[0]};
 }
 
