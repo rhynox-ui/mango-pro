@@ -238,7 +238,14 @@ export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQ
 
   const res = await postRelayQuote(body);
   if (!res.ok) {
-    throw new Error('Quote failed');
+    // Real gap fix: this used to throw a bare 'Quote failed' with no
+    // detail at all — every other repo's identical function (mobile's
+    // relayBridge.js, the site's relaybridge.js) surfaces the real
+    // status + body text, which is exactly what's needed to tell a
+    // genuine no-liquidity/AMOUNT_TOO_LOW rejection from a transient
+    // 5xx apart instead of guessing.
+    const text = await res.text().catch(() => '');
+    throw new Error(`Relay quote failed (${res.status}): ${text || res.statusText}`);
   }
   const quote = (await res.json()) as RelayQuote;
 
