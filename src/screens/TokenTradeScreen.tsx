@@ -604,6 +604,7 @@ export function TokenTradeScreen({
             takerAddress: userAddress,
             originAmountUsd,
             buyDecimals: receiveDecimalsFallback,
+            slippageBps: slippageBps ?? undefined,
           };
           checkFallbackRoute(fallbackParams)
             .then(fallback => {

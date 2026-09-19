@@ -334,6 +334,18 @@ export type FallbackRouteParams = {
   takerAddress: string;
   originAmountUsd?: number | null;
   buyDecimals?: number | null;
+  /**
+   * TradeSettingsSheet's own bps string (Relay-shaped, "50" = 0.5%), the
+   * same value already sent straight to Relay's slippageTolerance field.
+   * Real bug this closes: the on-chain fallback (Uniswap V4/V3/
+   * SushiSwap V2/PancakeSwap V3) used to always compute its own
+   * minAmountOut off a hardcoded 1% (UNISWAP_SLIPPAGE_BPS below) no
+   * matter what the user picked here — a user who explicitly chose a
+   * tighter tolerance had it silently widened back to 1% the moment
+   * Relay had no route and this fallback took over. undefined/omitted
+   * (Auto) still falls back to that same 1% default.
+   */
+  slippageBps?: string;
 };
 
 /**
@@ -421,12 +433,11 @@ async function executeFallbackQuote({
 export type FallbackExecuteParams = FallbackRouteParams & {session: DerivedAccounts};
 export type FallbackExecuteResult = {provider: FallbackProvider; hash: string; buyAmount: string; feeCollectedInline: boolean};
 
-// 1% — same default tolerance applied wherever nothing more specific is
-// available (no caller here passes a user-chosen slippage preset
-// through to the on-chain fallback path). Protects the swap from
-// landing far worse than quoted between the quote call and the swap
-// call below, without being so tight a normal price move between those
-// two calls fails it.
+// 1% — the default tolerance when the caller passes no slippageBps
+// (Auto, same meaning Relay's own slippageTolerance gives it). Protects
+// the swap from landing far worse than quoted between the quote call and
+// the swap call below, without being so tight a normal price move
+// between those two calls fails it.
 const UNISWAP_SLIPPAGE_BPS = 100n;
 
 /**
@@ -482,12 +493,13 @@ export async function tryFallbackProviders(params: FallbackExecuteParams): Promi
   // entirely and fall straight through to the generic aggregators
   // (1inch/0x), which aren't part of this approval cascade.
   let onchainApprovalSpent = false;
+  const slippageBpsToUse = params.slippageBps ? BigInt(params.slippageBps) : UNISWAP_SLIPPAGE_BPS;
 
   for (const entry of entries) {
     if (entry.kind === 'onchain' && onchainApprovalSpent) continue;
     try {
       if (entry.kind === 'onchain') {
-        const minAmountOut = entry.buyAmount - (entry.buyAmount * UNISWAP_SLIPPAGE_BPS) / 10000n;
+        const minAmountOut = entry.buyAmount - (entry.buyAmount * slippageBpsToUse) / 10000n;
         onchainApprovalSpent = true;
         // No inline fee collection on any of these four — none has a
         // fee mechanism built in — so all of them rely on
