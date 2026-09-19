@@ -20,6 +20,9 @@ class MainApplication : Application(), ReactApplication {
           add(Pbkdf2Package())
           // Deposit-received local notifications (see LocalNotifyModule.kt).
           add(LocalNotifyPackage())
+          // FLAG_SECURE toggle for the recovery-phrase reveal screen (see
+          // ScreenSecurityModule.kt) — ported from mango-mobile.
+          add(ScreenSecurityPackage())
         },
     )
   }

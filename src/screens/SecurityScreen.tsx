@@ -24,6 +24,7 @@ import {useBiometric} from '../settings/BiometricContext';
 import {disableBiometricUnlock} from '../wallet/biometricAuth';
 import {enableAppLock, disableAppLock} from '../wallet/appLockAuth';
 import {EnableBiometricModal} from '../wallet/EnableBiometricModal';
+import {RevealPhraseModal} from '../wallet/RevealPhraseModal';
 import {loadGaslessTradingEnabled, setGaslessTradingEnabled} from '../settings/gaslessTradingPrefs';
 import {isSmartAccountSponsorshipConfigured} from '../wallet/smartAccount';
 
@@ -34,6 +35,7 @@ export function SecurityScreen({onBack}: {onBack: () => void}) {
   const {autoLockMs, setAutoLockMs} = useAutoLock();
   const {biometricAvailable, biometricEnabled, biometryLabel, setBiometricEnabled, appLockEnabled, setAppLockEnabled} = useBiometric();
   const [showEnableBiometric, setShowEnableBiometric] = useState(false);
+  const [showRevealPhrase, setShowRevealPhrase] = useState(false);
   const [appLockBusy, setAppLockBusy] = useState(false);
   const [gaslessEnabled, setGaslessEnabledState] = useState(false);
   const isSeedSession = session?.authMethod !== 'google';
@@ -135,6 +137,15 @@ export function SecurityScreen({onBack}: {onBack: () => void}) {
           </View>
         </>
       )}
+      {isSeedSession && (
+        <>
+          <Text style={styles.sectionLabel}>Recovery phrase</Text>
+          <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={() => setShowRevealPhrase(true)}>
+            <Text style={styles.rowLabel}>Reveal recovery phrase</Text>
+          </TouchableOpacity>
+          <Text style={styles.sectionHint}>Requires your password. Use this to double-check your backup or to import this same wallet into another app.</Text>
+        </>
+      )}
       <Text style={styles.sectionLabel}>Auto-lock</Text>
       <Text style={styles.sectionHint}>Lock the wallet after this much time in the background.</Text>
       <ScrollView contentContainerStyle={styles.rows} showsVerticalScrollIndicator={false}>
@@ -158,6 +169,7 @@ export function SecurityScreen({onBack}: {onBack: () => void}) {
           setBiometricEnabled(true);
         }}
       />
+      <RevealPhraseModal visible={showRevealPhrase} onClose={() => setShowRevealPhrase(false)} />
     </View>
   );
 }
