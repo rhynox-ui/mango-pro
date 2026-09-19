@@ -79,6 +79,7 @@ import {formatUnits, parseEther} from 'viem';
 import {MAINNET_CHAIN_IDS, NATIVE_SYMBOL, currencyAddress, type ChainKey} from './chainData.ts';
 import {DEV_FEE_MAX_USD, DEV_FEE_PCT, DEV_FEE_WALLET, DEV_FEE_WALLET_SOLANA, appFeeBps} from './fees.ts';
 import {fetchWalletPrices} from './walletPrices.ts';
+import {resolveDexScreenerPair} from './dexScreener.ts';
 import {estimateEvmNativeFeeReserve, estimateSolanaMaxReserveSol, fetchWalletNativeBalance, fetchWalletSolanaBalance} from '../wallet/walletRpc.ts';
 import {formatAmountForInput} from '../wallet/useAvailableBalance.ts';
 import {signerAndPublicClientForChain, writeContractAs, sendTransactionAs} from './evmSigner.ts';
@@ -366,6 +367,49 @@ export async function checkFallbackRoute(params: FallbackRouteParams): Promise<{
   if (entries.length === 0) return null;
   const winner = entries[0];
   return {provider: winner.provider, buyAmount: winner.buyAmount.toString()};
+}
+
+/**
+ * Real gap this closes: Relay's own quote carries a priceImpactPct that
+ * TokenTradeScreen.tsx's own extremePriceImpact gate blocks a trade on
+ * above EXTREME_PRICE_IMPACT_PCT — this fallback path never computed
+ * one at all (checkFallbackRoute's own caller sets it to null), so that
+ * same safety gate silently never fired for a fallback trade no matter
+ * how thin the actual pool was. A Relay-blocked 80%-impact trade could
+ * sail straight through the fallback the instant Relay had no route.
+ *
+ * Deliberately does NOT implement separate spot-price math for each of
+ * the four on-chain AMM types this file routes through (Uniswap V2's
+ * constant-product formula, V3/V4's concentrated-liquidity math,
+ * PancakeSwap V3's own) — four different formulas, each easy to get
+ * subtly wrong in a way that either falsely blocks real trades or fails
+ * to catch a genuinely bad one, and none of them would even cover the
+ * two generic providers (1inch/0x) anyway. Instead exposes the token's
+ * real live market price via dexScreener.ts's resolveDexScreenerPair —
+ * the SAME trusted price source openPositions.ts already values a held
+ * token against, already cached and already fails safe (null, never a
+ * guess, never a throw) — so the caller can compare the trade's own
+ * implied execution price against it. Works identically across every
+ * provider this file has, present or future.
+ *
+ * Deliberately just the price lookup, not the full priceImpactPct
+ * formula: Buy and Sell aren't mirror images of each other here — a Buy
+ * compares against the known, fixed USD amount paid; a Sell compares
+ * against the fair value of the (fixed) token amount being sold, which
+ * uses this SAME price as both the denominator and part of the
+ * numerator. Folding both into one "generic" formula here previously
+ * produced a formula that was only actually correct for Buy — direction-
+ * specific arithmetic is safer done explicitly at the call site, which
+ * already knows isBuySide.
+ *
+ * Returns null whenever no live price is indexed for this token — the
+ * caller must treat that exactly like Relay's own "couldn't compute
+ * impact" case (quote.priceImpactPct: null), never as "impact is zero."
+ */
+export async function fetchLiveTokenPriceUsd({chainKey, tokenAddress}: {chainKey: ChainKey; tokenAddress: string}): Promise<number | null> {
+  const pair = await resolveDexScreenerPair({chainKey, tokenAddress}).catch(() => null);
+  const priceUsd = pair?.priceUsd;
+  return priceUsd != null && Number.isFinite(priceUsd) && priceUsd > 0 ? priceUsd : null;
 }
 
 async function executeFallbackQuote({

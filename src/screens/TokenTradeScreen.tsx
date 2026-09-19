@@ -56,7 +56,8 @@ import {DEV_FEE_PCT} from '../core/fees';
 import {getRelayQuote, summarizeQuote, type GetRelayQuoteParams, type QuoteSummary, type RelayQuote} from '../core/relayQuote';
 import {executeRelayQuote, type ExecuteStep} from '../core/executeRelayQuote';
 import {loadGaslessTradingEnabled} from '../settings/gaslessTradingPrefs';
-import {checkFallbackRoute, sweepFallbackFeeFromNativeBalance, sweepFallbackFeeFromSolanaBalance, tryFallbackProviders, type FallbackRouteParams} from '../core/fallbackDex';
+import {checkFallbackRoute, fetchLiveTokenPriceUsd, sweepFallbackFeeFromNativeBalance, sweepFallbackFeeFromSolanaBalance, tryFallbackProviders, type FallbackRouteParams} from '../core/fallbackDex';
+import {fetchWalletPrices} from '../core/walletPrices';
 import {TransactionIntentError} from '../core/txIntentFirewall';
 import {describeTradeError} from '../core/tradeErrors';
 import {fetchErc20TokenMetadata, fetchSplMintDecimals, fetchWalletSplTokenBalance, fetchWalletTokenBalance} from '../wallet/walletRpc';
@@ -607,7 +608,7 @@ export function TokenTradeScreen({
             slippageBps: slippageBps ?? undefined,
           };
           checkFallbackRoute(fallbackParams)
-            .then(fallback => {
+            .then(async fallback => {
               if (requestId !== quoteRequestIdRef.current) return;
               if (!fallback) {
                 rawQuoteRef.current = null;
@@ -625,7 +626,42 @@ export function TokenTradeScreen({
               } catch {
                 receivedAmountFormatted = null;
               }
-              setQuote({totalFeeUsd: null, etaSeconds: null, receivedAmountFormatted, payAmountUsd: null, receiveAmountUsd: null, priceImpactPct: null});
+              // Real gap this closes: Relay's own quote carries a
+              // priceImpactPct that extremePriceImpact (below) blocks a
+              // trade on above EXTREME_PRICE_IMPACT_PCT — this fallback
+              // path always left it null, so that same safety gate never
+              // fired here no matter how thin the pool actually was. The
+              // TOKEN side of the trade is the same contract regardless
+              // of Buy/Sell (token.address/token.chainKey); only which
+              // side is "fixed/known" vs. "valued at live market price"
+              // swaps — a Buy's fixed side is the USD paid
+              // (originAmountUsd), a Sell's fixed side is the exact
+              // token amount sold (amtNum). See fetchLiveTokenPriceUsd's
+              // own header for why this compares against the token's
+              // real live market price rather than attempting separate
+              // spot-price math per AMM type.
+              let priceImpactPct: number | null = null;
+              if (requestId === quoteRequestIdRef.current) {
+                const tokenPriceUsd = await fetchLiveTokenPriceUsd({chainKey: token.chainKey, tokenAddress: token.address});
+                if (tokenPriceUsd != null && requestId === quoteRequestIdRef.current) {
+                  if (isBuySide && originAmountUsd && receivedAmountFormatted) {
+                    const tokensReceived = Number(receivedAmountFormatted);
+                    const fairUsdReceived = tokensReceived * tokenPriceUsd;
+                    if (Number.isFinite(fairUsdReceived) && fairUsdReceived > 0) {
+                      priceImpactPct = ((fairUsdReceived - originAmountUsd) / originAmountUsd) * 100;
+                    }
+                  } else if (!isBuySide && amtNum > 0 && receivedAmountFormatted) {
+                    const fairUsdSold = amtNum * tokenPriceUsd;
+                    const nativePriceUsd = receiveAsset === 'cash' ? 1 : (await fetchWalletPrices().catch(() => ({}) as Record<string, number>))[NATIVE_SYMBOL[token.chainKey]];
+                    const actualUsdReceived = nativePriceUsd ? Number(receivedAmountFormatted) * nativePriceUsd : null;
+                    if (Number.isFinite(fairUsdSold) && fairUsdSold > 0 && actualUsdReceived != null && Number.isFinite(actualUsdReceived)) {
+                      priceImpactPct = ((actualUsdReceived - fairUsdSold) / fairUsdSold) * 100;
+                    }
+                  }
+                }
+              }
+              if (requestId !== quoteRequestIdRef.current) return;
+              setQuote({totalFeeUsd: null, etaSeconds: null, receivedAmountFormatted, payAmountUsd: null, receiveAmountUsd: null, priceImpactPct});
               setQuoteLoading(false);
             })
             .catch(() => {
