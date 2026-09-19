@@ -234,7 +234,9 @@ export function TokenTradeScreen({
   // re-executes the exact quote it locked in rather than a display value.
   const fallbackParamsRef = useRef<FallbackRouteParams | null>(null);
 
-  type ExecuteState = 'idle' | ExecuteStep | 'success' | 'error';
+  // 'consolidating' is a purely local UI phase, not one of
+  // executeRelayQuote's own steps — see consolidateIntoPayOrigin below.
+  type ExecuteState = 'idle' | 'consolidating' | ExecuteStep | 'success' | 'error';
   const [executeState, setExecuteState] = useState<ExecuteState>('idle');
   const [executeError, setExecuteError] = useState<string | null>(null);
   const [executeWarnings, setExecuteWarnings] = useState<string[]>([]);
@@ -397,18 +399,17 @@ export function TokenTradeScreen({
   const {balance, loading: balanceLoading} = useAvailableBalance(session ? fetchPayBalance : null, [session, isBuySide, solana, token, tokenDecimals, balanceRetryToken, cashPortfolio]);
   const insufficientBalance = amtNum > 0 && balance !== null && amtNum > balance;
   // Real, disclosed execution-layer gap: Relay's own quote API takes one
-  // concrete origin chain per call, so today's execution can only ever
-  // pull from the SINGLE chain payOrigin auto-picked (the biggest
-  // holding) — it can't yet split one trade across several chains at
-  // once. The aggregate total above is real and correct as a BALANCE,
-  // but if the typed amount fits in that total only by combining chains
-  // (e.g. $10 on Solana + $10 on Arbitrum, spending $15), executing it
-  // right now would fail on-chain against whichever single chain
-  // payOrigin points at. Caught here, before signing, with an honest
-  // explanation — not silently let through and left to fail downstream,
-  // and not silently narrowed to "insufficient balance" when the user's
-  // real total says otherwise. True multi-chain splitting/consolidation
-  // is real, separate follow-up engineering.
+  // concrete origin chain per call, so execution can only ever pull from
+  // the SINGLE chain payOrigin auto-picked (the biggest holding) — it
+  // can't split one trade across several chains at once by itself. The
+  // aggregate total above is real and correct as a BALANCE, but if the
+  // typed amount fits in that total only by combining chains (e.g. $10 on
+  // Solana + $10 on Arbitrum, spending $15), payOrigin's own chain alone
+  // can't cover it. `needsConsolidation` used to just block the trade here
+  // with an explanation — now it instead tells handleTrade to run
+  // consolidateIntoPayOrigin first (moving the shortfall from the wallet's
+  // other chains into payOrigin's chain via the same fee-free Convert
+  // mechanism) before executing the real Buy, all behind the one Buy tap.
   const payOriginResult = isBuySide ? cashPortfolio?.results.find(r => r.chainKey === payOrigin.chainKey) : undefined;
   const payOriginChainBalance = payOriginResult?.status === 'ok' ? payOriginResult.balance : 0;
   const needsConsolidation = isBuySide && amtNum > 0 && !insufficientBalance && amtNum > payOriginChainBalance;
@@ -652,6 +653,89 @@ export function TokenTradeScreen({
     setSelectedPercent(null);
   }
 
+  /**
+   * Real fix for a real, confirmed gap: this screen's own balance was
+   * always correctly shown as the wallet's WHOLE cross-chain total
+   * (fetchPayBalance above), but execution could only ever pull from
+   * payOrigin's single chain — Relay's quote API takes one concrete
+   * origin per call. A typed/Max'd amount that only added up by
+   * combining chains used to just block here (needsConsolidation's own
+   * comment called this "real, separate follow-up engineering" — never
+   * actually built). This is that: moves the shortfall from every other
+   * chain the wallet holds cash on into payOrigin's chain, largest-
+   * holding-first, before the real Buy executes — the exact same
+   * fee-free cash-to-cash move ConvertCashSheet.tsx already runs
+   * (getRelayQuote + executeRelayQuote, waiveAppFee: true), just driven
+   * automatically instead of asking the user to run Convert by hand
+   * first (a798862's own manual workaround for this identical gap).
+   *
+   * Never risks losing funds even on a partial failure: every leg that
+   * succeeds already landed in the user's own wallet, just on a
+   * different chain than planned. Throws with an honest account of
+   * what moved and what's still short the moment any leg fails or the
+   * total moved still doesn't cover `neededUsd` — this function's own
+   * caller never proceeds to the real Buy on an unverified balance.
+   */
+  async function consolidateIntoPayOrigin(neededUsd: number): Promise<void> {
+    if (!session) throw new Error('Unlock your wallet first.');
+    if (!cashPortfolio) throw new Error("Couldn't read your cash balances — try again.");
+
+    const contributors = CASH_SUPPORTED_CHAINS.filter(c => c !== payOrigin.chainKey)
+      .map(chainKey => {
+        const result = cashPortfolio.results.find(r => r.chainKey === chainKey);
+        return {chainKey, balance: result?.status === 'ok' ? result.balance : 0};
+      })
+      .filter(c => c.balance > 0)
+      .sort((a, b) => b.balance - a.balance);
+
+    let remaining = neededUsd;
+    const movedFrom: string[] = [];
+
+    for (const contributor of contributors) {
+      if (remaining <= 0) break;
+      const leg = Math.min(remaining, contributor.balance);
+      // Same nickel dust floor this codebase already applies to
+      // fallback-fee sweeps — a sub-$0.05 leg would spend more on gas
+      // than it consolidates.
+      if (leg < 0.05) continue;
+
+      const fromSymbol = CASH_ASSET_BY_CHAIN[contributor.chainKey] ?? 'USDC';
+      const toSymbol = CASH_ASSET_BY_CHAIN[payOrigin.chainKey] ?? 'USDC';
+      const payDecimals = assetDecimalsForChain(contributor.chainKey, fromSymbol);
+      if (payDecimals == null) continue;
+
+      const amountBaseUnits = parseUnits(leg.toFixed(payDecimals), payDecimals).toString();
+      const userAddress = contributor.chainKey === 'solana' ? session.solana.address : session.evm.address;
+      const recipientAddress = payOrigin.chainKey === 'solana' ? session.solana.address : session.evm.address;
+
+      const legQuote = await getRelayQuote({
+        fromChainKey: contributor.chainKey,
+        toChainKey: payOrigin.chainKey,
+        originCurrency: currencyAddress(contributor.chainKey, fromSymbol),
+        destinationCurrency: currencyAddress(payOrigin.chainKey, toSymbol),
+        amountBaseUnits,
+        userAddress,
+        recipientAddress,
+        originAmountUsd: leg,
+        waiveAppFee: true,
+      });
+      await executeRelayQuote(legQuote, session, () => {}, {useGaslessTrading: gaslessTradingEnabled});
+      movedFrom.push(`$${leg.toFixed(2)} from ${CHAIN_LABEL[contributor.chainKey]}`);
+      remaining -= leg;
+    }
+
+    if (remaining > 0.01) {
+      throw new Error(
+        movedFrom.length > 0
+          ? `Moved ${movedFrom.join(', ')}, but that still leaves $${remaining.toFixed(2)} short — try again once your other balances update.`
+          : "Couldn't find enough spare balance on your other chains to cover this trade.",
+      );
+    }
+
+    const freshPortfolio = await fetchCashPortfolio(session);
+    setCashPortfolio(freshPortfolio);
+  }
+
   async function handleTrade() {
     const quoteToExecute = rawQuoteRef.current;
     const fallbackParams = fallbackParamsRef.current;
@@ -661,6 +745,16 @@ export function TokenTradeScreen({
     setExecuteTxHashes([]);
     setResultModalDismissed(false);
     const fromAddress = solana ? session.solana.address : session.evm.address;
+    if (needsConsolidation) {
+      setExecuteState('consolidating');
+      try {
+        await consolidateIntoPayOrigin(amtNum - payOriginChainBalance);
+      } catch (err) {
+        setExecuteError(err instanceof Error ? err.message : 'Could not consolidate your balance across chains.');
+        setExecuteState('error');
+        return;
+      }
+    }
     try {
       let txHashes: string[];
       let warnings: string[];
@@ -770,7 +864,6 @@ export function TokenTradeScreen({
     (Boolean(rawQuoteRef.current) || Boolean(fallbackParamsRef.current)) &&
     Boolean(session) &&
     !insufficientBalance &&
-    !needsConsolidation &&
     !extremePriceImpact &&
     (executeState === 'idle' || executeState === 'error');
   const isExecuting = executeState !== 'idle' && executeState !== 'error' && executeState !== 'success';
@@ -1040,8 +1133,8 @@ export function TokenTradeScreen({
       {!isBuySide && !tokenDecimalsError && tokenDecimals === null && amtNum > 0 && <Text style={styles.noteText}>Verifying this token…</Text>}
       {insufficientBalance && <Text style={styles.errorText}>Insufficient {paySymbol} balance</Text>}
       {needsConsolidation && (
-        <Text style={styles.errorText}>
-          ${amtNum.toFixed(2)} needs more than one chain — you have ${payOriginChainBalance.toFixed(2)} available in a single transaction right now.
+        <Text style={styles.noteText}>
+          Only ${payOriginChainBalance.toFixed(2)} of this ${amtNum.toFixed(2)} is on {CHAIN_LABEL[payOrigin.chainKey]} — the rest will be moved in from your other chains automatically before this buy executes.
         </Text>
       )}
       <View style={styles.feeRow}>
@@ -1086,8 +1179,15 @@ export function TokenTradeScreen({
   );
 }
 
-function executeStatusLabel(state: 'build' | 'signing' | 'filling' | 'done'): string {
+// Called only from the isExecuting branch (executeState there is always
+// 'consolidating' or an ExecuteStep in practice), but `isExecuting` is a
+// plain boolean, so TS can't narrow `executeState`'s own union type at
+// that call site — accepts the full ExecuteState shape here instead of
+// forcing a cast at every call.
+function executeStatusLabel(state: 'idle' | 'consolidating' | ExecuteStep | 'success' | 'error'): string {
   switch (state) {
+    case 'consolidating':
+      return 'Moving cash…';
     case 'build':
       return 'Preparing…';
     case 'signing':
@@ -1096,6 +1196,8 @@ function executeStatusLabel(state: 'build' | 'signing' | 'filling' | 'done'): st
       return 'Confirming…';
     case 'done':
       return 'Done';
+    default:
+      return '';
   }
 }
 

@@ -896,6 +896,29 @@ export function ProfileScreen({
                   permanently lose funds.
                 </Text>
 
+                {/* Real fix for a real, reported symptom: the button below
+                    silently disables (opacity 0.4) the moment any one of
+                    canSubmitWithdraw's four conditions isn't met, with
+                    nothing explaining which one — reads as "the UI is
+                    static/broken" rather than "fill in a valid amount"
+                    when the dimming alone doesn't register as an
+                    explanation. Only one reason is ever shown at a time,
+                    in the same priority order canSubmitWithdraw checks
+                    them, and only once the recipient field has real
+                    content — an empty field on first open needs no
+                    address-format complaint yet. */}
+                {!canSubmitWithdraw && withdrawAddress.trim().length > 0 && !isValidRecipientAddress(withdrawChain, withdrawAddress.trim()) && (
+                  <Text style={styles.withdrawDisabledReason}>That doesn't look like a valid {withdrawChain === 'solana' ? 'Solana' : 'wallet'} address.</Text>
+                )}
+                {!canSubmitWithdraw && (withdrawAddress.trim().length === 0 || isValidRecipientAddress(withdrawChain, withdrawAddress.trim())) && withdrawAmountNumber <= 0 && (
+                  <Text style={styles.withdrawDisabledReason}>Enter an amount to withdraw.</Text>
+                )}
+                {!canSubmitWithdraw && isValidRecipientAddress(withdrawChain, withdrawAddress.trim()) && withdrawAmountNumber > 0 && withdrawAmountNumber > withdrawChainBalance && (
+                  <Text style={styles.withdrawDisabledReason}>
+                    That's more than the ${formatUsd(withdrawChainBalance)} available on {CHAIN_LABEL[withdrawChain]}.
+                  </Text>
+                )}
+
                 <TouchableOpacity
                   style={[styles.sendButton, !canSubmitWithdraw && styles.sendButtonDisabled]}
                   disabled={!canSubmitWithdraw}
@@ -1236,6 +1259,7 @@ function makeStyles(colors: Colors) {
     },
     modalHint: {color: colors.textMuted, fontSize: 11.5, lineHeight: 16, marginTop: 8},
     modalWarning: {color: colors.danger, fontSize: 11.5, lineHeight: 16, marginTop: 10, fontWeight: '600'},
+    withdrawDisabledReason: {color: colors.danger, fontSize: 12, lineHeight: 16, marginTop: 10},
     modalSubtitle: {color: colors.textSecondary, fontSize: 13, marginBottom: 16},
     modalHeaderSpacer: {width: 20},
 
