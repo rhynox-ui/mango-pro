@@ -91,6 +91,9 @@ jobs:
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses > /dev/null || true
 
+      - name: Install Android NDK r28
+        run: sdkmanager "ndk;28.2.13676358"
+
       - name: Install dependencies
         run: npm ci
 
