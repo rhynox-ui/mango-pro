@@ -71,18 +71,12 @@ check('summarizeQuote() prefers swapImpact.percent over totalImpact.percent for 
   assert.equal(summary.priceImpactPct, 0.5);
 });
 
-check("summarizeQuote() formats Relay's details.currencyOut.minimumAmount as minReceivedFormatted", () => {
-  const summary = summarizeQuote({details: {currencyOut: {currency: {decimals: 6}, amount: '30754920', minimumAmount: '30454920'}}}, 18);
-  if (summary.minReceivedFormatted !== '30.45492') throw new Error(`got ${summary.minReceivedFormatted}`);
-  if (summarizeQuote({details: {currencyOut: {amount: '1'}}}, 18).minReceivedFormatted !== null) throw new Error('absent minimum must be null');
-});
 check('summarizeQuote() is null-safe on a completely empty/malformed quote — never throws', () => {
   const summary = summarizeQuote({}, 18);
   assert.deepEqual(summary, {
     totalFeeUsd: null,
     etaSeconds: null,
     receivedAmountFormatted: null,
-    minReceivedFormatted: null,
     payAmountUsd: null,
     receiveAmountUsd: null,
     priceImpactPct: null,
