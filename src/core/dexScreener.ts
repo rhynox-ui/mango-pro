@@ -27,6 +27,7 @@ const DEXSCREENER_CHAIN_IDS: Partial<Record<ChainKey, string>> = {
   plasma: 'plasma',
   unichain: 'unichain',
   xlayer: 'xlayer',
+  arc: 'arc',
 };
 
 export function dexScreenerChainForChain(chainKey: ChainKey): string | null {

@@ -19,6 +19,10 @@ import {SPONSORSHIP_COST_ESTIMATE_USD} from '../src/core/fees.ts';
 import {ARC_GAS_RESERVE_USDC, CASH_ASSET_BY_CHAIN, spendableCash, spendableTotalUsd} from '../src/core/usdcBalances.ts';
 import {arcUsdcSpendInNativeUnits} from '../src/core/executeRelayQuote.ts';
 import {isGaslessSupportedOnChain} from '../src/wallet/smartAccount.ts';
+import {UNISWAP_V3_ADDRESSES, uniswapV3SupportsChain} from '../src/core/uniswapV3.ts';
+import {UNIVERSAL_ROUTER_ADDRESSES} from '../src/core/uniswapV4.ts';
+import {dexScreenerChainForChain, chainKeyForDexScreenerChainId} from '../src/core/dexScreener.ts';
+import {geckoTerminalNetworkForChainOrNull} from '../src/core/geckoTerminalNetworks.ts';
 
 let checks = 0;
 
@@ -77,5 +81,16 @@ console.log('ok', ++checks, '- Arc pre-flight counts the USDC being spent agains
 assert.equal(isGaslessSupportedOnChain(5042), false);
 assert.equal(isGaslessSupportedOnChain(8453), true);
 console.log('ok', ++checks, '- Arc never takes the Pimlico gasless path');
+
+assert.equal(uniswapV3SupportsChain(5042), true);
+assert.equal(UNISWAP_V3_ADDRESSES[5042].wrappedNative, ARC_USDC);
+assert.equal(UNISWAP_V3_ADDRESSES[5042].swapRouter02, '0x53bf6b0684ec7ef91e1387da3d1a1769bc5a6f77');
+assert.equal(UNIVERSAL_ROUTER_ADDRESSES[5042], '0x4fca4a51ab4f23a7447b3284fbd7d73289a89fb1');
+console.log('ok', ++checks, '- Arc has Uniswap v3/v4 as the backup DEX, pools keyed on the USDC ERC-20');
+
+assert.equal(dexScreenerChainForChain('arc'), 'arc');
+assert.equal(chainKeyForDexScreenerChainId('arc'), 'arc');
+assert.equal(geckoTerminalNetworkForChainOrNull('arc'), 'arc');
+console.log('ok', ++checks, '- Arc tokens resolve in search and charts (DexScreener / GeckoTerminal slug "arc")');
 
 console.log(`\n${checks} checks passed`);
