@@ -17,7 +17,8 @@
 // chains failed, so a partial result can be shown as partial — never
 // silently presented as complete when it isn't.
 
-import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, assetDecimalsForChain, type ChainKey} from './chainData.ts';
+import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, assetDecimalsForChain, NEAR_ENABLED, NEAR_USDC, NEAR_USDC_DECIMALS, type ChainKey} from './chainData.ts';
+import {nearView} from './nearRpc.ts';
 import {fetchWalletSplTokenBalance, fetchWalletTokenBalance} from '../wallet/walletRpc.ts';
 import type {DerivedAccounts} from '../wallet/keys';
 
@@ -74,8 +75,42 @@ export const USDC_SUPPORTED_CHAINS = Object.keys(TOKEN_ADDRESSES.USDC ?? {}) as 
 
 export type ChainUsdcResult = {chainKey: ChainKey; status: 'ok'; balance: number} | {chainKey: ChainKey; status: 'error'; error: string};
 
+/** USDC on NEAR — beside the ChainKey results, since NEAR isn't a Relay chain (chainData.ts's NEAR note). */
+export type NearCashResult = {status: 'ok'; balance: number} | {status: 'error'; error: string};
+
+/** USDC held by a NEAR account (ft_balance_of on NEAR's native USDC contract), in whole USDC. */
+export async function fetchNearUsdcBalance(accountId: string, fetchImpl: typeof fetch = fetch): Promise<number> {
+  const raw = await nearView<string | null>(NEAR_USDC, 'ft_balance_of', {account_id: accountId}, undefined, fetchImpl);
+  const units = BigInt(typeof raw === 'string' && /^\d+$/.test(raw) ? raw : '0');
+  const scale = 10n ** BigInt(NEAR_USDC_DECIMALS);
+  return Number(units / scale) + Number(units % scale) / Number(scale);
+}
+
+/** null while NEAR is switched off or the session has no NEAR account (a Google session). */
+async function nearCashFor(session: DerivedAccounts, fetchImpl: typeof fetch = fetch): Promise<NearCashResult | null> {
+  if (!NEAR_ENABLED || !session.near) return null;
+  try {
+    return {status: 'ok', balance: await fetchNearUsdcBalance(session.near.address, fetchImpl)};
+  } catch (e) {
+    return {status: 'error', error: e instanceof Error ? e.message : "Could not fetch the NEAR balance."};
+  }
+}
+
+/** Adds NEAR's USDC into a portfolio's total and completeness. */
+export function withNearCash<T extends {totalUsd: number; complete: boolean}>(portfolio: T, near: NearCashResult | null): T & {near: NearCashResult | null} {
+  if (!near) return {...portfolio, near: null};
+  return {
+    ...portfolio,
+    near,
+    totalUsd: portfolio.totalUsd + (near.status === 'ok' ? near.balance : 0),
+    complete: portfolio.complete && near.status === 'ok',
+  };
+}
+
 export type UsdcPortfolio = {
   results: ChainUsdcResult[];
+  /** USDC on NEAR (null when NEAR is off / no NEAR account) — already included in totalUsd. */
+  near?: NearCashResult | null;
   totalUsd: number;
   /** True when every chain answered — false means totalUsd is a real but INCOMPLETE sum, not the user's actual total. */
   complete: boolean;
@@ -107,7 +142,7 @@ export async function fetchUsdcPortfolio(session: DerivedAccounts, {forceFresh =
     if (inFlight) return inFlight;
   }
   return usdcPortfolioCache.run(key, async () => {
-    const settled = await Promise.allSettled(USDC_SUPPORTED_CHAINS.map(chainKey => fetchOneChainUsdc(chainKey, session)));
+    const [settled, near] = await Promise.all([Promise.allSettled(USDC_SUPPORTED_CHAINS.map(chainKey => fetchOneChainUsdc(chainKey, session))), nearCashFor(session)]);
 
     const results: ChainUsdcResult[] = settled.map((outcome, i) => {
       const chainKey = USDC_SUPPORTED_CHAINS[i];
@@ -121,7 +156,7 @@ export async function fetchUsdcPortfolio(session: DerivedAccounts, {forceFresh =
     const totalUsd = results.reduce((sum, r) => (r.status === 'ok' ? sum + r.balance : sum), 0);
     const complete = results.every(r => r.status === 'ok');
 
-    return {results, totalUsd, complete};
+    return withNearCash({results, totalUsd, complete}, near);
   });
 }
 
@@ -191,7 +226,12 @@ export function spendableCash(chainKey: ChainKey, balance: number): number {
   return spendable > 0 ? spendable : 0;
 }
 
-/** The whole portfolio's spendable cash — totalUsd with each chain's gas reserve taken out. */
+/**
+ * The whole portfolio's spendable cash — totalUsd with each chain's gas
+ * reserve taken out. Counts only the Relay chains (`results`): USDC on NEAR
+ * is in totalUsd but can't pay a Relay route, so it is spent through the
+ * NEAR trade path instead, never offered here.
+ */
 export function spendableTotalUsd(portfolio: CashPortfolio | null): number {
   if (!portfolio) return 0;
   return portfolio.results.reduce((sum, r) => (r.status === 'ok' ? sum + spendableCash(r.chainKey, r.balance) : sum), 0);
@@ -203,6 +243,8 @@ export type ChainCashResult =
 
 export type CashPortfolio = {
   results: ChainCashResult[];
+  /** USDC on NEAR (null when NEAR is off / no NEAR account) — already included in totalUsd, not in spendableTotalUsd. */
+  near?: NearCashResult | null;
   totalUsd: number;
   complete: boolean;
 };
@@ -231,7 +273,7 @@ export async function fetchCashPortfolio(session: DerivedAccounts, {forceFresh =
     if (inFlight) return inFlight;
   }
   return cashPortfolioCache.run(key, async () => {
-    const settled = await Promise.allSettled(CASH_SUPPORTED_CHAINS.map(chainKey => fetchOneChainCash(chainKey, session)));
+    const [settled, near] = await Promise.all([Promise.allSettled(CASH_SUPPORTED_CHAINS.map(chainKey => fetchOneChainCash(chainKey, session))), nearCashFor(session)]);
 
     const results: ChainCashResult[] = settled.map((outcome, i) => {
       const chainKey = CASH_SUPPORTED_CHAINS[i];
@@ -246,6 +288,6 @@ export async function fetchCashPortfolio(session: DerivedAccounts, {forceFresh =
     const totalUsd = results.reduce((sum, r) => (r.status === 'ok' ? sum + r.balance : sum), 0);
     const complete = results.every(r => r.status === 'ok');
 
-    return {results, totalUsd, complete};
+    return withNearCash({results, totalUsd, complete}, near);
   });
 }
