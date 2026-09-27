@@ -9,7 +9,7 @@
 import {useEffect, useRef, useState} from 'react';
 import {ActivityIndicator, FlatList, Image, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import {SearchIcon} from '../components/icons';
-import {CHAIN_LABEL} from '../core/chainData';
+import {tradeChainLabel} from '../core/chainData';
 import {fmtCompactUsd, searchTokens, type TokenSearchResult} from '../core/tokenSearch';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 
@@ -122,7 +122,7 @@ function ResultRow({result, colors, onPress}: {result: TokenSearchResult; colors
           {result.symbol}
         </Text>
         <Text style={styles.resultMeta} numberOfLines={1}>
-          {CHAIN_LABEL[result.chainKey]}
+          {tradeChainLabel(result.chainKey)}
           {marketCap ? ` · ${marketCap} MC` : ''}
         </Text>
       </View>

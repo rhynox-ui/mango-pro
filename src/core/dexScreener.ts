@@ -7,7 +7,7 @@
 // types: this exact logic already resolves real pairs correctly in
 // production on both other surfaces.
 
-import type {ChainKey} from './chainData';
+import {NEAR_ENABLED, type ChainKey, type TradeChain} from './chainData.ts';
 
 // DexScreener chain slugs, as they appear both in dexscreener.com URLs
 // and as the `chainId` field of its API responses. Anything not listed
@@ -30,7 +30,8 @@ const DEXSCREENER_CHAIN_IDS: Partial<Record<ChainKey, string>> = {
   arc: 'arc',
 };
 
-export function dexScreenerChainForChain(chainKey: ChainKey): string | null {
+export function dexScreenerChainForChain(chainKey: TradeChain): string | null {
+  if (chainKey === 'near') return 'near';
   return DEXSCREENER_CHAIN_IDS[chainKey] ?? null;
 }
 
@@ -47,6 +48,12 @@ export function chainKeyForDexScreenerChainId(dexScreenerChainId: string): Chain
     reverseChainIds = new Map(Object.entries(DEXSCREENER_CHAIN_IDS).map(([key, id]) => [id as string, key as ChainKey]));
   }
   return reverseChainIds.get(dexScreenerChainId) ?? null;
+}
+
+/** Same as chainKeyForDexScreenerChainId, plus NEAR (DexScreener's 'near') once NEAR trading is on. */
+export function tradeChainForDexScreenerChainId(dexScreenerChainId: string): TradeChain | null {
+  if (dexScreenerChainId === 'near') return NEAR_ENABLED ? 'near' : null;
+  return chainKeyForDexScreenerChainId(dexScreenerChainId);
 }
 
 export type ResolvedPair = {chainId: string; pairAddress: string; socialLinks: TokenSocialLink[]; priceUsd: number | null};
@@ -121,7 +128,7 @@ const pairInFlight = new Map<string, Promise<ResolvedPair | null>>();
  * an EXACT chainId match before ranking by liquidity — "first pair
  * returned" would risk charting the wrong network's price.
  */
-export async function resolveDexScreenerPair({chainKey, tokenAddress}: {chainKey: ChainKey; tokenAddress: string | null}): Promise<ResolvedPair | null> {
+export async function resolveDexScreenerPair({chainKey, tokenAddress}: {chainKey: TradeChain; tokenAddress: string | null}): Promise<ResolvedPair | null> {
   const chainId = dexScreenerChainForChain(chainKey);
   if (!chainId || !tokenAddress) return null;
 

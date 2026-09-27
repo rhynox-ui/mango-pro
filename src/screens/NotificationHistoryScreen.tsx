@@ -106,7 +106,7 @@ export function NotificationHistoryScreen({onBack}: {onBack: () => void}) {
   useEffect(() => subscribeTxHistory(setTrades), []);
 
   const entries = useMemo(() => {
-    const scopedTrades = session ? filterTxHistoryForAccount(trades, {evmAddress: session.evm.address, solanaAddress: session.solana.address}) : trades;
+    const scopedTrades = session ? filterTxHistoryForAccount(trades, {evmAddress: session.evm.address, solanaAddress: session.solana.address, nearAddress: session.near?.address}) : trades;
     return [...notifications, ...scopedTrades.map(tradeToEntry)].sort((a, b) => b.timestamp - a.timestamp);
   }, [notifications, trades, session]);
 

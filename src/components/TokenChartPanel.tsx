@@ -24,7 +24,7 @@ import {useEffect, useMemo, useState} from 'react';
 import {ActivityIndicator, Linking, Modal, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {WebView} from 'react-native-webview';
 import type {ShouldStartLoadRequest} from 'react-native-webview/lib/WebViewTypes';
-import {MAINNET_CHAIN_IDS, type ChainKey} from '../core/chainData';
+import {MAINNET_CHAIN_IDS, type TradeChain} from '../core/chainData';
 import {dexScreenerEmbedUrl, resolveDexScreenerPair, type TokenSocialLink} from '../core/dexScreener';
 import {checkSolanaTokenSecurity, checkTokenSecurity, type TokenSecuritySummary} from '../core/goplusTokenSecurity';
 import {GlobeIcon, TelegramIcon, XIcon, type IconComponent} from './icons';
@@ -45,7 +45,7 @@ function fmtCompact(n: number): string {
   return n.toFixed(0);
 }
 
-export function TokenChartPanel({chainKey, tokenAddress}: {chainKey: ChainKey; tokenAddress: string | null}) {
+export function TokenChartPanel({chainKey, tokenAddress}: {chainKey: TradeChain; tokenAddress: string | null}) {
   const {colors} = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
 
@@ -76,7 +76,8 @@ export function TokenChartPanel({chainKey, tokenAddress}: {chainKey: ChainKey; t
   }, [chainKey, tokenAddress]);
 
   useEffect(() => {
-    if (!tokenAddress) {
+    // GoPlus has no NEAR coverage — no holder data rather than a wrong chain's.
+    if (!tokenAddress || chainKey === 'near') {
       setSecurity(null);
       return;
     }

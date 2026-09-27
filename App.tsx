@@ -489,6 +489,7 @@ function AppInner(): React.JSX.Element {
     if (!session) return;
     syncTxHistoryFromServer(session.evm.address);
     syncTxHistoryFromServer(session.solana.address);
+    if (session.near) syncTxHistoryFromServer(session.near.address);
   }, [session]);
 
   useEffect(() => {

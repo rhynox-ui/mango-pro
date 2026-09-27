@@ -327,7 +327,7 @@ export function ProfileScreen({
   const [openPositions, setOpenPositions] = useState<OpenPositionWithValue[]>([]);
   useEffect(() => {
     function recount(entries: ReturnType<typeof getTxHistory>) {
-      const scoped = session ? filterTxHistoryForAccount(entries, {evmAddress: session.evm.address, solanaAddress: session.solana.address}) : entries;
+      const scoped = session ? filterTxHistoryForAccount(entries, {evmAddress: session.evm.address, solanaAddress: session.solana.address, nearAddress: session.near?.address}) : entries;
       const successful = scoped.filter(e => e.status === 'success');
       setTradeCount(successful.length);
       // "Closed" is a token fully sold back out (net ~0), one row per

@@ -29,7 +29,7 @@ const HISTORY_LIST_URL = 'https://mangoprotocol.site/api/v1/history/list';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {CHAIN_KEY_TO_VIEM_CHAIN} from '../core/chainRegistry.ts';
-import type {ChainKey} from '../core/chainData';
+import type {TradeChain} from '../core/chainData';
 
 const STORAGE_KEY = 'mango_pro_tx_history_v1';
 const MAX_ENTRIES = 200;
@@ -38,7 +38,8 @@ export type TxHistoryEntry = {
   id: string;
   timestamp: number;
   status: 'success' | 'error';
-  chainKey: ChainKey;
+  /** 'near' for a NEAR trade (nearTrade.ts). */
+  chainKey: TradeChain;
   chainLabel: string;
   isBuySide: boolean;
   paySymbol: string;
@@ -123,10 +124,11 @@ export function subscribeTxHistory(listener: (entries: TxHistoryEntry[]) => void
  * (written before this field existed, or a caller that somehow skipped
  * it) is kept rather than hidden, so it never just silently vanishes.
  */
-export function filterTxHistoryForAccount(list: TxHistoryEntry[], {evmAddress, solanaAddress}: {evmAddress?: string; solanaAddress?: string}): TxHistoryEntry[] {
+export function filterTxHistoryForAccount(list: TxHistoryEntry[], {evmAddress, solanaAddress, nearAddress}: {evmAddress?: string; solanaAddress?: string; nearAddress?: string}): TxHistoryEntry[] {
   return list.filter(entry => {
     if (!entry.fromAddress) return true;
     if (entry.chainKey === 'solana') return entry.fromAddress === solanaAddress;
+    if (entry.chainKey === 'near') return entry.fromAddress === nearAddress;
     return !!evmAddress && entry.fromAddress.toLowerCase() === evmAddress.toLowerCase();
   });
 }
@@ -215,11 +217,13 @@ export function historyEntrySubtitle(entry: TxHistoryEntry): string {
 }
 
 const SOLANA_EXPLORER_TX_BASE = 'https://solscan.io/tx/';
+const NEAR_EXPLORER_TX_BASE = 'https://nearblocks.io/txns/';
 
 /** Real block-explorer tx URL, or null for a chain with no verified explorer. */
-export function explorerUrlFor(chainKey: ChainKey, hash: string | undefined): string | null {
+export function explorerUrlFor(chainKey: TradeChain, hash: string | undefined): string | null {
   if (!hash) return null;
   if (chainKey === 'solana') return `${SOLANA_EXPLORER_TX_BASE}${hash}`;
+  if (chainKey === 'near') return `${NEAR_EXPLORER_TX_BASE}${hash}`;
   const base = CHAIN_KEY_TO_VIEM_CHAIN[chainKey]?.blockExplorers?.default?.url;
   return base ? `${base}/tx/${hash}` : null;
 }
