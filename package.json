@@ -8,6 +8,7 @@
     "lint": "eslint .",
     "start": "react-native start",
     "test": "jest",
+    "test:render": "jest --config jest.render.config.js",
     "typecheck": "tsc --noEmit",
     "postinstall": "patch-package",
     "verify-fees": "node --experimental-strip-types scripts/verify-fees.mjs",
@@ -32,7 +33,8 @@
     "verify-near-trade": "node --experimental-strip-types scripts/verify-near-trade.mjs",
     "verify-solana-spend-guard": "node --experimental-strip-types scripts/verify-solana-spend-guard.mjs",
     "verify-fallback-tx-firewall": "node --experimental-strip-types scripts/verify-fallback-tx-firewall.mjs",
-    "verify": "npm run verify-fees && npm run verify-wallet-crypto && npm run verify-relay-quote && npm run verify-usdc-balances && npm run verify-send-usdc && npm run verify-tx-intent-firewall && npm run verify-solana-tx-intent && npm run verify-execute-relay-quote && npm run verify-solana-fee-sponsor && npm run verify-evm-sponsorship-recovery && npm run verify-i18n && npm run verify-arc && npm run verify-one-click && npm run verify-one-click-deposits && npm run verify-near-account && npm run verify-near-signing && npm run verify-near-cash-moves && npm run verify-intear-router && npm run verify-near-outcome && npm run verify-near-trade && npm run verify-solana-spend-guard && npm run verify-fallback-tx-firewall"
+    "verify-solana-spend-intent": "node --experimental-strip-types scripts/verify-solana-spend-intent.mjs",
+    "verify": "npm run verify-fees && npm run verify-wallet-crypto && npm run verify-relay-quote && npm run verify-usdc-balances && npm run verify-send-usdc && npm run verify-tx-intent-firewall && npm run verify-solana-tx-intent && npm run verify-execute-relay-quote && npm run verify-solana-fee-sponsor && npm run verify-evm-sponsorship-recovery && npm run verify-i18n && npm run verify-arc && npm run verify-one-click && npm run verify-one-click-deposits && npm run verify-near-account && npm run verify-near-signing && npm run verify-near-cash-moves && npm run verify-intear-router && npm run verify-near-outcome && npm run verify-near-trade && npm run verify-solana-spend-guard && npm run verify-fallback-tx-firewall && npm run verify-solana-spend-intent"
   },
   "dependencies": {
     "@near-js/crypto": "2.5.1",

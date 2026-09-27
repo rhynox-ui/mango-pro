@@ -10,6 +10,8 @@ module.exports = {
     // in as the module resolution itself, not just required as a setupFile.
     '^@react-native-async-storage/async-storage$': '@react-native-async-storage/async-storage/jest',
   },
+  // The render tests need extra transforms — they run via jest.render.config.js (npm run test:render).
+  testPathIgnorePatterns: ['/node_modules/', '<rootDir>/__tests__/render'],
   transformIgnorePatterns: [
     'node_modules/(?!((jest-)?react-native|@react-native(-community)?|@react-native-async-storage)/)',
   ],

@@ -187,7 +187,9 @@ export function assertFallbackTxMatchesIntent({provider, quote, sellToken, buyTo
   if (value !== (nativeSell ? sellAmount : 0n)) fail('The fallback quote attaches a different amount of native currency than this trade sells.');
 
   const spender = quote.allowanceTarget ? norm(quote.allowanceTarget) : null;
-  if (nativeSell ? spender !== null : spender !== to) fail('The fallback quote asks for an approval to a contract other than the one it calls.');
+  // No spender means no approval is asked for (0x omits it when the wallet
+  // already has one); when one is asked for, it must be the contract called.
+  if (nativeSell ? spender !== null : spender !== null && spender !== to) fail('The fallback quote asks for an approval to a contract other than the one it calls.');
 
   const checkMin = (min: bigint) => {
     if (min < floor || min <= 0n) fail("The fallback quote's on-chain minimum is lower than the amount shown allows.");
