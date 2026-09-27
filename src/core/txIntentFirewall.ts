@@ -62,19 +62,22 @@
 // set is restricted to conditions that CANNOT legitimately occur:
 // a chain we didn't ask for, a recipient or currency we didn't ask for,
 // spending more native than the user typed, approving a token that
-// isn't the one being spent, or approving a spender that no other
-// transaction in this same quote even calls.
+// isn't the one being spent, approving more than the user is spending,
+// or approving a spender that no LATER transaction in this same quote
+// calls (an approval exists so a following step can pull the tokens).
 //
-// Two genuinely suspicious patterns only WARN, because this could not
-// be verified against the live routing API from the environment this
-// was written in and both have legitimate explanations elsewhere in the
-// industry: native value attached to an ERC-20 sale (some routes charge
-// a native protocol fee in the same transaction) and an approval larger
-// than the trade (many routers approve max-uint256 deliberately to save
-// gas on later trades). They are returned to the caller instead of
-// thrown. If Relay is ever confirmed never to do either, promoting them
-// to blocks is a one-line change and the tests below already cover both
-// directions.
+// An approval larger than the trade used to only warn. Promoted to a
+// block (an uploaded audit's C-02, verified): the header above already
+// promised approvals are capped at the amount being spent, and Relay's
+// own SDK fixtures (relay-kit tests/data/swapWithApproval.ts,
+// swapWithZeroResetApproval.ts) approve exactly the swap amount on every
+// transaction-only route. Relay's one max-approval flow approves Permit2
+// ahead of a signature step, and executeRelayQuote.ts refuses signature
+// steps outright, so no route this app can execute needs more.
+//
+// One suspicious pattern still only WARNS, because it has a legitimate
+// explanation: native value attached to an ERC-20 sale (some routes
+// charge a native protocol fee in the same transaction).
 //
 // The quote-level checks below (currencies, chains, recipient) are the
 // second layer and are deliberately NOT fail-closed on absence: every
@@ -389,17 +392,18 @@ export function assertTransactionItemsMatchIntent(items: RelayTransactionItem[] 
   const warnings: string[] = [];
   let totalNativeValue = 0n;
 
-  // Every contract this route calls. An approval's spender has to be
-  // one of them: a legitimate approve exists precisely so that a LATER
-  // transaction in the same route can pull the tokens. A spender that
-  // nothing here calls is an approval to a stranger.
-  const calledContracts = new Set<string>();
-  for (const item of items) {
-    const to = normalizeAddress(item?.data?.to);
-    if (to) calledContracts.add(to);
+  // Every contract called AFTER each item. An approval's spender has to
+  // be one of them: a legitimate approve exists precisely so that a LATER
+  // transaction in the same route can pull the tokens. A spender nothing
+  // afterwards calls is an approval to a stranger.
+  const calledAfter: Set<string>[] = items.map(() => new Set<string>());
+  for (let i = items.length - 2; i >= 0; i--) {
+    calledAfter[i] = new Set(calledAfter[i + 1]);
+    const next = normalizeAddress(items[i + 1]?.data?.to);
+    if (next) calledAfter[i].add(next);
   }
 
-  for (const item of items) {
+  for (const [index, item] of items.entries()) {
     const data = item?.data;
     if (!data || typeof data !== 'object') {
       fail('The routing service returned a transaction with no data.');
@@ -467,7 +471,7 @@ export function assertTransactionItemsMatchIntent(items: RelayTransactionItem[] 
         fail(`The route asks to approve a token (${approvedToken}) that isn't the one you're spending.`);
       }
 
-      if (!calledContracts.has(spender)) {
+      if (!calledAfter[index].has(spender)) {
         fail(
           `The route asks to approve ${spender} to spend your tokens, but no transaction in this route calls that address. ` +
             'A legitimate approval always names a contract the same route goes on to use.',
@@ -475,9 +479,9 @@ export function assertTransactionItemsMatchIntent(items: RelayTransactionItem[] 
       }
 
       if (approved > intent.amount) {
-        warnings.push(
-          `This route approves ${approved} base units of your token, more than the ${intent.amount} this trade needs — ` +
-            `the spender (${spender}) keeps that allowance afterwards.`,
+        fail(
+          `This route asks to approve ${approved} base units of your token, more than the ${intent.amount} this trade spends — ` +
+            `the spender (${spender}) would keep that allowance afterwards.`,
         );
       }
     }

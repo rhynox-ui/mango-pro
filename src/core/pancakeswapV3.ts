@@ -38,8 +38,8 @@ export const PANCAKESWAP_V3_ADDRESSES: Record<number, {factory: string; quoter: 
 // Uniswap V3's (500/3000/10000/100) — see this file's own header.
 export const FEE_TIERS = [500, 2500, 10000, 100] as const;
 
-const MAX_UINT160 = 2n ** 160n - 1n;
-const PERMIT2_ALLOWANCE_TTL_SECONDS = 30 * 24 * 60 * 60;
+// Exact amount, 30-minute Permit2 expiry — see uniswapV4.ts's matching note (audit H-03).
+const PERMIT2_ALLOWANCE_TTL_SECONDS = 30 * 60;
 
 const QUOTER_ABI = [
   {
@@ -161,7 +161,7 @@ export async function executePancakeSwapV3Swap({
   if (!tokenInIsNative) {
     const erc20Allowance = (await publicClient.readContract({address: poolTokenIn, abi: ERC20_ALLOWANCE_ABI, functionName: 'allowance', args: [signer.address, addresses.permit2]})) as bigint;
     if (erc20Allowance < amountIn) {
-      const approveHash = await writeContractAs(signer, {address: poolTokenIn, abi: ERC20_ALLOWANCE_ABI, functionName: 'approve', args: [addresses.permit2, MAX_UINT160]});
+      const approveHash = await writeContractAs(signer, {address: poolTokenIn, abi: ERC20_ALLOWANCE_ABI, functionName: 'approve', args: [addresses.permit2, amountIn]});
       await publicClient.waitForTransactionReceipt({hash: approveHash});
     }
 
@@ -177,7 +177,7 @@ export async function executePancakeSwapV3Swap({
         address: addresses.permit2,
         abi: PERMIT2_ALLOWANCE_ABI,
         functionName: 'approve',
-        args: [poolTokenIn, addresses.universalRouter, MAX_UINT160, nowSeconds + PERMIT2_ALLOWANCE_TTL_SECONDS],
+        args: [poolTokenIn, addresses.universalRouter, amountIn, nowSeconds + PERMIT2_ALLOWANCE_TTL_SECONDS],
       });
       await publicClient.waitForTransactionReceipt({hash: permit2ApproveHash});
     }

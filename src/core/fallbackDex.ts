@@ -80,6 +80,7 @@ import {MAINNET_CHAIN_IDS, NATIVE_SYMBOL, currencyAddress, type ChainKey} from '
 import {DEV_FEE_MAX_USD, DEV_FEE_PCT, DEV_FEE_WALLET, DEV_FEE_WALLET_SOLANA, appFeeBps} from './fees.ts';
 import {fetchWalletPrices} from './walletPrices.ts';
 import {resolveDexScreenerPair} from './dexScreener.ts';
+import {assertFallbackTxMatchesIntent, assertZeroExSettlerRegistered} from './fallbackTxFirewall.ts';
 import {estimateEvmNativeFeeReserve, estimateSolanaMaxReserveSol, fetchWalletNativeBalance, fetchWalletSolanaBalance} from '../wallet/walletRpc.ts';
 import {formatAmountForInput} from '../wallet/useAvailableBalance.ts';
 import {signerAndPublicClientForChain, writeContractAs, sendTransactionAs} from './evmSigner.ts';
@@ -251,7 +252,7 @@ type OnchainExecData =
   | {kind: 'sushiswap-v2'}
   | {kind: 'pancakeswap-v3'; fee: number};
 
-type ProviderEntry = {provider: FallbackProvider; buyAmount: bigint} & ({kind: 'onchain'; execData: OnchainExecData} | {kind: 'generic'; quote: RawFallbackQuote});
+type ProviderEntry = {buyAmount: bigint} & ({provider: FallbackProvider; kind: 'onchain'; execData: OnchainExecData} | {provider: GenericFallbackProvider; kind: 'generic'; quote: RawFallbackQuote});
 
 /**
  * Quotes every provider in parallel and ranks by real output — never
@@ -428,19 +429,39 @@ export async function fetchLiveTokenPriceUsd({chainKey, tokenAddress}: {chainKey
 }
 
 async function executeFallbackQuote({
+  provider,
   chainKey,
   session,
   sellTokenAddress,
+  buyTokenAddress,
   sellAmount,
   quote,
 }: {
+  provider: GenericFallbackProvider;
   chainKey: ChainKey;
   session: DerivedAccounts;
   sellTokenAddress: string;
+  buyTokenAddress: string;
   sellAmount: string;
   quote: RawFallbackQuote;
 }): Promise<{hash: string}> {
   const {signer, publicClient} = signerAndPublicClientForChain(chainIdFor(chainKey), session);
+
+  // Before anything is approved or signed: the provider's transaction
+  // must be exactly this swap (fallbackTxFirewall.ts — canonical router,
+  // decoded calldata, exact input, the wallet as recipient, a real
+  // minimum). An eth_call below only proves it runs.
+  const {settler} = assertFallbackTxMatchesIntent({
+    provider,
+    quote,
+    sellToken: sellTokenAddress,
+    buyToken: buyTokenAddress,
+    sellAmount: BigInt(sellAmount),
+    taker: signer.address,
+  });
+  if (settler) {
+    await assertZeroExSettlerRegistered(settler, args => publicClient.readContract(args as never));
+  }
 
   // Tracked so a swap that reverts below can clean up after itself — see
   // that catch block's own comment for why.
@@ -598,9 +619,11 @@ export async function tryFallbackProviders(params: FallbackExecuteParams): Promi
       // Generic provider (1inch/0x) — quote was already fetched by
       // quoteAllProviders above, re-executed against as-is.
       const result = await executeFallbackQuote({
+        provider: entry.provider,
         chainKey: params.chainKey,
         session: params.session,
         sellTokenAddress: params.sellToken,
+        buyTokenAddress: params.buyToken,
         sellAmount: params.sellAmount,
         quote: {...entry.quote, sellAmount: params.sellAmount},
       });

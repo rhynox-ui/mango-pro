@@ -238,17 +238,42 @@ check('BLOCKS a Solana-shaped item when the intent was not actually Solana-sourc
   blocks(() => assertTransactionItemsMatchIntent([solanaItem()], nativeIntent), 'not sourced from solana');
 });
 
-// ---- warnings, not blocks (see the module header on why) ----------
-check('WARNS on an approval larger than the trade, without blocking it', () => {
-  const warnings = assertTransactionItemsMatchIntent(
+// ---- approvals: exact, and only for a later step ------------------
+check('BLOCKS an approval larger than the trade (the spender would keep the rest)', () => {
+  blocks(
+    () =>
+      assertTransactionItemsMatchIntent(
+        [
+          {data: {chainId: 8453, to: USDC_BASE, data: erc20Approve(ROUTER, 999999999999n), value: '0'}},
+          {data: {chainId: 8453, to: ROUTER, data: '0xdeadbeef', value: '0'}},
+        ],
+        tokenIntent,
+      ),
+    'would keep that allowance',
+  );
+});
+check("BLOCKS an approval whose spender is only called BEFORE it (it must be a later step's)", () => {
+  blocks(
+    () =>
+      assertTransactionItemsMatchIntent(
+        [
+          {data: {chainId: 8453, to: ROUTER, data: '0xdeadbeef', value: '0'}},
+          {data: {chainId: 8453, to: USDC_BASE, data: erc20Approve(ROUTER, 1000000n), value: '0'}},
+        ],
+        tokenIntent,
+      ),
+    'no transaction in this route calls that address',
+  );
+});
+check("allows Relay's zero-reset flow (approve 0, approve exact, swap)", () => {
+  assertTransactionItemsMatchIntent(
     [
-      {data: {chainId: 8453, to: USDC_BASE, data: erc20Approve(ROUTER, 999999999999n), value: '0'}},
+      {data: {chainId: 8453, to: USDC_BASE, data: erc20Approve(ROUTER, 0n), value: '0'}},
+      {data: {chainId: 8453, to: USDC_BASE, data: erc20Approve(ROUTER, 1000000n), value: '0'}},
       {data: {chainId: 8453, to: ROUTER, data: '0xdeadbeef', value: '0'}},
     ],
     tokenIntent,
   );
-  assert(warnings.length === 1, `expected exactly one warning, got ${JSON.stringify(warnings)}`);
-  assert(warnings[0].includes('keeps that allowance'), warnings[0]);
 });
 check('WARNS on native value attached to a token sale, without blocking it', () => {
   const warnings = assertTransactionItemsMatchIntent([{data: {chainId: 8453, to: ROUTER, data: '0xdeadbeef', value: '12345'}}], tokenIntent);

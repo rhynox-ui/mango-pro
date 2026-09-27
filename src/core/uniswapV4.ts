@@ -70,13 +70,13 @@ const FEE_TIER_TICK_SPACING = [
 ] as const;
 
 const NO_HOOKS = '0x0000000000000000000000000000000000000000';
-const MAX_UINT160 = 2n ** 160n - 1n;
-// A far-future but bounded expiry for the Permit2 allowance record
-// itself (not the transaction deadline) — Permit2 allowances are meant
-// to be re-approved periodically, not left open forever; 30 days is a
-// reasonable "this app trades occasionally" window without leaving a
-// stale, effectively-permanent allowance behind.
-const PERMIT2_ALLOWANCE_TTL_SECONDS = 30 * 24 * 60 * 60;
+// Approvals are exactly this trade's amount and the Permit2 allowance
+// lapses 30 minutes later (an uploaded audit's H-03, verified): these
+// used to be max-uint160 to Permit2 with no expiry, plus max-uint160 to
+// the router for 30 days — standing authority well past the trade.
+// Permit2 decrements an exact allowance as it's spent, so nothing is
+// left over after the swap either way.
+const PERMIT2_ALLOWANCE_TTL_SECONDS = 30 * 60;
 
 const V4_QUOTER_ABI = [
   {
@@ -276,7 +276,7 @@ export async function executeUniswapV4Swap({
   if (!tokenInIsNative) {
     const erc20Allowance = (await publicClient.readContract({address: currencyIn, abi: ERC20_ALLOWANCE_ABI, functionName: 'allowance', args: [signer.address, PERMIT2_ADDRESS]})) as bigint;
     if (erc20Allowance < amountIn) {
-      const approveHash = await writeContractAs(signer, {address: currencyIn, abi: ERC20_ALLOWANCE_ABI, functionName: 'approve', args: [PERMIT2_ADDRESS, MAX_UINT160]});
+      const approveHash = await writeContractAs(signer, {address: currencyIn, abi: ERC20_ALLOWANCE_ABI, functionName: 'approve', args: [PERMIT2_ADDRESS, amountIn]});
       await publicClient.waitForTransactionReceipt({hash: approveHash});
     }
 
@@ -291,7 +291,7 @@ export async function executeUniswapV4Swap({
         address: PERMIT2_ADDRESS,
         abi: PERMIT2_ALLOWANCE_ABI,
         functionName: 'approve',
-        args: [currencyIn, routerAddress, MAX_UINT160, nowSeconds + PERMIT2_ALLOWANCE_TTL_SECONDS],
+        args: [currencyIn, routerAddress, amountIn, nowSeconds + PERMIT2_ALLOWANCE_TTL_SECONDS],
       });
       await publicClient.waitForTransactionReceipt({hash: permit2ApproveHash});
     }
