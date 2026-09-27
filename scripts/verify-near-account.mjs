@@ -59,7 +59,9 @@ assert.equal(failed.complete, false);
 assert.equal(withNearCash(base, null).totalUsd, 10);
 console.log('ok', ++checks, "- an unreachable NEAR RPC marks the total incomplete; no NEAR account changes nothing");
 
-assert.equal(NEAR_ENABLED, false);
-console.log('ok', ++checks, '- NEAR stays switched off until deposit, trade and withdraw all work');
+// Switched on deliberately (after the relayer was configured) — this pin
+// makes any future change to the flag a visible, reviewed diff.
+assert.equal(NEAR_ENABLED, true);
+console.log('ok', ++checks, '- NEAR is switched on (deposit, trade and withdraw are all built)');
 
 console.log(`\n${checks} checks passed`);

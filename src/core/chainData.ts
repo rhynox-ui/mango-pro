@@ -32,7 +32,7 @@ export const ARC_USDC = '0x3600000000000000000000000000000000000000';
 // Everything NEAR in the app sits behind NEAR_ENABLED until deposit, trade
 // and withdraw all work end to end — nobody can send funds to NEAR before
 // they can also move them back out.
-export const NEAR_ENABLED = false;
+export const NEAR_ENABLED = true;
 export const NEAR_LABEL = 'NEAR';
 /** Native USDC on NEAR (Circle), 6 decimals — the same contract 1Click and the site use. */
 export const NEAR_USDC = '17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1';
