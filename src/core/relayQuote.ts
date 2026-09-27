@@ -271,6 +271,8 @@ export type QuoteSummary = {
   totalFeeUsd: number | null;
   etaSeconds: number | null;
   receivedAmountFormatted: string | null;
+  /** The least the route will deliver (Relay's details.currencyOut.minimumAmount), formatted — shown on the review sheet. */
+  minReceivedFormatted: string | null;
   payAmountUsd: number | null;
   receiveAmountUsd: number | null;
   priceImpactPct: number | null;
@@ -314,9 +316,19 @@ export function summarizeQuote(quote: RelayQuote, fallbackDecimals: number): Quo
     }
   }
 
+  let minReceivedFormatted: string | null = null;
+  const minimumAmount = (currencyOut as {minimumAmount?: unknown} | undefined)?.minimumAmount;
+  if (typeof minimumAmount === 'string' && /^\d+$/.test(minimumAmount)) {
+    try {
+      minReceivedFormatted = formatUnits(BigInt(minimumAmount), currencyOut?.currency?.decimals ?? fallbackDecimals);
+    } catch {
+      minReceivedFormatted = null;
+    }
+  }
+
   const payAmountUsd = num(details?.currencyIn?.amountUsd);
   const receiveAmountUsd = num(details?.currencyOut?.amountUsd);
   const priceImpactPct = num(details?.swapImpact?.percent ?? details?.totalImpact?.percent);
 
-  return {totalFeeUsd, etaSeconds, receivedAmountFormatted, payAmountUsd, receiveAmountUsd, priceImpactPct};
+  return {totalFeeUsd, etaSeconds, receivedAmountFormatted, minReceivedFormatted, payAmountUsd, receiveAmountUsd, priceImpactPct};
 }

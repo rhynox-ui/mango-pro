@@ -69,7 +69,8 @@ import {addTxHistoryEntry} from '../wallet/txHistory';
 import {markOwnAction} from '../wallet/depositWatcher';
 import {useSession} from '../wallet/SessionContext';
 import {useTheme, type Colors} from '../theme/ThemeContext';
-import {TradeSettingsSheet} from '../components/TradeSettingsSheet';
+import {TradeSettingsSheet, slippagePresetLabel} from '../components/TradeSettingsSheet';
+import {TradeReviewSheet, type TradeReview} from '../components/TradeReviewSheet';
 import {TradeResultModal, type TradeResultSummary} from '../components/TradeResultModal';
 import {cashLogoUrl, fetchCashPortfolio, spendableCash, spendableTotalUsd, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
 
@@ -267,6 +268,9 @@ export function TokenTradeScreen({
   // truth passed straight into getRelayQuote() below.
   const [slippageBps, setSlippageBps] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // The review step before signing (TradeReviewSheet) — the active
+  // Buy/Sell pill opens it; its Confirm runs handleTrade.
+  const [reviewOpen, setReviewOpen] = useState(false);
 
   // Real product decision: Mango Pro is USDC-first, not chain-first. The
   // user thinks in one USDC balance; Mango thinks in chains. A Buy always
@@ -567,6 +571,7 @@ export function TokenTradeScreen({
             totalFeeUsd: Number(formatUnits(q.fee, NEAR_USDC_DECIMALS)),
             etaSeconds: 10,
             receivedAmountFormatted: formatUnits(q.receiveUnits, isBuySide ? decimals : NEAR_USDC_DECIMALS),
+            minReceivedFormatted: formatUnits(q.minReceiveUnits, isBuySide ? decimals : NEAR_USDC_DECIMALS),
             payAmountUsd: isBuySide ? amtNum : tokenPriceUsd != null ? amtNum * tokenPriceUsd : null,
             receiveAmountUsd: isBuySide ? (tokenPriceUsd != null ? received * tokenPriceUsd : null) : received,
             priceImpactPct,
@@ -769,7 +774,17 @@ export function TokenTradeScreen({
                 }
               }
               if (requestId !== quoteRequestIdRef.current) return;
-              setQuote({totalFeeUsd: null, etaSeconds: null, receivedAmountFormatted, payAmountUsd: null, receiveAmountUsd: null, priceImpactPct});
+              // The fallback's worst case: its on-chain routers use the
+              // chosen slippage (1% on Auto), 1inch/0x always 1% — so the
+              // looser of the two.
+              let minReceivedFormatted: string | null = null;
+              try {
+                const worstBps = BigInt(Math.max(Number(slippageBps ?? 100), 100));
+                minReceivedFormatted = formatUnits((BigInt(fallback.buyAmount) * (10_000n - worstBps)) / 10_000n, receiveDecimalsFallback);
+              } catch {
+                minReceivedFormatted = null;
+              }
+              setQuote({totalFeeUsd: null, etaSeconds: null, receivedAmountFormatted, minReceivedFormatted, payAmountUsd: null, receiveAmountUsd: null, priceImpactPct});
               setQuoteLoading(false);
             })
             .catch(() => {
@@ -1137,6 +1152,40 @@ export function TokenTradeScreen({
     (executeState === 'idle' || executeState === 'error');
   const isExecuting = executeState !== 'idle' && executeState !== 'error' && executeState !== 'success';
 
+  // A quote that goes away (amount edited, requote failed) closes the review.
+  useEffect(() => {
+    if (!canTrade) setReviewOpen(false);
+  }, [canTrade]);
+
+  const originChain: TradeChain = isBuySide && !nearToken ? payOrigin.chainKey : token.chainKey;
+  const review: TradeReview = {
+    isBuySide,
+    payAmount: amount,
+    paySymbol,
+    receiveSymbol,
+    quote,
+    networkLabel: originChain !== token.chainKey ? `${tradeChainLabel(originChain)} → ${tradeChainLabel(token.chainKey)}` : tradeChainLabel(token.chainKey),
+    routeLabel: nearQuoteRef.current
+      ? `NEAR · ${nearQuoteRef.current.route.label ?? 'NEAR DEX'}`
+      : rawQuoteRef.current
+        ? 'Relay'
+        : fallbackParamsRef.current
+          ? 'DEX aggregator (fallback)'
+          : '—',
+    slippageLabel: nearToken ? (slippageBps != null ? slippagePresetLabel(slippageBps) : '1%') : slippagePresetLabel(slippageBps),
+    networkFeeNote:
+      originChain === 'near'
+        ? 'Paid by Mango'
+        : originChain === 'solana'
+          ? "Paid by you, or by Mango when you're short on SOL"
+          : originChain === 'arc'
+            ? 'Paid in USDC from your balance'
+            : gaslessTradingEnabled
+              ? 'Covered by Mango (gasless trading)'
+              : 'Paid from your wallet',
+    feeFallbackLabel: `Mango fee ${formatFeePct(DEV_FEE_PCT)}%`,
+  };
+
   // Same real bug both DexScreen.tsx's own pillHint and the site's own
   // swapPillHint fix (the site's is a direct, explicitly-commented port
   // of mobile's — same priority order, reused here): a freshly opened
@@ -1225,7 +1274,7 @@ export function TokenTradeScreen({
           a no-op, explained by pillHint below, not a dead second button. */}
       <View style={styles.buySellRow}>
         <TouchableOpacity
-          onPress={() => (!isBuySide ? flipToBuy() : canTrade && handleTrade())}
+          onPress={() => (!isBuySide ? flipToBuy() : canTrade && setReviewOpen(true))}
           style={[styles.buySellPillBuy, isBuySide && styles.buySellPillBuyActive, isBuySide && !canTrade && styles.buySellPillDisabled]}
           activeOpacity={0.8}>
           {isBuySide && isExecuting ? (
@@ -1241,7 +1290,7 @@ export function TokenTradeScreen({
           )}
         </TouchableOpacity>
         <TouchableOpacity
-          onPress={() => (isBuySide ? flipToSell() : canTrade && handleTrade())}
+          onPress={() => (isBuySide ? flipToSell() : canTrade && setReviewOpen(true))}
           style={[styles.buySellPillSell, !isBuySide && styles.buySellPillSellActive, !isBuySide && !canTrade && styles.buySellPillDisabled]}
           activeOpacity={0.8}>
           {!isBuySide && isExecuting ? (
@@ -1444,6 +1493,15 @@ export function TokenTradeScreen({
         }}
       />
       <TradeSettingsSheet visible={settingsOpen} onClose={() => setSettingsOpen(false)} slippageBps={slippageBps} onSave={setSlippageBps} />
+      <TradeReviewSheet
+        visible={reviewOpen}
+        onClose={() => setReviewOpen(false)}
+        onConfirm={() => {
+          setReviewOpen(false);
+          if (canTrade) handleTrade();
+        }}
+        review={review}
+      />
     </View>
   );
 }
