@@ -53,7 +53,7 @@ export function HistoryScreen({onBack}: {onBack: () => void}) {
 
   useEffect(() => subscribeTxHistory(setEntries), []);
 
-  const scoped = session ? filterTxHistoryForAccount(entries, {evmAddress: session.evm.address, solanaAddress: session.solana.address}) : entries;
+  const scoped = session ? filterTxHistoryForAccount(entries, {evmAddress: session.evm.address, solanaAddress: session.solana.address, nearAddress: session.near?.address}) : entries;
 
   return (
     <View style={styles.screen}>

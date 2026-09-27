@@ -17,7 +17,7 @@ import {useMemo} from 'react';
 import {Image, Linking, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {explorerUrlFor} from '../wallet/txHistory';
-import type {ChainKey} from '../core/chainData';
+import type {TradeChain} from '../core/chainData';
 
 // The real brand mark (same asset onboarding/AppLockScreen use), always
 // black — used for both success and failure. The title/message text and
@@ -31,7 +31,7 @@ export type TradeResultSummary = {
   receiveSymbol: string;
   payAmount: string;
   receivedAmountFormatted: string | null;
-  chainKey: ChainKey;
+  chainKey: TradeChain;
 };
 
 export function TradeResultModal({

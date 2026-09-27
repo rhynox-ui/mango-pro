@@ -91,6 +91,17 @@ export const CHAIN_LABEL: Record<ChainKey, string> = {
   arc: 'Arc',
 };
 
+/**
+ * Where a token can be traded: a Relay chain, or NEAR (traded through
+ * NEAR's own DEXes — nearTrade.ts). Only search, the chart and the trade
+ * screen take this; everything keyed by ChainKey stays as it is.
+ */
+export type TradeChain = ChainKey | 'near';
+
+export function tradeChainLabel(chain: TradeChain): string {
+  return chain === 'near' ? NEAR_LABEL : CHAIN_LABEL[chain];
+}
+
 export const TOKEN_ADDRESSES: Record<string, Partial<Record<ChainKey, string>>> = {
   USDC: {
     ethereum: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',

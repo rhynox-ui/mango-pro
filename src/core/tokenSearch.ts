@@ -9,15 +9,16 @@
 // winning would point a trade at the wrong network's contract.
 //
 // Results are filtered to chains this app actually has chain/fee data
-// for (chainKeyForDexScreenerChainId returns null otherwise) — a result
+// for, plus NEAR once NEAR trading is on (tradeChainForDexScreenerChainId
+// returns null otherwise) — a result
 // this app can't map to a ChainKey can't be handed to the trade screen,
 // so it's dropped rather than shown as a dead row.
 
-import {chainKeyForDexScreenerChainId, type DexScreenerPair} from './dexScreener';
-import type {ChainKey} from './chainData';
+import {tradeChainForDexScreenerChainId, type DexScreenerPair} from './dexScreener';
+import type {TradeChain} from './chainData';
 
 export type TokenSearchResult = {
-  chainKey: ChainKey;
+  chainKey: TradeChain;
   tokenAddress: string;
   symbol: string;
   name: string;
@@ -56,7 +57,7 @@ export async function searchTokens(query: string): Promise<TokenSearchResult[]> 
 
     const bestByKey = new Map<string, TokenSearchResult>();
     for (const pair of pairs) {
-      const chainKey = pair?.chainId ? chainKeyForDexScreenerChainId(pair.chainId) : null;
+      const chainKey = pair?.chainId ? tradeChainForDexScreenerChainId(pair.chainId) : null;
       const tokenAddress = pair?.baseToken?.address;
       if (!chainKey || typeof tokenAddress !== 'string' || !tokenAddress) continue;
 

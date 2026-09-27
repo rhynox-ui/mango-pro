@@ -9,7 +9,8 @@
 
 import assert from 'node:assert/strict';
 import {deriveAccounts} from '../src/wallet/keys.ts';
-import {NEAR_USDC} from '../src/core/chainData.ts';
+import {NEAR_ENABLED, NEAR_USDC, tradeChainLabel} from '../src/core/chainData.ts';
+import {dexScreenerChainForChain, tradeChainForDexScreenerChainId} from '../src/core/dexScreener.ts';
 import {DEV_FEE_WALLET_NEAR} from '../src/core/fees.ts';
 import {NearTradeError, executeNearTrade, nearTradeFee, pickRelayableRoute, quoteNearTrade} from '../src/core/nearTrade.ts';
 
@@ -185,5 +186,13 @@ async function buyQuote(extra = {}) {
   assert.equal(r.status, 'ok');
   ok('a stale quote is re-fetched first, and never sent for less than the minimum shown');
 }
+
+// search / chart: NEAR results appear only once NEAR is switched on
+assert.equal(tradeChainForDexScreenerChainId('near'), NEAR_ENABLED ? 'near' : null);
+assert.equal(tradeChainForDexScreenerChainId('arc'), 'arc');
+assert.equal(tradeChainForDexScreenerChainId('bsc'), 'bnb');
+assert.equal(dexScreenerChainForChain('near'), 'near');
+assert.equal(tradeChainLabel('near'), 'NEAR');
+ok(`NEAR tokens show in search only while NEAR_ENABLED (now ${NEAR_ENABLED}); the chart resolves NEAR pairs by DexScreener's 'near'`);
 
 console.log(`\n${checks} checks passed`);

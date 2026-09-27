@@ -19,12 +19,12 @@
 // with its real held amount.
 
 import {resolveDexScreenerPair} from '../core/dexScreener.ts';
-import type {ChainKey} from '../core/chainData';
+import type {TradeChain} from '../core/chainData';
 import type {TxHistoryEntry} from './txHistory';
 
 export type OpenPosition = {
   key: string;
-  chainKey: ChainKey;
+  chainKey: TradeChain;
   chainLabel: string;
   tokenAddress: string;
   symbol: string;
@@ -38,7 +38,7 @@ export type OpenPositionWithValue = OpenPosition & {valueUsd: number | null};
 /** A token that was bought and is now fully sold back out — net amount at/near zero. Shows in the Positions "Closed" tab, one row per token exited, not one row per trade. */
 export type ClosedPosition = {
   key: string;
-  chainKey: ChainKey;
+  chainKey: TradeChain;
   chainLabel: string;
   tokenAddress: string;
   symbol: string;
@@ -49,7 +49,7 @@ export type ClosedPosition = {
 // EVM addresses compare case-insensitively; Solana addresses are
 // case-sensitive — same convention filterTxHistoryForAccount already
 // uses for the same reason.
-function normalizedTokenKey(chainKey: ChainKey, tokenAddress: string): string {
+function normalizedTokenKey(chainKey: TradeChain, tokenAddress: string): string {
   return `${chainKey}:${chainKey === 'solana' ? tokenAddress : tokenAddress.toLowerCase()}`;
 }
 

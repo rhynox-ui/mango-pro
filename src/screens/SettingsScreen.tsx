@@ -129,7 +129,7 @@ export function SettingsScreen({
   }
 
   async function handleExportTaxes() {
-    const scoped = session ? filterTxHistoryForAccount(getTxHistory(), {evmAddress: session.evm.address, solanaAddress: session.solana.address}) : getTxHistory();
+    const scoped = session ? filterTxHistoryForAccount(getTxHistory(), {evmAddress: session.evm.address, solanaAddress: session.solana.address, nearAddress: session.near?.address}) : getTxHistory();
     if (scoped.length === 0) {
       Alert.alert('Nothing to export yet', 'You have no trades in this wallet\'s history yet — export becomes available after your first trade.');
       return;

@@ -51,8 +51,11 @@ import {TokenChartPanel} from '../components/TokenChartPanel';
 import {AssetIcon} from '../components/AssetIcon';
 import {ChevronLeftIcon} from '../components/icons';
 import {NetworkIcon} from '../wallet/NetworkIcon';
-import {CHAIN_LABEL, NATIVE_SYMBOL, assetDecimalsForChain, currencyAddress, type ChainKey} from '../core/chainData';
+import {CHAIN_LABEL, NATIVE_SYMBOL, assetDecimalsForChain, currencyAddress, tradeChainLabel, type ChainKey, type TradeChain} from '../core/chainData';
 import {DEV_FEE_PCT} from '../core/fees';
+import {resolveDexScreenerPair} from '../core/dexScreener';
+import {NEAR_USDC, NEAR_USDC_DECIMALS} from '../core/chainData';
+import {executeNearTrade, fetchNearTokenBalance, fetchNearTokenMeta, quoteNearTrade, NearSendError, type NearTradeQuote} from '../core/nearTrade';
 import {getRelayQuote, summarizeQuote, type GetRelayQuoteParams, type QuoteSummary, type RelayQuote} from '../core/relayQuote';
 import {executeRelayQuote, getPartialTxHashes, type ExecuteStep} from '../core/executeRelayQuote';
 import {loadGaslessTradingEnabled} from '../settings/gaslessTradingPrefs';
@@ -84,7 +87,8 @@ import {cashLogoUrl, fetchCashPortfolio, spendableCash, spendableTotalUsd, CASH_
 type PayOrigin = {chainKey: ChainKey};
 
 export type DemoToken = {
-  chainKey: ChainKey;
+  /** A Relay chain, or 'near' — a NEAR token trades through nearTrade.ts instead of Relay. */
+  chainKey: TradeChain;
   address: string;
   symbol: string;
   /** Real token image from wherever this token was picked (HomeScreen's DiscoveryToken / SearchScreen's TokenSearchResult both already carry one) — optional because the default demo token and any other bare construction site has none; AssetIcon below falls back to a lettered badge rather than fabricating one. */
@@ -199,6 +203,11 @@ export function TokenTradeScreen({
   const {colors} = useTheme();
   const {session} = useSession();
   const styles = useMemo(() => makeStyles(colors), [colors]);
+  // A NEAR token trades through nearTrade.ts — NEAR's own DEXes, paid in
+  // USDC on NEAR, gas covered by Mango's NEAR relayer — instead of Relay.
+  // It reuses every piece of this screen; only the quote, balance and
+  // execution below branch on it, and no Relay path ever runs for it.
+  const nearToken = token.chainKey === 'near';
 
   // true = Buy (paying the chain's native asset, receiving the token);
   // false = Sell (paying the token, receiving native) — same isNativeAsset
@@ -220,6 +229,9 @@ export function TokenTradeScreen({
   // needs the actual RelayQuote (steps + the intent relayQuote.ts tagged
   // it with), not the display-only numbers summarizeQuote() derives.
   const rawQuoteRef = useRef<RelayQuote | null>(null);
+  // The NEAR equivalent of rawQuoteRef (nearToken only): the checked route
+  // plus fee that handleNearTrade sends.
+  const nearQuoteRef = useRef<NearTradeQuote | null>(null);
   // The exact params the current rawQuoteRef was requested with — lets
   // handleTrade ask relayQuote.ts for a fresh quote against identical
   // inputs (same pair, same amount, same slippage) if execution's own
@@ -266,7 +278,7 @@ export function TokenTradeScreen({
   // carries a real chainKey internally, because Relay's own quote API
   // needs one concrete origin chain per call — hiding chain complexity
   // from the user doesn't mean removing chain awareness from execution.
-  const [payOrigin, setPayOrigin] = useState<PayOrigin>({chainKey: token.chainKey});
+  const [payOrigin, setPayOrigin] = useState<PayOrigin>({chainKey: token.chainKey === 'near' ? CASH_SUPPORTED_CHAINS[0] : token.chainKey});
 
   // Sell always delivers proceeds as cash too — same reasoning as Buy
   // above, no user-facing toggle. The one real, disclosed gap: a chain
@@ -275,7 +287,7 @@ export function TokenTradeScreen({
   // Layer) has nothing to convert proceeds INTO, so those still land as
   // the chain's own native asset — an honest limitation, not a choice
   // offered to the user.
-  const receiveAsset: 'native' | 'cash' = CASH_SUPPORTED_CHAINS.includes(token.chainKey) ? 'cash' : 'native';
+  const receiveAsset: 'native' | 'cash' = token.chainKey === 'near' || CASH_SUPPORTED_CHAINS.includes(token.chainKey) ? 'cash' : 'native';
 
   // Same real, live aggregator ProfileScreen's own "Total Cash" already
   // uses — reused here rather than re-derived, so this screen's own
@@ -321,7 +333,8 @@ export function TokenTradeScreen({
       if (spendable <= 0) continue;
       if (!best || spendable > best.balance) best = {chainKey: result.chainKey, balance: spendable};
     }
-    const fallbackChain = CASH_SUPPORTED_CHAINS.includes(token.chainKey) ? token.chainKey : CASH_SUPPORTED_CHAINS[0];
+    const tokenChain = token.chainKey;
+    const fallbackChain = tokenChain !== 'near' && CASH_SUPPORTED_CHAINS.includes(tokenChain) ? tokenChain : CASH_SUPPORTED_CHAINS[0];
     setPayOrigin({chainKey: best ? best.chainKey : fallbackChain});
   }, [token, cashPortfolio]);
 
@@ -334,7 +347,7 @@ export function TokenTradeScreen({
   // funds — this is a display-only simplification, not a change to what
   // gets signed.
   const paySymbol = isBuySide ? 'USDC' : token.symbol;
-  const receiveSymbol = isBuySide ? token.symbol : receiveAsset === 'cash' ? 'USDC' : NATIVE_SYMBOL[token.chainKey];
+  const receiveSymbol = isBuySide ? token.symbol : token.chainKey === 'near' || receiveAsset === 'cash' ? 'USDC' : NATIVE_SYMBOL[token.chainKey];
   const amtNum = Number(amount) || 0;
 
   // Real USD value of what's actually being paid on Buy — cash (USDC or
@@ -355,7 +368,13 @@ export function TokenTradeScreen({
     let cancelled = false;
     setTokenDecimals(null);
     setTokenDecimalsError(null);
-    const lookup = token.chainKey === 'solana' ? fetchSplMintDecimals(token.address) : fetchErc20TokenMetadata(token.chainKey, token.address).then(meta => meta.decimals);
+    const chainKey = token.chainKey;
+    const lookup =
+      chainKey === 'near'
+        ? fetchNearTokenMeta(token.address).then(meta => meta.decimals)
+        : chainKey === 'solana'
+          ? fetchSplMintDecimals(token.address)
+          : fetchErc20TokenMetadata(chainKey, token.address).then(meta => meta.decimals);
     lookup
       .then(decimals => {
         if (cancelled) return;
@@ -387,6 +406,15 @@ export function TokenTradeScreen({
   // below already applies).
   const fetchPayBalance = useCallback((): Promise<number> => {
     if (!session) return Promise.resolve(0);
+    if (token.chainKey === 'near') {
+      // A NEAR trade spends from the wallet's NEAR account only: USDC on
+      // NEAR to buy, the token itself to sell.
+      const nearAccount = session.near;
+      if (!nearAccount) return Promise.resolve(0);
+      if (isBuySide) return fetchNearTokenBalance(NEAR_USDC, nearAccount.address).then(units => Number(formatUnits(units, NEAR_USDC_DECIMALS)));
+      if (tokenDecimals === null) return Promise.resolve(0);
+      return fetchNearTokenBalance(token.address, nearAccount.address).then(units => Number(formatUnits(units, tokenDecimals)));
+    }
     if (isBuySide) {
       // Spendable total: Arc's gas reserve comes out of its USDC balance.
       return Promise.resolve(spendableTotalUsd(cashPortfolio));
@@ -417,7 +445,7 @@ export function TokenTradeScreen({
   // mechanism) before executing the real Buy, all behind the one Buy tap.
   const payOriginResult = isBuySide ? cashPortfolio?.results.find(r => r.chainKey === payOrigin.chainKey) : undefined;
   const payOriginChainBalance = payOriginResult?.status === 'ok' ? spendableCash(payOriginResult.chainKey, payOriginResult.balance) : 0;
-  const needsConsolidation = isBuySide && amtNum > 0 && !insufficientBalance && amtNum > payOriginChainBalance;
+  const needsConsolidation = !nearToken && isBuySide && amtNum > 0 && !insufficientBalance && amtNum > payOriginChainBalance;
   // A resolved balance of 0 is real (an empty wallet) and looks
   // identical to a null balance in `balance !== null` checks — this
   // specifically catches the OTHER case, where the fetch itself failed
@@ -481,6 +509,7 @@ export function TokenTradeScreen({
     setExecuteError(null);
     setExecuteWarnings([]);
     setExecuteTxHashes([]);
+    nearQuoteRef.current = null;
     if (amtNum <= 0) {
       setQuote(null);
       rawQuoteRef.current = null;
@@ -494,6 +523,64 @@ export function TokenTradeScreen({
       fallbackParamsRef.current = null;
       setQuoteLoading(false);
       return;
+    }
+    const chainKey = token.chainKey;
+    if (chainKey === 'near') {
+      // NEAR: Intear's routes over every NEAR DEX, each checked by the
+      // site's own route checks (nearTrade.ts) — never Relay.
+      rawQuoteRef.current = null;
+      fallbackParamsRef.current = null;
+      const nearAccount = session.near;
+      const decimals = tokenDecimals;
+      if (!nearAccount || decimals === null) {
+        setQuote(null);
+        setQuoteLoading(false);
+        return;
+      }
+      setQuoteLoading(true);
+      const nearRequestId = ++quoteRequestIdRef.current;
+      const nearTimer = setTimeout(async () => {
+        let payUnits: bigint;
+        try {
+          payUnits = parseUnits(amount, isBuySide ? NEAR_USDC_DECIMALS : decimals);
+        } catch {
+          setQuoteLoading(false);
+          return;
+        }
+        try {
+          const q = await quoteNearTrade({side: isBuySide ? 'buy' : 'sell', token: token.address, payUnits, accountId: nearAccount.address, slippageBps: slippageBps != null ? Number(slippageBps) : null});
+          const pair = await resolveDexScreenerPair({chainKey: 'near', tokenAddress: token.address}).catch(() => null);
+          if (nearRequestId !== quoteRequestIdRef.current) return;
+          const tokenPriceUsd = pair?.priceUsd != null && pair.priceUsd > 0 ? pair.priceUsd : null;
+          const received = Number(formatUnits(q.receiveUnits, isBuySide ? decimals : NEAR_USDC_DECIMALS));
+          // Same measure as the fallback path's: what the route gives
+          // against the token's live market price, fee excluded.
+          let priceImpactPct: number | null = null;
+          if (tokenPriceUsd != null) {
+            const swapped = Number(formatUnits(q.route.amountOut, isBuySide ? decimals : NEAR_USDC_DECIMALS));
+            const fair = isBuySide ? swapped * tokenPriceUsd : amtNum * tokenPriceUsd;
+            const actual = isBuySide ? Number(formatUnits(q.swapIn, NEAR_USDC_DECIMALS)) : swapped;
+            if (fair > 0 && actual > 0) priceImpactPct = isBuySide ? ((fair - actual) / actual) * 100 : ((actual - fair) / fair) * 100;
+          }
+          nearQuoteRef.current = q;
+          setQuote({
+            totalFeeUsd: Number(formatUnits(q.fee, NEAR_USDC_DECIMALS)),
+            etaSeconds: 10,
+            receivedAmountFormatted: formatUnits(q.receiveUnits, isBuySide ? decimals : NEAR_USDC_DECIMALS),
+            payAmountUsd: isBuySide ? amtNum : tokenPriceUsd != null ? amtNum * tokenPriceUsd : null,
+            receiveAmountUsd: isBuySide ? (tokenPriceUsd != null ? received * tokenPriceUsd : null) : received,
+            priceImpactPct,
+          });
+          setQuoteLoading(false);
+        } catch (err) {
+          if (nearRequestId !== quoteRequestIdRef.current) return;
+          nearQuoteRef.current = null;
+          setQuote(null);
+          setQuoteLoading(false);
+          setQuoteError(err instanceof Error ? err.message : 'Could not get a quote — try again.');
+        }
+      }, QUOTE_DEBOUNCE_MS);
+      return () => clearTimeout(nearTimer);
     }
     // Buy always spends cash on whichever chain payOrigin auto-picked
     // (decimals known statically, chainData.ts's own per-chain overrides
@@ -530,7 +617,7 @@ export function TokenTradeScreen({
       // wiring that hard-assumed they were always the same chain.
       const userAddress = originIsSolana ? session.solana.address : session.evm.address;
       const recipientAddress = solana ? session.solana.address : session.evm.address;
-      const nativeCurrency = currencyAddress(token.chainKey, NATIVE_SYMBOL[token.chainKey]);
+      const nativeCurrency = currencyAddress(chainKey, NATIVE_SYMBOL[chainKey]);
       // Sell's own receive-asset choice — cash (USDC, or USDG on
       // Robinhood) when the user picked it (and this chain actually has
       // a verified cash address; see receiveAsset's own declaration for
@@ -538,11 +625,11 @@ export function TokenTradeScreen({
       // Always the token's own chain — see receiveAsset's own comment
       // for why this never bridges chains the way a cross-chain Buy's
       // payOrigin can.
-      const sellReceiveCurrency = receiveAsset === 'cash' ? currencyAddress(token.chainKey, CASH_ASSET_BY_CHAIN[token.chainKey] ?? 'USDC') : nativeCurrency;
+      const sellReceiveCurrency = receiveAsset === 'cash' ? currencyAddress(chainKey, CASH_ASSET_BY_CHAIN[chainKey] ?? 'USDC') : nativeCurrency;
       const originCurrency = isBuySide ? currencyAddress(payOrigin.chainKey, CASH_ASSET_BY_CHAIN[payOrigin.chainKey] ?? 'USDC') : token.address;
       const quoteParams: GetRelayQuoteParams = {
-        fromChainKey: isBuySide ? payOrigin.chainKey : token.chainKey,
-        toChainKey: token.chainKey,
+        fromChainKey: isBuySide ? payOrigin.chainKey : chainKey,
+        toChainKey: chainKey,
         originCurrency,
         destinationCurrency: isBuySide ? token.address : sellReceiveCurrency,
         amountBaseUnits,
@@ -567,7 +654,7 @@ export function TokenTradeScreen({
           // either way, not a guess.
           const receiveDecimalsFallback = isBuySide
             ? (tokenDecimals ?? 18)
-            : (assetDecimalsForChain(token.chainKey, receiveAsset === 'cash' ? (CASH_ASSET_BY_CHAIN[token.chainKey] ?? 'USDC') : NATIVE_SYMBOL[token.chainKey]) ?? 18);
+            : (assetDecimalsForChain(chainKey, receiveAsset === 'cash' ? (CASH_ASSET_BY_CHAIN[chainKey] ?? 'USDC') : NATIVE_SYMBOL[chainKey]) ?? 18);
           setQuote(summarizeQuote(q, receiveDecimalsFallback));
           setQuoteLoading(false);
         })
@@ -592,7 +679,7 @@ export function TokenTradeScreen({
           // entirely and just shows Relay's own error instead of
           // pretending a same-chain aggregator could ever answer a
           // cross-chain request.
-          if (isBuySide && payOrigin.chainKey !== token.chainKey) {
+          if (isBuySide && payOrigin.chainKey !== chainKey) {
             rawQuoteRef.current = null;
             fallbackParamsRef.current = null;
             setQuote(null);
@@ -602,9 +689,9 @@ export function TokenTradeScreen({
           }
           const receiveDecimalsFallback = isBuySide
             ? (tokenDecimals ?? 18)
-            : (assetDecimalsForChain(token.chainKey, receiveAsset === 'cash' ? (CASH_ASSET_BY_CHAIN[token.chainKey] ?? 'USDC') : NATIVE_SYMBOL[token.chainKey]) ?? 18);
+            : (assetDecimalsForChain(chainKey, receiveAsset === 'cash' ? (CASH_ASSET_BY_CHAIN[chainKey] ?? 'USDC') : NATIVE_SYMBOL[chainKey]) ?? 18);
           const fallbackParams: FallbackRouteParams = {
-            chainKey: token.chainKey,
+            chainKey,
             sellToken: originCurrency,
             buyToken: isBuySide ? token.address : sellReceiveCurrency,
             sellAmount: amountBaseUnits,
@@ -663,7 +750,7 @@ export function TokenTradeScreen({
               // spot-price math per AMM type.
               let priceImpactPct: number | null = null;
               if (requestId === quoteRequestIdRef.current) {
-                const tokenPriceUsd = await fetchLiveTokenPriceUsd({chainKey: token.chainKey, tokenAddress: token.address});
+                const tokenPriceUsd = await fetchLiveTokenPriceUsd({chainKey, tokenAddress: token.address});
                 if (tokenPriceUsd != null && requestId === quoteRequestIdRef.current) {
                   if (isBuySide && originAmountUsd && receivedAmountFormatted) {
                     const tokensReceived = Number(receivedAmountFormatted);
@@ -673,7 +760,7 @@ export function TokenTradeScreen({
                     }
                   } else if (!isBuySide && amtNum > 0 && receivedAmountFormatted) {
                     const fairUsdSold = amtNum * tokenPriceUsd;
-                    const nativePriceUsd = receiveAsset === 'cash' ? 1 : (await fetchWalletPrices().catch(() => ({}) as Record<string, number>))[NATIVE_SYMBOL[token.chainKey]];
+                    const nativePriceUsd = receiveAsset === 'cash' ? 1 : (await fetchWalletPrices().catch(() => ({}) as Record<string, number>))[NATIVE_SYMBOL[chainKey]];
                     const actualUsdReceived = nativePriceUsd ? Number(receivedAmountFormatted) * nativePriceUsd : null;
                     if (Number.isFinite(fairUsdSold) && fairUsdSold > 0 && actualUsdReceived != null && Number.isFinite(actualUsdReceived)) {
                       priceImpactPct = ((actualUsdReceived - fairUsdSold) / fairUsdSold) * 100;
@@ -817,7 +904,73 @@ export function TokenTradeScreen({
     setCashPortfolio(freshPortfolio);
   }
 
+  async function handleNearTrade() {
+    const nearQuote = nearQuoteRef.current;
+    if (!nearQuote || !session?.near) return;
+    setExecuteError(null);
+    setExecuteWarnings([]);
+    setExecuteTxHashes([]);
+    setResultModalDismissed(false);
+    setExecuteState('signing');
+    const fromAddress = session.near.address;
+    const receivedAmountFormatted = quote?.receivedAmountFormatted ?? null;
+    let hashes: string[] = [];
+    try {
+      const result = await executeNearTrade(session, nearQuote);
+      hashes = result.hashes;
+      // NEAR reports a swap the exchange cancelled as a successful
+      // transaction — nearTrade.ts reads what really happened.
+      if (result.status === 'refunded') throw new Error('The exchange cancelled this swap because the price moved past your slippage. Your funds were returned and no fee was charged.');
+      if (result.status === 'failed') throw new Error("This swap didn't go through. Nothing was traded and no fee was charged.");
+      const warnings: string[] = [];
+      if (result.status === 'partial') warnings.push('Only part of this swap filled — the rest was returned to you, and the fee was charged on the filled part only.');
+      if (result.status === 'unknown') warnings.push("NEAR hasn't confirmed the final result yet — check History in a moment.");
+      setExecuteWarnings(warnings);
+      setExecuteTxHashes(hashes);
+      setExecuteState('success');
+      setLastTrade({isBuySide, paySymbol, receiveSymbol, payAmount: amount, receivedAmountFormatted, chainKey: 'near'});
+      markOwnAction(session.evm.address);
+      setBalanceRetryToken(t => t + 1);
+      addTxHistoryEntry({
+        status: 'success',
+        chainKey: 'near',
+        chainLabel: tradeChainLabel('near'),
+        isBuySide,
+        paySymbol,
+        receiveSymbol,
+        payAmount: amount,
+        receivedAmountFormatted: result.status === 'ok' ? receivedAmountFormatted : null,
+        hashes,
+        fromAddress,
+        tokenAddress: token.address,
+        tokenImageUrl: token.imageUrl,
+      });
+    } catch (err) {
+      if (err instanceof NearSendError) hashes = err.sent.map(o => o.hash).filter(Boolean);
+      let message = err instanceof Error ? err.message : 'This trade could not be sent.';
+      if (err instanceof NearSendError && hashes.length > 0) message = `Partially completed: ${message} (${hashes.length === 1 ? 'one step' : `${hashes.length} steps`} of this trade already landed on NEAR — check History.)`;
+      setExecuteTxHashes(hashes);
+      setExecuteError(message);
+      setExecuteState('error');
+      addTxHistoryEntry({
+        status: 'error',
+        chainKey: 'near',
+        chainLabel: tradeChainLabel('near'),
+        isBuySide,
+        paySymbol,
+        receiveSymbol,
+        payAmount: amount,
+        receivedAmountFormatted: null,
+        hashes,
+        errorMessage: message,
+        fromAddress,
+      });
+    }
+  }
+
   async function handleTrade() {
+    const chainKey = token.chainKey;
+    if (chainKey === 'near') return handleNearTrade();
     let quoteToExecute = rawQuoteRef.current;
     const fallbackParams = fallbackParamsRef.current;
     if ((!quoteToExecute && !fallbackParams) || !session) return;
@@ -894,7 +1047,7 @@ export function TokenTradeScreen({
         // pump.fun nor PumpSwap ever does). Branches on chain since the
         // sweep itself is chain-specific — EVM native balance vs. SOL.
         if (!result.feeCollectedInline) {
-          if (token.chainKey === 'solana') {
+          if (chainKey === 'solana') {
             sweepFallbackFeeFromSolanaBalance({
               solanaAddress: session.solana.address,
               session,
@@ -902,7 +1055,7 @@ export function TokenTradeScreen({
             }).catch(() => {});
           } else {
             sweepFallbackFeeFromNativeBalance({
-              chainKey: token.chainKey,
+              chainKey,
               evmAddress: session.evm.address,
               session,
               originAmountUsd: fallbackParams!.originAmountUsd,
@@ -913,7 +1066,7 @@ export function TokenTradeScreen({
       setExecuteWarnings(warnings);
       setExecuteTxHashes(txHashes);
       setExecuteState('success');
-      setLastTrade({isBuySide, paySymbol, receiveSymbol, payAmount: amount, receivedAmountFormatted, chainKey: token.chainKey});
+      setLastTrade({isBuySide, paySymbol, receiveSymbol, payAmount: amount, receivedAmountFormatted, chainKey: chainKey});
       // A completed Sell converts a token into cash (USDC/native) —
       // exactly the kind of balance increase App.tsx's depositWatcher
       // poll would otherwise mistake for an external deposit. Mark it
@@ -922,8 +1075,8 @@ export function TokenTradeScreen({
       if (session) markOwnAction(session.evm.address);
       addTxHistoryEntry({
         status: 'success',
-        chainKey: token.chainKey,
-        chainLabel: CHAIN_LABEL[token.chainKey],
+        chainKey,
+        chainLabel: CHAIN_LABEL[chainKey],
         isBuySide,
         paySymbol,
         receiveSymbol,
@@ -961,8 +1114,8 @@ export function TokenTradeScreen({
       setExecuteState('error');
       addTxHistoryEntry({
         status: 'error',
-        chainKey: token.chainKey,
-        chainLabel: CHAIN_LABEL[token.chainKey],
+        chainKey,
+        chainLabel: CHAIN_LABEL[chainKey],
         isBuySide,
         paySymbol,
         receiveSymbol,
@@ -977,7 +1130,7 @@ export function TokenTradeScreen({
 
   const extremePriceImpact = quote?.priceImpactPct != null && Math.abs(quote.priceImpactPct) > EXTREME_PRICE_IMPACT_PCT;
   const canTrade =
-    (Boolean(rawQuoteRef.current) || Boolean(fallbackParamsRef.current)) &&
+    (Boolean(rawQuoteRef.current) || Boolean(fallbackParamsRef.current) || Boolean(nearQuoteRef.current)) &&
     Boolean(session) &&
     !insufficientBalance &&
     !extremePriceImpact &&
@@ -1047,7 +1200,7 @@ export function TokenTradeScreen({
         )}
         <View style={styles.chainPill}>
           <Text style={styles.chainPillLabel}>Trading on </Text>
-          <Text style={styles.chainPillValue}>{CHAIN_LABEL[token.chainKey]}</Text>
+          <Text style={styles.chainPillValue}>{tradeChainLabel(token.chainKey)}</Text>
         </View>
         <TouchableOpacity style={styles.iconPill} onPress={onOpenSearch} activeOpacity={0.7}>
           <SearchGlyph color={colors.textSecondary} />
@@ -1229,7 +1382,7 @@ export function TokenTradeScreen({
               // cash address at all (receiveAsset's own declaration)
               // still lands as native, honestly, not offered as a choice.
               <View style={styles.assetSelector}>
-                {receiveAsset === 'cash' ? <CashBadge chainKey={token.chainKey} size={16} /> : <NetworkIcon chainKey={token.chainKey} size={16} />}
+                {token.chainKey === 'near' ? <CashBadge chainKey={payOrigin.chainKey} size={16} /> : receiveAsset === 'cash' ? <CashBadge chainKey={token.chainKey} size={16} /> : <NetworkIcon chainKey={token.chainKey} size={16} />}
                 <Text style={styles.assetSelectorText}>{receiveSymbol}</Text>
               </View>
             )}
@@ -1247,7 +1400,7 @@ export function TokenTradeScreen({
 
       {!isBuySide && tokenDecimalsError && <Text style={styles.errorText}>{tokenDecimalsError}</Text>}
       {!isBuySide && !tokenDecimalsError && tokenDecimals === null && amtNum > 0 && <Text style={styles.noteText}>Verifying this token…</Text>}
-      {insufficientBalance && <Text style={styles.errorText}>Insufficient {paySymbol} balance</Text>}
+      {insufficientBalance && <Text style={styles.errorText}>{nearToken && isBuySide ? 'Not enough USDC on NEAR — move some there with Convert on Profile first.' : `Insufficient ${paySymbol} balance`}</Text>}
       {needsConsolidation && (
         <Text style={styles.noteText}>
           Only ${payOriginChainBalance.toFixed(2)} of this ${amtNum.toFixed(2)} is on {CHAIN_LABEL[payOrigin.chainKey]} — the rest will be moved in from your other chains automatically before this buy executes.
