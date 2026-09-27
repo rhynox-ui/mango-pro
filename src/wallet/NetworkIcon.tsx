@@ -160,7 +160,26 @@ const GRADIENTS_BY_CHAIN: Partial<Record<ChainKey, Record<string, Gradient>>> = 
   arc: ARC_GRADIENT_STOPS,
 };
 
-export function NetworkIcon({chainKey, size = 20}: {chainKey: ChainKey; size?: number}) {
+// NEAR's mark, from @web3icons/react's NetworkNearProtocol (branded) — the
+// same icon the site renders. NEAR isn't a ChainKey (chainData.ts's NEAR
+// note), so it's accepted here beside them.
+const NEAR_PATHS: IconPath[] = [
+  {
+    fill: '#00EC97',
+    d: 'm17.425 3.92-3.76 5.58c-.257.385.244.835.604.52l3.28-3.214c.095-.083.236-.026.236.115v10.062c0 .135-.18.192-.256.096L6.754 3.681a1.85 1.85 0 0 0-1.459-.68C4.138 3 3 3.584 3 4.922V19.07a1.922 1.922 0 0 0 3.555 1.003l3.754-5.58c.257-.385-.238-.835-.598-.52l-3.26 3.279c-.096.083-.237.026-.237-.117V7.101c0-.14.18-.192.257-.096L17.226 20.32c.36.444.9.681 1.46.681C19.848 21 21 20.421 21 19.078V4.93a1.93 1.93 0 0 0-3.575-1.003z',
+  },
+];
+
+export function NetworkIcon({chainKey, size = 20}: {chainKey: ChainKey | 'near'; size?: number}) {
+  if (chainKey === 'near') {
+    return (
+      <Svg width={size} height={size} viewBox="0 0 24 24">
+        {NEAR_PATHS.map((p, i) => (
+          <Path key={i} d={p.d} fill={p.fill} />
+        ))}
+      </Svg>
+    );
+  }
   const paths = CHAIN_PATHS[chainKey];
   if (!paths) {
     // Never reached for a current ChainKey (every entry above has real

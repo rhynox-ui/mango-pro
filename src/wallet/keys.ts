@@ -25,6 +25,10 @@ import {derivePath} from './slip10Ed25519.ts';
 
 export const EVM_DERIVATION_PATH = "m/44'/60'/0'/0/0";
 export const SOLANA_DERIVATION_PATH = "m/44'/501'/0'/0'";
+// NEAR's standard path (near-seed-phrase, HOT, Meteor, MyNearWallet all use
+// m/44'/397'/0'), so the same recovery phrase opens this NEAR account in any
+// NEAR wallet. The account is "implicit": its id is the hex public key.
+export const NEAR_DERIVATION_PATH = "m/44'/397'/0'";
 
 export const BIP39_WORDLIST = bip39.wordlists.english;
 
@@ -40,7 +44,8 @@ export type ChainAccount = {address: string; privateKey: string};
 // attempting to sign with an empty key — see TokenTradeScreen.tsx's and
 // ProfileScreen.tsx's own gates.
 export type AuthMethod = 'seed' | 'google';
-export type DerivedAccounts = {evm: ChainAccount; solana: ChainAccount; authMethod?: AuthMethod};
+/** `near` is present for recovery-phrase wallets; a Google (Particle) session has no NEAR key and leaves it undefined. NEAR `address` is the implicit account id (64 hex chars), `privateKey` is NEAR's "ed25519:<base58 64-byte secret>". */
+export type DerivedAccounts = {evm: ChainAccount; solana: ChainAccount; near?: ChainAccount; authMethod?: AuthMethod};
 
 /** Up to `limit` real BIP-39 words starting with `prefix` (case-insensitive). */
 export function suggestBip39Words(prefix: string, limit = 5): string[] {
@@ -61,6 +66,9 @@ export function evmDerivationPathForIndex(index: number): string {
 }
 export function solanaDerivationPathForIndex(index: number): string {
   return `m/44'/501'/${index}'/0'`;
+}
+export function nearDerivationPathForIndex(index: number): string {
+  return `m/44'/397'/${index}'`;
 }
 
 /** 12-word mnemonic — 128 bits of entropy, same as the site/extension/mobile. */
@@ -100,9 +108,14 @@ export function deriveAccountAtIndex(mnemonic: string, index: number): DerivedAc
   const {key} = derivePath(solanaDerivationPathForIndex(index), seedHex);
   const solanaKeypair = Keypair.fromSeed(key);
 
+  // Same SLIP-10 ed25519 derivation as Solana, at NEAR's path.
+  const {key: nearSeed} = derivePath(nearDerivationPathForIndex(index), seedHex);
+  const nearKeypair = Keypair.fromSeed(nearSeed);
+
   return {
     evm: {address: evmAddress, privateKey: evmPrivateKey},
     solana: {address: solanaKeypair.publicKey.toBase58(), privateKey: bs58.encode(solanaKeypair.secretKey)},
+    near: {address: Buffer.from(nearKeypair.publicKey.toBytes()).toString('hex'), privateKey: `ed25519:${bs58.encode(nearKeypair.secretKey)}`},
   };
 }
 

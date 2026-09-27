@@ -26,7 +26,7 @@ import {
   RepeatIcon,
   UploadIcon,
 } from '../components/icons';
-import {CHAIN_LABEL, type ChainKey} from '../core/chainData';
+import {CHAIN_LABEL, NEAR_ENABLED, NEAR_LABEL, type ChainKey} from '../core/chainData';
 import {fetchCashPortfolio, spendableCash, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
 import {ConvertCashSheet} from '../components/ConvertCashSheet';
 import {NetworkIcon} from '../wallet/NetworkIcon';
@@ -137,7 +137,9 @@ export function ProfileScreen({
   // hook value.
   const insets = useSafeAreaInsets();
   const [depositStep, setDepositStep] = useState<DepositStep | null>(null);
-  const [depositChain, setDepositChain] = useState<ChainKey | null>(null);
+  // 'near' sits beside the ChainKeys: NEAR isn't a Relay chain (chainData.ts's NEAR note).
+  const [depositChain, setDepositChain] = useState<ChainKey | 'near' | null>(null);
+  const depositLabel = depositChain === 'near' ? NEAR_LABEL : depositChain ? CHAIN_LABEL[depositChain] : '';
   // True only for the dedicated "Robinhood Chain — ETH for gas" row —
   // every other deposit row (including Robinhood's own real cash asset,
   // USDG, in the main list below) leaves this false and reads its asset
@@ -807,6 +809,24 @@ export function ProfileScreen({
                   </TouchableOpacity>
                 ))}
 
+                {/* USDC on NEAR — the same row, for the wallet's own NEAR account. */}
+                {NEAR_ENABLED && session?.near && (
+                  <TouchableOpacity
+                    style={styles.networkRow}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      setDepositChain('near');
+                      setDepositIsNativeGas(false);
+                      setDepositStep('address');
+                    }}>
+                    <View style={styles.networkRowLeft}>
+                      <NetworkIcon chainKey="near" size={22} />
+                      <Text style={styles.networkRowText}>{NEAR_LABEL}</Text>
+                    </View>
+                    <ChevronRightIcon color={colors.textMuted} size={16} />
+                  </TouchableOpacity>
+                )}
+
                 {/* Separate from the row above: this is Robinhood
                     Chain's NATIVE ETH specifically, for paying gas on a
                     trade there — a genuinely different real asset from
@@ -837,16 +857,18 @@ export function ProfileScreen({
                   <TouchableOpacity onPress={() => setDepositStep('network')} hitSlop={8}>
                     <ChevronLeftIcon color={colors.textPrimary} size={20} />
                   </TouchableOpacity>
-                  <Text style={styles.modalTitle}>{CHAIN_LABEL[depositChain]}</Text>
+                  <Text style={styles.modalTitle}>{depositLabel}</Text>
                   <View style={styles.modalHeaderSpacer} />
                 </View>
 
-                <Text style={styles.modalSectionLabel}>Your {CHAIN_LABEL[depositChain]} address</Text>
+                <Text style={styles.modalSectionLabel}>Your {depositLabel} address</Text>
                 <Text style={styles.modalAddress} selectable numberOfLines={1} ellipsizeMode="middle">
-                  {depositChain === 'solana' ? (session?.solana.address ?? '—') : (session?.evm.address ?? '—')}
+                  {depositChain === 'near' ? (session?.near?.address ?? '—') : depositChain === 'solana' ? (session?.solana.address ?? '—') : (session?.evm.address ?? '—')}
                 </Text>
                 <Text style={styles.modalHint}>
-                  {depositChain === 'solana'
+                  {depositChain === 'near'
+                    ? 'Your NEAR account, from the same recovery phrase — it also opens in any NEAR wallet (HOT, Meteor, MyNearWallet).'
+                    : depositChain === 'solana'
                     ? "A separate address — Solana isn't an EVM chain, so it can't share the address other networks use."
                     : depositIsNativeGas
                       ? 'The same address as every other EVM network here — this deposit is for gas specifically, separate from the USDG row above.'
@@ -855,7 +877,9 @@ export function ProfileScreen({
                           .join(', ')}.`}
                 </Text>
                 <Text style={styles.modalWarning}>
-                  {depositIsNativeGas
+                  {depositChain === 'near'
+                    ? `Only send USDC on ${NEAR_LABEL} (Circle's native USDC) to this address — anything else may be lost.`
+                    : depositIsNativeGas
                     ? `Only send ETH on ${CHAIN_LABEL.robinhood} to this address — anything else may be lost.`
                     : `Only send ${CASH_ASSET_BY_CHAIN[depositChain]} on ${CHAIN_LABEL[depositChain]} to this address — anything else may be lost.`}
                 </Text>
