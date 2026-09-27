@@ -113,6 +113,23 @@ export const UNISWAP_V3_ADDRESSES: Record<number, UniswapV3ChainAddresses> = {
     v4Quoter: '0x8dc178efb8111bb0973dd9d722ebeff267c98f94',
     v4StateView: '0xf3334192d15450cdd385c8b70e03f9a6bd9e673b',
   },
+  // Arc — Uniswap's official Arc deployment (v3 + v4), from
+  // @uniswap/sdk-core 7.19.4 ARC_ADDRESSES (same values the site uses).
+  // Arc has no WETH: its gas coin is USDC and pools hold the 6-decimal
+  // ERC-20 view of it (ARC_USDC). This app never routes Arc USDC as the
+  // native placeholder (chainData's NATIVE_PLACEHOLDER_BY_CHAIN.arc is
+  // ARC_USDC), so the wrap/unwrap paths are never taken on Arc; pointing
+  // wrappedNative at the same ERC-20 keeps a stray native quote on the
+  // right pools and makes a stray native execution fail in simulation.
+  5042: {
+    factory: '0xf0db7b58379503491d857db50ac9ece64c653918',
+    quoter: '0x7dfd4f31be6814d2906bde155c3e1b146eac1468',
+    swapRouter02: '0x53bf6b0684ec7ef91e1387da3d1a1769bc5a6f77',
+    wrappedNative: '0x3600000000000000000000000000000000000000',
+    v4PoolManager: '0x8366a39cc670b4001a1121b8f6a443a643e40951',
+    v4Quoter: '0x8dc178efb8111bb0973dd9d722ebeff267c98f94',
+    v4StateView: '0xf3334192d15450cdd385c8b70e03f9a6bd9e673b',
+  },
 };
 
 // The standard fee tiers Uniswap V3's factory enables by default

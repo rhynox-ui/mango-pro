@@ -38,6 +38,7 @@ const VERIFIED_NETWORK_IDS: Partial<Record<ChainKey, string>> = {
   plasma: 'plasma',
   unichain: 'unichain',
   xlayer: 'x-layer',
+  arc: 'arc',
 };
 
 export function geckoTerminalNetworkForChainOrNull(chainKey: ChainKey): string | null {
