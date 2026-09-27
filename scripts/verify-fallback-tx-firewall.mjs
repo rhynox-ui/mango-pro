@@ -73,6 +73,7 @@ rejects({...base1inch({value: '0', allowanceTarget: null, data: oneInchSwap({src
 ok('selling the native coin: the value must be exactly the amount, and no approval');
 
 assert.deepEqual(assertFallbackTxMatchesIntent(base0x()), {settler: SETTLER.toLowerCase()});
+assertFallbackTxMatchesIntent(base0x({allowanceTarget: null})); // 0x omits the spender when the wallet already has an allowance
 rejects(base0x({to: ATTACKER, allowanceTarget: ATTACKER}), /AllowanceHolder/);
 rejects(base0x({data: zeroEx({operator: ATTACKER})}), /different contract/);
 rejects(base0x({data: zeroEx({token: PEPE})}), /different token/);

@@ -161,6 +161,12 @@ export async function executePancakeSwapV3Swap({
   if (!tokenInIsNative) {
     const erc20Allowance = (await publicClient.readContract({address: poolTokenIn, abi: ERC20_ALLOWANCE_ABI, functionName: 'allowance', args: [signer.address, addresses.permit2]})) as bigint;
     if (erc20Allowance < amountIn) {
+      // Exact approvals can leave a remainder (a swap that failed after
+      // approving); USDT-style tokens refuse non-zero -> non-zero, so reset first.
+      if (erc20Allowance > 0n) {
+        const resetHash = await writeContractAs(signer, {address: poolTokenIn, abi: ERC20_ALLOWANCE_ABI, functionName: 'approve', args: [addresses.permit2, 0n]});
+        await publicClient.waitForTransactionReceipt({hash: resetHash});
+      }
       const approveHash = await writeContractAs(signer, {address: poolTokenIn, abi: ERC20_ALLOWANCE_ABI, functionName: 'approve', args: [addresses.permit2, amountIn]});
       await publicClient.waitForTransactionReceipt({hash: approveHash});
     }

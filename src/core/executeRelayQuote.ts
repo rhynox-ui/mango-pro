@@ -97,8 +97,10 @@ function isSolanaShaped(item: RelayTransactionStepItem): boolean {
 }
 
 /** What a Solana step may spend: exactly the trade's own input (see solanaSpendGuard.ts). */
-function solanaSpendIntentFor(intent: TransactionIntent): SolanaSpendIntent {
-  if (intent.originIsNative || !intent.originCurrency) return {spend: SOLANA_NATIVE_SPEND, maxSpend: intent.amount};
+export function solanaSpendIntentFor(intent: TransactionIntent): SolanaSpendIntent {
+  // Relay (and chainData.ts) name native SOL by the System Program id, which
+  // txIntentFirewall's EVM-style native sentinels don't include.
+  if (intent.originIsNative || !intent.originCurrency || intent.originCurrency === SYSTEM_PROGRAM_ID) return {spend: SOLANA_NATIVE_SPEND, maxSpend: intent.amount};
   return {spend: intent.originCurrency, maxSpend: intent.amount};
 }
 
