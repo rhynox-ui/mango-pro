@@ -18,12 +18,21 @@ const CHAIN_COLOR: Record<ChainKey, string> = {
   ethereum: '#8C9BAE', base: '#3D6BFF', bnb: '#F0B90B', robinhood: '#00C805', stable: '#26A17B', solana: '#9945FF',
   arbitrum: '#28A0F0', avalanche: '#E84142', abstract: '#00E599', hyperevm: '#97FCE4',
   ink: '#7132F5', plasma: '#0FDD8D', unichain: '#FF007A', xlayer: '#00D2B5',
-  arc: '#8C9BAE',
+  arc: '#182680',
 };
 
-// Partial: Arc has no verified icon path yet, so it takes the neutral
-// badge below instead of a guessed logo.
+// Partial so a future ChainKey added before its icon is verified falls
+// back to the neutral badge below rather than a guessed logo.
 const CHAIN_PATHS: Partial<Record<ChainKey, IconPath[]>> = {
+  // Circle's Arc mark, from @web3icons/react's NetworkArc (branded) —
+  // the same icon the site renders; its metadata names Circle's Arc
+  // with USDC as native coin, not the Arc browser.
+  arc: [
+    {
+      fill: 'url(#arc__a)',
+      d: 'M3.5 20.999c.146-4.407.893-8.519 2.142-11.717C7.223 5.231 9.513 3 12.088 3s4.865 2.231 6.447 6.283c.822 2.107 1.427 4.61 1.786 7.334q.048.366.087.737.015.024.013.041s.21 1.317.256 3.604h-.024c-.313-.256-4-3.153-10.112-2.314.093-1.035.22-2.04.383-3.005l.027-.146a24.5 24.5 0 0 1 6.104.57q-.007-.056-.017-.115c-.33-2.06-.819-3.945-1.448-5.556-1.029-2.635-2.371-4.271-3.502-4.271-1.132 0-2.474 1.636-3.503 4.271q-.375.958-.679 2.034a30 30 0 0 0-.718 3.213A40 40 0 0 0 6.662 21H3.5z',
+    },
+  ],
   solana: [
     {fill: 'url(#solana__a)', d: 'M18.413 7.902a.62.62 0 0 1-.411.163H3.58c-.512 0-.77-.585-.416-.928l2.369-2.284a.6.6 0 0 1 .41-.169H20.42c.517 0 .77.59.41.935z'},
     {fill: 'url(#solana__b)', d: 'M18.413 19.158a.62.62 0 0 1-.411.158H3.58c-.512 0-.77-.58-.416-.923l2.369-2.29a.6.6 0 0 1 .41-.163H20.42c.517 0 .77.586.41.928z'},
@@ -134,17 +143,29 @@ const CHAIN_PATHS: Partial<Record<ChainKey, IconPath[]>> = {
   ],
 };
 
-const SOLANA_GRADIENT_STOPS: Record<string, {x1: string; y1: string; x2: string; y2: string; stops: GradientStop[]}> = {
+type Gradient = {x1: string; y1: string; x2: string; y2: string; stops: GradientStop[]};
+
+const SOLANA_GRADIENT_STOPS: Record<string, Gradient> = {
   solana__a: {x1: '3.001', y1: '55.041', x2: '21.459', y2: '54.871', stops: [{offset: '0', color: '#599DB0'}, {offset: '1', color: '#47F8C3'}]},
   solana__b: {x1: '3.001', y1: '9.168', x2: '21.341', y2: '9.027', stops: [{offset: '0', color: '#C44FE2'}, {offset: '1', color: '#73B0D0'}]},
   solana__c: {x1: '4.036', y1: '12.003', x2: '20.303', y2: '12.003', stops: [{offset: '0', color: '#778CBF'}, {offset: '1', color: '#5DCDC9'}]},
 };
 
+const ARC_GRADIENT_STOPS: Record<string, Gradient> = {
+  arc__a: {x1: '12.088', y1: '3', x2: '12.088', y2: '21', stops: [{offset: '0', color: '#182680'}, {offset: '1', color: '#842D56'}]},
+};
+
+const GRADIENTS_BY_CHAIN: Partial<Record<ChainKey, Record<string, Gradient>>> = {
+  solana: SOLANA_GRADIENT_STOPS,
+  arc: ARC_GRADIENT_STOPS,
+};
+
 export function NetworkIcon({chainKey, size = 20}: {chainKey: ChainKey; size?: number}) {
   const paths = CHAIN_PATHS[chainKey];
   if (!paths) {
-    // Reached for Arc today, and for any future ChainKey added before its
-    // own icon path is verified.
+    // Never reached for a current ChainKey (every entry above has real
+    // path data) — a neutral badge for a future ChainKey added here
+    // without its own icon yet.
     const color = CHAIN_COLOR[chainKey];
     return (
       <Svg width={size} height={size} viewBox="0 0 24 24">
@@ -152,11 +173,12 @@ export function NetworkIcon({chainKey, size = 20}: {chainKey: ChainKey; size?: n
       </Svg>
     );
   }
+  const gradients = GRADIENTS_BY_CHAIN[chainKey];
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24">
-      {chainKey === 'solana' && (
+      {gradients && (
         <Defs>
-          {Object.entries(SOLANA_GRADIENT_STOPS).map(([id, g]) => (
+          {Object.entries(gradients).map(([id, g]) => (
             <LinearGradient key={id} id={id} x1={g.x1} y1={g.y1} x2={g.x2} y2={g.y2} gradientUnits="userSpaceOnUse">
               {g.stops.map((s, i) => (
                 <Stop key={i} offset={s.offset} stopColor={s.color} />
