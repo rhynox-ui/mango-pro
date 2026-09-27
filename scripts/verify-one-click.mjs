@@ -18,7 +18,10 @@ import {
   assertOneClickDepositWindowOpen,
   assertOneClickQuoteSafeToFund,
   findOneClickAssetId,
+  isNearIntentsAccountId,
   isOneClickStatusFinal,
+  oneClickAppFees,
+  ONE_CLICK_FEE_ACCOUNT,
   oneClickQuoteHash,
   stableStringify,
   verifyOneClickQuoteSignature,
@@ -202,5 +205,29 @@ ok('asset ids resolve only on an exact chain + contract (or native symbol) match
 assert.deepEqual(['SUCCESS', 'REFUNDED', 'FAILED'].map(isOneClickStatusFinal), [true, true, true]);
 assert.deepEqual(['PENDING_DEPOSIT', 'KNOWN_DEPOSIT_TX', 'INCOMPLETE_DEPOSIT', 'PROCESSING'].map(isOneClickStatusFinal), [false, false, false, false]);
 ok('only SUCCESS / REFUNDED / FAILED end status polling');
+
+// ---- fee
+
+const FEE_ACCOUNT = '5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd';
+assert.deepEqual(oneClickAppFees(100, FEE_ACCOUNT), [{recipient: FEE_ACCOUNT, fee: 50}]);
+assert.deepEqual(oneClickAppFees(undefined, FEE_ACCOUNT), [{recipient: FEE_ACCOUNT, fee: 50}]);
+assert.deepEqual(oneClickAppFees(10_000, FEE_ACCOUNT), [{recipient: FEE_ACCOUNT, fee: 50}]);
+ok('NEAR routes charge the same 0.5% (50 bps) as Relay trades');
+assert.deepEqual(oneClickAppFees(20_000, FEE_ACCOUNT), [{recipient: FEE_ACCOUNT, fee: 25}]);
+assert.deepEqual(oneClickAppFees(100_000, FEE_ACCOUNT), [{recipient: FEE_ACCOUNT, fee: 5}]);
+ok('and the same $50 cap on large trades');
+
+assert.equal(ONE_CLICK_FEE_ACCOUNT, null);
+assert.throws(() => oneClickAppFees(100));
+ok('no NEAR quote can be built until a real fee account is configured');
+
+for (const good of [FEE_ACCOUNT, 'mango.near', 'fees.mango-protocol.near', '0xf07becc2401a646fff10d10b969ef18b03582e88']) {
+  assert.equal(isNearIntentsAccountId(good), true, good);
+}
+for (const bad of ['', 'Mango.near', '0xF07BECC2401A646FFF10D10B969EF18B03582E88', 'a', 'bad..near', 'x'.repeat(65), null]) {
+  assert.equal(isNearIntentsAccountId(bad), false, String(bad));
+  assert.throws(() => oneClickAppFees(100, bad));
+}
+ok('fee account must be a well-formed NEAR Intents account id');
 
 console.log(`\n${checks} checks passed`);

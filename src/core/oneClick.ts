@@ -38,20 +38,32 @@
 // so a fee changed in transit would still verify. The echo check below
 // compares them to what was requested anyway.
 //
-// Deliberately no UI wiring and no fee policy here — the fee rate, the
-// fee recipient account and whether calls go through a Mango proxy (to
-// keep a 1Click JWT server-side) are still open product decisions.
+// FEE. Same 0.5% (capped at $50) as every Relay trade — appFeeBps() in
+// fees.ts is the one source of that rate. 1Click pays it out inside NEAR
+// Intents to ONE_CLICK_FEE_ACCOUNT, which is still unset: quotes refuse
+// to build until it names a real Mango-controlled Intents account. With
+// a 1Click partner JWT, 1Click keeps half of the app fee; without one it
+// adds its own fee on top of ours instead.
+//
+// Still open: the fee account, and whether calls go through a Mango
+// proxy (to keep a 1Click JWT server-side). No UI wiring yet.
 
 import {ed25519} from '@noble/curves/ed25519.js';
 import {sha256} from '@noble/hashes/sha2.js';
 import bs58 from 'bs58';
 import type {ChainKey} from './chainData';
+import {appFeeBps} from './fees.ts';
 
 // 1Click's production quote-signing key, as pinned in the official SDK
 // (@defuse-protocol/one-click-sdk-typescript, src/quote-signature.ts).
 export const ONE_CLICK_MANAGER_PUB_KEY = 'ed25519:reYaWhvwu8Jzo3WUM3zhn6VrhuMEF4eADL17qtRVifc';
 
 export const ONE_CLICK_BASE_URL = 'https://1click.chaindefuser.com';
+
+// The NEAR Intents account Mango's app fee is paid to. Null until a real
+// Mango-controlled account is chosen — never defaulted, since fees sent
+// to an account nobody holds the key for are unrecoverable.
+export const ONE_CLICK_FEE_ACCOUNT: string | null = null;
 
 const ED25519_PREFIX = 'ed25519:';
 
@@ -173,6 +185,31 @@ export function findOneClickAssetId(tokens: OneClickToken[], blockchain: string,
     return typeof t.contractAddress === 'string' && t.contractAddress.toLowerCase() === contractAddress.toLowerCase();
   });
   return match?.assetId ?? null;
+}
+
+/**
+ * True for the account id shapes NEAR Intents uses: a 64-hex implicit
+ * account (the form 1Click's own fixtures use for app-fee recipients),
+ * a lowercase 0x EVM address (an Intents account owned by an EVM key),
+ * or a named account such as mango.near.
+ */
+export function isNearIntentsAccountId(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  if (/^[0-9a-f]{64}$/.test(value) || /^0x[0-9a-f]{40}$/.test(value)) return true;
+  return value.length >= 2 && value.length <= 64 && /^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/.test(value);
+}
+
+/**
+ * Mango's app fee as 1Click appFees: 0.5%, reduced only as far as the
+ * $50 cap requires (appFeeBps). Pass the same array to the quote request
+ * and to assertOneClickQuoteSafeToFund's expectation. Throws while no
+ * fee account is configured rather than quoting without the fee.
+ */
+export function oneClickAppFees(originAmountUsd?: number | null, feeAccount: string | null = ONE_CLICK_FEE_ACCOUNT): OneClickAppFee[] {
+  if (!isNearIntentsAccountId(feeAccount)) {
+    throw new Error("NEAR routes aren't available yet — Mango's NEAR fee account isn't set up.");
+  }
+  return [{recipient: feeAccount, fee: Number(appFeeBps(originAmountUsd))}];
 }
 
 // ---------------------------------------------------------------------
