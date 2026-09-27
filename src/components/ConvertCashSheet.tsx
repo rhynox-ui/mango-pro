@@ -36,7 +36,7 @@ import {ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View} 
 import {parseUnits} from 'viem';
 import {BottomSheet} from './BottomSheet';
 import {NetworkIcon} from '../wallet/NetworkIcon';
-import {CHAIN_LABEL, assetDecimalsForChain, currencyAddress, type ChainKey} from '../core/chainData';
+import {CHAIN_LABEL, NEAR_ENABLED, NEAR_LABEL, NEAR_USDC_DECIMALS, assetDecimalsForChain, currencyAddress, type ChainKey} from '../core/chainData';
 import {spendableCash, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
 import {getRelayQuote, summarizeQuote, type QuoteSummary} from '../core/relayQuote';
 import {executeRelayQuote, getPartialTxHashes, type ExecuteStep} from '../core/executeRelayQuote';
@@ -46,18 +46,61 @@ import {addTxHistoryEntry} from '../wallet/txHistory';
 import {formatAmountForInput} from '../wallet/useAvailableBalance';
 import {loadGaslessTradingEnabled} from '../settings/gaslessTradingPrefs';
 import type {DerivedAccounts} from '../wallet/keys';
+import {fetchOneClickStatus, fetchOneClickTokens, requestOneClickQuote, submitOneClickDepositTx, type OneClickToken} from '../core/oneClick';
+import {fundOneClickQuote, refreshOneClickSwap, shouldPollOneClickSwap, type OneClickSwapRecord} from '../core/oneClickDeposits';
+import {oneClickSwapStore} from '../wallet/oneClickSwapStore';
+import {nearCashMoveChains, nearCashMoveRequest, nearUsdcDepositCall, type NearCashMoveDirection} from '../core/nearCashMoves';
+import {sendSponsoredNearCalls} from '../core/nearSigning';
+import {nearView} from '../core/nearRpc';
+import {sendUsdc} from '../wallet/sendUsdc';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 
 const QUOTE_DEBOUNCE_MS = 450;
 
-function cashSymbol(chainKey: ChainKey): string {
-  return CASH_ASSET_BY_CHAIN[chainKey] ?? 'USDC';
+// A Relay chain, or NEAR (moved through NEAR Intents — nearCashMoves.ts).
+type CashChain = ChainKey | 'near';
+
+function cashSymbol(chainKey: CashChain): string {
+  return chainKey === 'near' ? 'USDC' : CASH_ASSET_BY_CHAIN[chainKey] ?? 'USDC';
 }
 
-function balanceFor(cashPortfolio: CashPortfolio | null, chainKey: ChainKey): number {
+function chainLabel(chainKey: CashChain): string {
+  return chainKey === 'near' ? NEAR_LABEL : CHAIN_LABEL[chainKey];
+}
+
+function balanceFor(cashPortfolio: CashPortfolio | null, chainKey: CashChain): number {
+  if (chainKey === 'near') return cashPortfolio?.near?.status === 'ok' ? cashPortfolio.near.balance : 0;
   const result = cashPortfolio?.results.find(r => r.chainKey === chainKey);
   return result?.status === 'ok' ? result.balance : 0;
 }
+
+function payDecimalsFor(chainKey: CashChain): number | null {
+  return chainKey === 'near' ? NEAR_USDC_DECIMALS : assetDecimalsForChain(chainKey, cashSymbol(chainKey)) ?? null;
+}
+
+// 1Click's token list, fetched once per app session.
+let oneClickTokensPromise: Promise<OneClickToken[]> | null = null;
+function loadOneClickTokens(): Promise<OneClickToken[]> {
+  if (!oneClickTokensPromise) {
+    oneClickTokensPromise = fetchOneClickTokens().catch(err => {
+      oneClickTokensPromise = null;
+      throw err;
+    });
+  }
+  return oneClickTokensPromise;
+}
+
+const NEAR_MOVE_STATUS_TEXT: Record<string, string> = {
+  SENDING: 'Sending…',
+  SEND_FAILED: "The deposit didn't go through. If it shows as sent, it will still be picked up.",
+  PENDING_DEPOSIT: 'Sent — waiting for NEAR Intents to see it.',
+  KNOWN_DEPOSIT_TX: 'Deposit seen — waiting for confirmations.',
+  INCOMPLETE_DEPOSIT: 'Less arrived than quoted — it will be refunded if not topped up.',
+  PROCESSING: 'Converting and delivering…',
+  SUCCESS: 'Converted',
+  REFUNDED: 'Refunded to where it came from.',
+  FAILED: "NEAR Intents couldn't complete this conversion.",
+};
 
 function pickDefaultFrom(cashPortfolio: CashPortfolio | null): ChainKey {
   let best: {chainKey: ChainKey; balance: number} | null = null;
@@ -95,8 +138,12 @@ export function ConvertCashSheet({
   const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const [view, setView] = useState<'form' | 'pick-from' | 'pick-to'>('form');
-  const [fromChain, setFromChain] = useState<ChainKey>('robinhood');
-  const [toChain, setToChain] = useState<ChainKey>('base');
+  const [fromChain, setFromChain] = useState<CashChain>('robinhood');
+  const [toChain, setToChain] = useState<CashChain>('base');
+  // Set when either side is NEAR: the move to quote/execute through 1Click instead of Relay.
+  const nearMoveRef = useRef<{direction: NearCashMoveDirection; chainKey: ChainKey; amountBaseUnits: string} | null>(null);
+  const [nearSending, setNearSending] = useState(false);
+  const [nearRecord, setNearRecord] = useState<OneClickSwapRecord | null>(null);
   const [amount, setAmount] = useState('');
 
   const [quote, setQuote] = useState<QuoteSummary | null>(null);
@@ -142,12 +189,29 @@ export function ConvertCashSheet({
     setExecuteState('idle');
     setExecuteError(null);
     setExecuteTxHashes([]);
+    nearMoveRef.current = null;
+    setNearRecord(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
+  // Follow a NEAR move's delivery while the sheet is open.
+  useEffect(() => {
+    if (!nearRecord || !shouldPollOneClickSwap(nearRecord)) return;
+    const timer = setTimeout(() => {
+      refreshOneClickSwap(nearRecord, {fetchStatus: d => fetchOneClickStatus(d), store: oneClickSwapStore})
+        .then(next => {
+          setNearRecord(next);
+          if (next.status === 'SUCCESS' || next.status === 'REFUNDED') onConverted();
+        })
+        .catch(() => setNearRecord({...nearRecord}));
+    }, 5000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nearRecord]);
+
   const amtNum = Number(amount) || 0;
   // Spendable, so MAX on Arc leaves the USDC its own gas is paid in.
-  const fromBalance = spendableCash(fromChain, balanceFor(cashPortfolio, fromChain));
+  const fromBalance = fromChain === 'near' ? balanceFor(cashPortfolio, 'near') : spendableCash(fromChain, balanceFor(cashPortfolio, fromChain));
   // Same guard TokenTradeScreen's own insufficientBalance uses (there
   // via `balance !== null`) — cashPortfolio not having resolved yet
   // reads identically to "balance is 0" via balanceFor's own fallback,
@@ -162,13 +226,14 @@ export function ConvertCashSheet({
     setExecuteState('idle');
     setExecuteError(null);
     setExecuteTxHashes([]);
+    nearMoveRef.current = null;
     if (amtNum <= 0 || sameChain || !session) {
       setQuote(null);
       rawQuoteRef.current = null;
       setQuoteLoading(false);
       return;
     }
-    const payDecimals = assetDecimalsForChain(fromChain, cashSymbol(fromChain));
+    const payDecimals = payDecimalsFor(fromChain);
     if (payDecimals == null) {
       setQuote(null);
       rawQuoteRef.current = null;
@@ -185,14 +250,45 @@ export function ConvertCashSheet({
         setQuoteLoading(false);
         return;
       }
-      const userAddress = fromChain === 'solana' ? session.solana.address : session.evm.address;
-      const recipientAddress = toChain === 'solana' ? session.solana.address : session.evm.address;
-      const receiveDecimalsFallback = assetDecimalsForChain(toChain, cashSymbol(toChain)) ?? 6;
+      // Either side NEAR: a 1Click preview (dry) quote, not Relay.
+      if (fromChain === 'near' || toChain === 'near') {
+        const direction: NearCashMoveDirection = fromChain === 'near' ? 'from-near' : 'to-near';
+        const chainKey = (fromChain === 'near' ? toChain : fromChain) as ChainKey;
+        loadOneClickTokens()
+          .then(tokens => requestOneClickQuote(nearCashMoveRequest({direction, chainKey, amountBaseUnits, session, tokens, dry: true}).request))
+          .then(response => {
+            if (requestId !== quoteRequestIdRef.current) return;
+            rawQuoteRef.current = null;
+            nearMoveRef.current = {direction, chainKey, amountBaseUnits};
+            const usd = (v: string | undefined) => (Number.isFinite(Number(v)) ? Number(v) : null);
+            setQuote({
+              totalFeeUsd: null,
+              etaSeconds: response.quote.timeEstimate ?? null,
+              receivedAmountFormatted: response.quote.amountOutFormatted ?? null,
+              payAmountUsd: usd(response.quote.amountInUsd),
+              receiveAmountUsd: usd(response.quote.amountOutUsd),
+              priceImpactPct: null,
+            });
+            setQuoteLoading(false);
+          })
+          .catch(err => {
+            if (requestId !== quoteRequestIdRef.current) return;
+            setQuote(null);
+            setQuoteLoading(false);
+            setQuoteError(err instanceof Error ? err.message : 'Could not get a conversion rate — try again.');
+          });
+        return;
+      }
+      const fromKey = fromChain as ChainKey;
+      const toKey = toChain as ChainKey;
+      const userAddress = fromKey === 'solana' ? session.solana.address : session.evm.address;
+      const recipientAddress = toKey === 'solana' ? session.solana.address : session.evm.address;
+      const receiveDecimalsFallback = assetDecimalsForChain(toKey, cashSymbol(toKey)) ?? 6;
       const quoteParams = {
-        fromChainKey: fromChain,
-        toChainKey: toChain,
-        originCurrency: currencyAddress(fromChain, cashSymbol(fromChain)),
-        destinationCurrency: currencyAddress(toChain, cashSymbol(toChain)),
+        fromChainKey: fromKey,
+        toChainKey: toKey,
+        originCurrency: currencyAddress(fromKey, cashSymbol(fromKey)),
+        destinationCurrency: currencyAddress(toKey, cashSymbol(toKey)),
         amountBaseUnits,
         userAddress,
         recipientAddress,
@@ -229,7 +325,77 @@ export function ConvertCashSheet({
     setAmount('');
   }
 
+  // Either side NEAR: a fresh signed 1Click quote, checked, then one payment (see nearCashMoves.ts).
+  async function handleNearConvert() {
+    const move = nearMoveRef.current;
+    if (!move || !session?.near) return;
+    setExecuteError(null);
+    setExecuteTxHashes([]);
+    setNearSending(true);
+    const fromNear = move.direction === 'from-near';
+    const fromAddress = fromNear ? session.near.address : move.chainKey === 'solana' ? session.solana.address : session.evm.address;
+    try {
+      const tokens = await loadOneClickTokens();
+      const {request, expected} = nearCashMoveRequest({...move, session, tokens, dry: false});
+      const response = await requestOneClickQuote(request);
+      const originDecimals = fromNear ? NEAR_USDC_DECIMALS : assetDecimalsForChain(move.chainKey, 'USDC');
+      const record = await fundOneClickQuote({
+        response,
+        expected,
+        originChainKey: fromNear ? 'near' : move.chainKey,
+        originSymbol: 'USDC',
+        originDecimals: originDecimals ?? -1,
+        fromAddress,
+        store: oneClickSwapStore,
+        submitDepositTx: (txHash, depositAddress) => submitOneClickDepositTx(txHash, depositAddress),
+        send: async (to, amt) => {
+          if (!fromNear) return (await sendUsdc(move.chainKey, session, to, amt, 'USDC', gaslessTradingEnabled)).txId;
+          const call = await nearUsdcDepositCall(to, parseUnits(amt, NEAR_USDC_DECIMALS), nearView);
+          const [outcome] = await sendSponsoredNearCalls(session, [call]);
+          return outcome.hash;
+        },
+      });
+      setNearRecord(record);
+      setExecuteTxHashes(record.depositTxHash ? [record.depositTxHash] : []);
+      setExecuteState('success');
+      addTxHistoryEntry({
+        status: 'success',
+        chainKey: move.chainKey,
+        chainLabel: chainLabel(toChain),
+        isBuySide: true,
+        kind: 'convert',
+        paySymbol: 'USDC',
+        receiveSymbol: 'USDC',
+        payAmount: amount,
+        receivedAmountFormatted: quote?.receivedAmountFormatted ?? null,
+        hashes: record.depositTxHash ? [record.depositTxHash] : [],
+        fromAddress,
+      });
+      onConverted();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'The conversion could not be sent.';
+      setExecuteError(message);
+      addTxHistoryEntry({
+        status: 'error',
+        chainKey: move.chainKey,
+        chainLabel: chainLabel(toChain),
+        isBuySide: true,
+        kind: 'convert',
+        paySymbol: 'USDC',
+        receiveSymbol: 'USDC',
+        payAmount: amount,
+        receivedAmountFormatted: null,
+        hashes: [],
+        errorMessage: message,
+        fromAddress,
+      });
+    } finally {
+      setNearSending(false);
+    }
+  }
+
   async function handleConvert() {
+    if (nearMoveRef.current) return handleNearConvert();
     const quoteToExecute = rawQuoteRef.current;
     if (!quoteToExecute || !session) return;
     setExecuteError(null);
@@ -244,8 +410,8 @@ export function ConvertCashSheet({
       setExecuteState('success');
       addTxHistoryEntry({
         status: 'success',
-        chainKey: toChain,
-        chainLabel: CHAIN_LABEL[toChain],
+        chainKey: toChain as ChainKey,
+        chainLabel: chainLabel(toChain),
         isBuySide: true,
         kind: 'convert',
         paySymbol: cashSymbol(fromChain),
@@ -278,8 +444,8 @@ export function ConvertCashSheet({
       setExecuteError(message);
       addTxHistoryEntry({
         status: 'error',
-        chainKey: toChain,
-        chainLabel: CHAIN_LABEL[toChain],
+        chainKey: toChain as ChainKey,
+        chainLabel: chainLabel(toChain),
         isBuySide: true,
         kind: 'convert',
         paySymbol: cashSymbol(fromChain),
@@ -293,7 +459,7 @@ export function ConvertCashSheet({
     }
   }
 
-  const isExecuting = executeState !== 'idle' && executeState !== 'success';
+  const isExecuting = nearSending || (executeState !== 'idle' && executeState !== 'success');
   const canConvert = !!session && !sameChain && amtNum > 0 && !insufficientBalance && !!quote && !quoteLoading && !isExecuting;
 
   const buttonLabel = !session
@@ -307,13 +473,19 @@ export function ConvertCashSheet({
           : quoteLoading
             ? 'Finding rate…'
             : isExecuting
-              ? executeStatusLabel(executeState)
+              ? nearSending
+                ? 'Sending…'
+                : executeStatusLabel(executeState as ExecuteStep)
               : executeState === 'success'
                 ? 'Converted'
                 : 'Convert';
 
   function renderChainPicker(forSide: 'from' | 'to') {
     const exclude = forSide === 'from' ? toChain : fromChain;
+    // NEAR pairs only with the chains NEAR Intents moves USDC on.
+    const nearChains = nearCashMoveChains();
+    const listed = exclude === 'near' ? CASH_SUPPORTED_CHAINS.filter(c => nearChains.includes(c)) : CASH_SUPPORTED_CHAINS;
+    const offerNear = NEAR_ENABLED && !!session?.near && exclude !== 'near' && nearChains.includes(exclude as ChainKey);
     return (
       <View>
         <View style={styles.pickerHeaderRow}>
@@ -323,7 +495,7 @@ export function ConvertCashSheet({
           <Text style={styles.title}>{forSide === 'from' ? 'Convert from' : 'Convert to'}</Text>
           <View style={styles.pickerHeaderSpacer} />
         </View>
-        {CASH_SUPPORTED_CHAINS.filter(c => c !== exclude).map(chainKey => {
+        {listed.filter(c => c !== exclude).map(chainKey => {
           const balance = balanceFor(cashPortfolio, chainKey);
           const selected = (forSide === 'from' ? fromChain : toChain) === chainKey;
           return (
@@ -346,6 +518,22 @@ export function ConvertCashSheet({
             </TouchableOpacity>
           );
         })}
+        {offerNear && (
+          <TouchableOpacity
+            style={styles.pickerRow}
+            activeOpacity={0.7}
+            onPress={() => {
+              if (forSide === 'from') setFromChain('near');
+              else setToChain('near');
+              setAmount('');
+              setView('form');
+            }}>
+            <NetworkIcon chainKey="near" size={22} />
+            <Text style={styles.pickerRowText}>USDC on {NEAR_LABEL}</Text>
+            <Text style={styles.pickerRowBalance}>${balanceFor(cashPortfolio, 'near').toFixed(2)}</Text>
+            {(forSide === 'from' ? fromChain : toChain) === 'near' && <Text style={styles.pickerCheck}>✓</Text>}
+          </TouchableOpacity>
+        )}
       </View>
     );
   }
@@ -384,7 +572,7 @@ export function ConvertCashSheet({
               />
             </View>
             <View style={styles.assetCardBottomRow}>
-              <Text style={styles.chainCaption}>{CHAIN_LABEL[fromChain]}</Text>
+              <Text style={styles.chainCaption}>{chainLabel(fromChain)}</Text>
               <TouchableOpacity onPress={handleMax} hitSlop={8}>
                 <Text style={styles.maxText}>Max</Text>
               </TouchableOpacity>
@@ -416,7 +604,7 @@ export function ConvertCashSheet({
                 </Text>
               )}
             </View>
-            <Text style={styles.chainCaption}>{CHAIN_LABEL[toChain]}</Text>
+            <Text style={styles.chainCaption}>{chainLabel(toChain)}</Text>
           </View>
 
           {quote?.receivedAmountFormatted && amtNum > 0 && (
@@ -428,7 +616,7 @@ export function ConvertCashSheet({
           {executeError && <Text style={styles.errorText}>{executeError}</Text>}
           {executeState === 'success' && (
             <View style={styles.successBlock}>
-              <Text style={styles.successText}>Converted</Text>
+              <Text style={styles.successText}>{nearRecord ? NEAR_MOVE_STATUS_TEXT[nearRecord.status] ?? nearRecord.status : 'Converted'}</Text>
               {executeTxHashes.map(hash => (
                 <Text key={hash} style={styles.hashText} selectable numberOfLines={1} ellipsizeMode="middle">
                   {hash}

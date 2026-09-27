@@ -46,7 +46,8 @@ export type OneClickSwapRecord = {
   depositAddress: string;
   /** The full signed quote, exactly as 1Click returned it — kept for disputes. */
   quoteResponse: OneClickQuoteResponse;
-  originChainKey: ChainKey;
+  /** Where the money was sent from — a Relay chain, or 'near' for cash moved off NEAR. */
+  originChainKey: ChainKey | 'near';
   originSymbol: string;
   /** Human-readable amount sent, e.g. "25.5". */
   payAmount: string;
@@ -72,7 +73,7 @@ export type OneClickSwapStore = {
 export type FundOneClickQuoteArgs = {
   response: OneClickQuoteResponse;
   expected: Omit<OneClickExpectation, 'now'>;
-  originChainKey: ChainKey;
+  originChainKey: ChainKey | 'near';
   originSymbol: string;
   /** The origin asset's on-chain decimals, as this app knows them (assetDecimalsForChain). */
   originDecimals: number;
