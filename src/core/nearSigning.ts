@@ -30,7 +30,13 @@ export const DELEGATE_TTL_BLOCKS = 200n;
 
 export type NearFunctionCall = {type: 'FunctionCall'; params: {methodName: string; args: Record<string, unknown>; gas: string; deposit: string}};
 export type NearCall = {receiverId: string; actions: NearFunctionCall[]};
-export type NearRelayOutcome = {hash: string; status: unknown};
+/**
+ * What Mango's relayer returns per call: its own transaction's hash and
+ * status (which only says the relay was accepted), and `result` — the
+ * final status of the user's own call ({SuccessValue} / {Failure}, null
+ * when NEAR's outcome didn't say).
+ */
+export type NearRelayOutcome = {hash: string; status: unknown; result?: {SuccessValue?: string; Failure?: unknown} | null};
 
 export class NearSendError extends Error {
   /** Outcomes of the calls that already went through before this one failed. */

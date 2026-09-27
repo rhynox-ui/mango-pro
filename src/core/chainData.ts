@@ -37,6 +37,10 @@ export const NEAR_LABEL = 'NEAR';
 /** Native USDC on NEAR (Circle), 6 decimals — the same contract 1Click and the site use. */
 export const NEAR_USDC = '17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1';
 export const NEAR_USDC_DECIMALS = 6;
+/** NEAR's own coin, as NEAR's DEX routes name it (the site's rheaSwap.js NATIVE_NEAR). Mango Pro never spends it in a trade — it only pays for storage. */
+export const NATIVE_NEAR = 'near';
+/** Wrapped NEAR (NEP-141) — what "NEAR" is when traded as a token. */
+export const WRAP_NEAR = 'wrap.near';
 
 export const MAINNET_CHAIN_IDS: Record<ChainKey, number> = {
   ethereum: 1,

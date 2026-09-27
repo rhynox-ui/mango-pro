@@ -25,6 +25,8 @@ let checks = 0;
 
 assert.equal(fees.DEV_FEE_WALLET, '0xf07becc2401a646fff10d10b969ef18b03582e88');
 console.log('ok', ++checks, '- DEV_FEE_WALLET is the real, documented protocol fee wallet');
+assert.equal(fees.DEV_FEE_WALLET_NEAR, 'widekingdom6862.near');
+console.log('ok', ++checks, '- DEV_FEE_WALLET_NEAR is the NEAR fee account the site already pays');
 
 assert.equal(fees.DEV_FEE_PCT, 0.005);
 console.log('ok', ++checks, '- DEV_FEE_PCT is 0.5%, matching the site/mobile (not the bot\'s once-stale 1%)');
