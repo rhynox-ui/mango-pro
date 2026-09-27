@@ -265,7 +265,6 @@ export function ConvertCashSheet({
               totalFeeUsd: null,
               etaSeconds: response.quote.timeEstimate ?? null,
               receivedAmountFormatted: response.quote.amountOutFormatted ?? null,
-              minReceivedFormatted: null,
               payAmountUsd: usd(response.quote.amountInUsd),
               receiveAmountUsd: usd(response.quote.amountOutUsd),
               priceImpactPct: null,
