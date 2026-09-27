@@ -35,8 +35,8 @@ import {transportFor, viemChainForChainId} from './chainRegistry.ts';
 import {assertQuoteSafeToSign} from './txIntentFirewall.ts';
 import {assertSolanaTransactionMatchesIntent} from './solanaTxIntent.ts';
 import {intentForQuote, type RelayQuote, type RelayTransactionStepItem} from './relayQuote.ts';
-import {getEip7702AuthorizationIfNeeded, getSponsoredSmartAccountClient, isSmartAccountSponsorshipConfigured} from '../wallet/smartAccount.ts';
-import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, assetDecimalsForChain, chainKeyForChainId} from './chainData.ts';
+import {getEip7702AuthorizationIfNeeded, getSponsoredSmartAccountClient, isGaslessSupportedOnChain, isSmartAccountSponsorshipConfigured} from '../wallet/smartAccount.ts';
+import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, ARC_USDC, MAINNET_CHAIN_IDS, assetDecimalsForChain, chainKeyForChainId} from './chainData.ts';
 import {DEV_FEE_WALLET} from './fees.ts';
 import {fetchWalletPrices} from './walletPrices.ts';
 import type {DerivedAccounts} from '../wallet/keys';
@@ -203,6 +203,22 @@ function revertMessageAfterFailedRecovery(message: string, recovery: {recovered:
 }
 
 /**
+ * On Arc, the USDC ERC-20 a step spends and the gas it pays come out of
+ * one balance: eth_getBalance reports it with 18 decimals, the token with
+ * 6. The native-balance check must count the USDC being spent too, or a
+ * MAX-sized trade passes the check and then reverts on-chain after the
+ * gas is already taken. Returns that USDC in native (18-decimal) units,
+ * or 0n on every other chain and for any other origin token.
+ */
+export function arcUsdcSpendInNativeUnits(chainId: number | undefined, originToken: `0x${string}` | undefined, originAmount: bigint | undefined): bigint {
+  if (chainId !== MAINNET_CHAIN_IDS.arc || !originToken || !originAmount || originAmount <= 0n) return 0n;
+  if (originToken.toLowerCase() !== ARC_USDC) return 0n;
+  return originAmount * 10n ** 12n;
+}
+
+const ARC_INSUFFICIENT_MESSAGE = "Insufficient USDC for network fees on Arc. Gas there is paid in the same USDC you're spending — try a slightly smaller amount.";
+
+/**
  * Sends one EVM-side Relay step. Simulates first (publicClient.call) so
  * a route that would revert on-chain fails with a real, readable reason
  * instead of burning gas to find out; then checks the native balance
@@ -265,8 +281,10 @@ async function sendRelayEvmStep(
     }
     throw err;
   }
-  const worstCaseCost = tx.value + gas * maxFeePerGas;
+  const arcUsdcSpend = arcUsdcSpendInNativeUnits(walletClient.chain?.id, originToken, originAmount);
+  const worstCaseCost = tx.value + gas * maxFeePerGas + arcUsdcSpend;
   if (nativeBalance < worstCaseCost) {
+    if (arcUsdcSpend > 0n) throw new Error(ARC_INSUFFICIENT_MESSAGE);
     const symbol = walletClient.chain?.nativeCurrency?.symbol || 'the native coin';
     throw new Error(`Insufficient ${symbol} for network fees. A token balance can't pay for gas — you need ${symbol} on this chain too.`);
   }
@@ -367,8 +385,10 @@ async function sendRelayEvmStepViaParticle(
     }
     throw err;
   }
-  const worstCaseCost = tx.value + gas * maxFeePerGas;
+  const arcUsdcSpend = arcUsdcSpendInNativeUnits(chainId, originToken, originAmount);
+  const worstCaseCost = tx.value + gas * maxFeePerGas + arcUsdcSpend;
   if (nativeBalance < worstCaseCost) {
+    if (arcUsdcSpend > 0n) throw new Error(ARC_INSUFFICIENT_MESSAGE);
     const symbol = publicClient.chain?.nativeCurrency?.symbol || 'the native coin';
     throw new Error(`Insufficient ${symbol} for network fees. A token balance can't pay for gas — you need ${symbol} on this chain too.`);
   }
@@ -1305,7 +1325,10 @@ export async function executeRelayQuote(
         // and a bundler/paymaster rejection must never strand an otherwise-
         // tradeable quote.
         const walletClient = owner ? createWalletClient({account: owner, chain: viemChain, transport}) : null;
-        const sponsoredClient = owner && useGasless ? await getSponsoredSmartAccountClient({chain: viemChain, owner}) : null;
+        // No sponsored client on a chain gasless is off for (Arc): the
+        // dispatch below then takes the plain-transaction path.
+        const gaslessOnThisChain: boolean = useGasless && isGaslessSupportedOnChain(chainId);
+        const sponsoredClient: Awaited<ReturnType<typeof getSponsoredSmartAccountClient>> | null = owner && gaslessOnThisChain ? await getSponsoredSmartAccountClient({chain: viemChain, owner}) : null;
         evmClients = {walletClient, publicClient, sponsoredClient};
       }
       let hash: string;

@@ -21,10 +21,14 @@
     "verify-solana-fee-sponsor": "node --experimental-strip-types scripts/verify-solana-fee-sponsor.mjs",
     "verify-evm-sponsorship-recovery": "node --experimental-strip-types scripts/verify-evm-sponsorship-recovery.mjs",
     "verify-i18n": "node --experimental-strip-types scripts/verify-i18n.mjs",
-    "verify": "npm run verify-fees && npm run verify-wallet-crypto && npm run verify-relay-quote && npm run verify-usdc-balances && npm run verify-send-usdc && npm run verify-tx-intent-firewall && npm run verify-solana-tx-intent && npm run verify-execute-relay-quote && npm run verify-solana-fee-sponsor && npm run verify-evm-sponsorship-recovery && npm run verify-i18n"
+    "verify-arc": "node --experimental-strip-types scripts/verify-arc.mjs",
+    "verify-one-click": "node --experimental-strip-types scripts/verify-one-click.mjs",
+    "verify-one-click-deposits": "node --experimental-strip-types scripts/verify-one-click-deposits.mjs",
+    "verify": "npm run verify-fees && npm run verify-wallet-crypto && npm run verify-relay-quote && npm run verify-usdc-balances && npm run verify-send-usdc && npm run verify-tx-intent-firewall && npm run verify-solana-tx-intent && npm run verify-execute-relay-quote && npm run verify-solana-fee-sponsor && npm run verify-evm-sponsorship-recovery && npm run verify-i18n && npm run verify-arc && npm run verify-one-click && npm run verify-one-click-deposits"
   },
   "dependencies": {
     "@noble/ciphers": "^2.3.0",
+    "@noble/curves": "^1.9.7",
     "@noble/hashes": "^2.3.0",
     "@particle-network/chains": "^1.8.3",
     "@particle-network/rn-auth-core": "^2.0.6",

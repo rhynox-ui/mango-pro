@@ -107,6 +107,16 @@ export function isSmartAccountSponsorshipConfigured(): boolean {
   return PIMLICO_API_KEY.length > 0;
 }
 
+// Arc (5042) pays gas in USDC natively, so sponsoring it saves the user
+// no second token, and Pimlico's bundler + EIP-7702 support there is not
+// verified. Arc always takes the plain-transaction path.
+const GASLESS_UNSUPPORTED_CHAIN_IDS = new Set<number>([5042]);
+
+/** Whether the Pimlico gasless path may be used on this chain at all — checked alongside isSmartAccountSponsorshipConfigured(). */
+export function isGaslessSupportedOnChain(chainId: number): boolean {
+  return !GASLESS_UNSUPPORTED_CHAIN_IDS.has(chainId);
+}
+
 /**
  * Builds a Pimlico-sponsored smart-account client for one EVM chain,
  * delegating the given EOA (`owner`) to a 7702-compatible simple
@@ -120,6 +130,9 @@ export function isSmartAccountSponsorshipConfigured(): boolean {
 export async function getSponsoredSmartAccountClient({chain, owner}: {chain: Chain; owner: LocalAccount}) {
   if (!isSmartAccountSponsorshipConfigured()) {
     throw new Error("Gasless trading isn't configured yet (missing Pimlico API key).");
+  }
+  if (!isGaslessSupportedOnChain(chain.id)) {
+    throw new Error(`Gasless trading isn't available on ${chain.name}.`);
   }
 
   const publicClient = createPublicClient({chain, transport: http()});
