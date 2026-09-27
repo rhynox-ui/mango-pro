@@ -17,23 +17,19 @@
 // Fee: every request attaches appFeeBpsForSponsoredTrade(). Whether
 // `sponsoringGasOutright` is actually true is no longer a caller choice
 // (nothing ever passed it — dead plumbing) — it's derived below from
-// whether RELAY_API_KEY is actually configured, since the fee floor
+// whether sponsorship is requested (RELAY_SPONSORSHIP_ENABLED), since the fee floor
 // this protects only needs to exist once real sponsorship is live.
 //
 // Real gas sponsorship: Relay's own "Fee Sponsorship" feature
 // (docs.relay.link/features/fee-sponsorship) — separate from the App
 // Fees this file already sends via `appFees` below, which fund the
 // protocol's own margin, not gas. Sponsorship needs an API key tied to
-// a funded app balance. RELAY_API_KEY below is real — relay.link's
-// dashboard shows a "Mango-protocol" key with its Fee Sponsorship
-// wallet set to this app's own existing DEV_FEE_WALLET (fees.ts) and a
-// funded balance. Committed directly rather than left blank, same
-// precedent android/gradle.properties already sets for Particle's own
-// project credentials in this repo (real values, not placeholders) —
-// this is a client-embedded key extractable from the compiled app like
-// any RN app secret, not a server-side secret; the real backstop
-// against abuse is Relay's own per-request maxSubsidizationAmount cap
-// below, not keeping this string hidden.
+// a funded app balance. That key is held by mango-api, never by this app
+// (an uploaded audit's H-01, verified: it used to be committed here and
+// shipped in the APK, where anyone could extract it and spend Mango's
+// Relay balance). Quotes go through Mango's proxy (mango-api
+// pro-proxies.js), which adds the key, keeps sponsorship only on quotes
+// carrying Mango's fee, and caps maxSubsidizationAmount server-side.
 //
 // Important, confirmed against Relay's own docs: sponsorship covers
 // DESTINATION-chain fees only — the user still pays origin-chain gas
@@ -55,9 +51,11 @@ import {currencyAddress, MAINNET_CHAIN_IDS, type ChainKey} from './chainData.ts'
 import {appFeeBpsForSponsoredTrade, feeRecipientForQuote, maxSubsidizationAmountUsdcUnits} from './fees.ts';
 import {buildTransactionIntent, type TransactionIntent} from './txIntentFirewall.ts';
 
-const RELAY_API_KEY: string = 'c702d65d-97ea-43f2-8c3c-ebcdfc018a12';
+// Sponsorship is requested on every fee-carrying quote; the proxy drops
+// it when the server has no Relay key configured.
+const RELAY_SPONSORSHIP_ENABLED = true;
 
-const RELAY_QUOTE_URL = 'https://api.relay.link/quote/v2';
+const RELAY_QUOTE_URL = 'https://mangoprotocol.site/api/v1/pro/relay-quote';
 
 const RELAY_QUOTE_RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const RELAY_QUOTE_MAX_ATTEMPTS = 4;
@@ -70,10 +68,7 @@ async function postRelayQuote(body: Record<string, unknown>): Promise<Response> 
     try {
       res = await fetch(RELAY_QUOTE_URL, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(RELAY_API_KEY ? {'x-api-key': RELAY_API_KEY} : {}),
-        },
+        headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(body),
       });
     } catch (err) {
@@ -192,11 +187,11 @@ export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQ
     throw new Error('getRelayQuote requires either an explicit currency address or a resolvable asset symbol for both sides.');
   }
 
-  // Real sponsorship only exists once a funded Relay API key is
-  // configured (see RELAY_API_KEY's own comment above) — this is the
-  // one place that decides it, not the caller. Never active on a
+  // Real sponsorship only exists once mango-api holds a funded Relay
+  // key (see this file's header) — this is the one place that asks for
+  // it, not the caller. Never active on a
   // fee-waived call (waiveAppFee's own doc comment explains why).
-  const sponsorshipActive = !waiveAppFee && RELAY_API_KEY.length > 0;
+  const sponsorshipActive = !waiveAppFee && RELAY_SPONSORSHIP_ENABLED;
 
   const body = {
     user: userAddress,
