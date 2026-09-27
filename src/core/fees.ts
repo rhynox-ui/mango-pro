@@ -16,6 +16,8 @@ import type {ChainKey} from './chainData';
 
 export const DEV_FEE_WALLET = '0xf07becc2401a646fff10d10b969ef18b03582e88';
 export const DEV_FEE_WALLET_SOLANA = 'CFqNwTuTkqkaVoNZmNE6q5TeV6CcNwGRns2NSEY72Fu2';
+/** Mango's fee account on NEAR — the same one the site's NEAR swaps pay (mango-bridge.jsx). */
+export const DEV_FEE_WALLET_NEAR = 'widekingdom6862.near';
 
 export const DEV_FEE_PCT = 0.005;
 export const DEV_FEE_MAX_USD = 50;
