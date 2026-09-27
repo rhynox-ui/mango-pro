@@ -68,10 +68,10 @@
 // builds the account AND signs its authorization against the exact same
 // address.
 //
-// PIMLICO_API_KEY below is real (the account owner's own "Mango-protocol"
-// key from dashboard.pimlico.io, free tier) — same plain-constant
-// pattern RELAY_API_KEY already uses in relayQuote.ts, since this
-// codebase has no build-time env-var system.
+// Pimlico's API key is held by mango-api, never by this app (an uploaded
+// audit's H-01, verified): every bundler/paymaster call goes through
+// Mango's proxy (mango-api pro-proxies.js), which adds the key, forwards
+// only the methods this client uses, and rate-limits spending calls.
 
 import {createPublicClient, http, type Chain, type LocalAccount} from 'viem';
 // This installed viem version's root export only re-exports
@@ -84,27 +84,19 @@ import {to7702SimpleSmartAccount} from 'permissionless/accounts';
 import {createPimlicoClient} from 'permissionless/clients/pimlico';
 import {createSmartAccountClient} from 'permissionless';
 
-// Rotated after an uploaded security audit's MANGO-C02 finding confirmed
-// the previous key (pim_N9Wgh...) was a live, embedded client secret —
-// the old key was revoked on Pimlico's dashboard before this replacement
-// landed. Embedding a key here at all is still the same real exposure
-// the audit flagged (any React Native bundle ships this string readably
-// unless minification/R8 is enabled — see MANGO-M02, also not yet
-// closed); moving Pimlico calls behind mango-api so the client never
-// holds this key is the real fix, tracked separately, not done here.
-const PIMLICO_API_KEY = 'pim_JRJAkD756rxN2xZvJ6Lb5z';
+const PIMLICO_PROXY_BASE_URL = 'https://mangoprotocol.site/api/v1/pro/pimlico';
 
 const ENTRY_POINT = {address: entryPoint08Address, version: '0.8'} as const;
 
 const SIMPLE_7702_ACCOUNT_IMPLEMENTATION = '0xe6Cae83BdE06E4c305530e199D7217f42808555B' as const;
 
 function pimlicoUrl(chain: Chain): string {
-  return `https://api.pimlico.io/v2/${chain.id}/rpc?apikey=${PIMLICO_API_KEY}`;
+  return `${PIMLICO_PROXY_BASE_URL}/${chain.id}`;
 }
 
-/** False until a real Pimlico API key is set above — callers should check this before offering "gasless trading" in the UI, same pattern as Relay's own sponsorshipActive check in relayQuote.ts. */
+/** Gasless trading is offered whenever the app is built with it; if mango-api has no Pimlico key the proxy answers 503 and trades fall back to plain transactions (executeRelayQuote.ts). */
 export function isSmartAccountSponsorshipConfigured(): boolean {
-  return PIMLICO_API_KEY.length > 0;
+  return true;
 }
 
 // Arc (5042) pays gas in USDC natively, so sponsoring it saves the user
@@ -129,7 +121,7 @@ export function isGaslessSupportedOnChain(chainId: number): boolean {
  */
 export async function getSponsoredSmartAccountClient({chain, owner}: {chain: Chain; owner: LocalAccount}) {
   if (!isSmartAccountSponsorshipConfigured()) {
-    throw new Error("Gasless trading isn't configured yet (missing Pimlico API key).");
+    throw new Error("Gasless trading isn't configured yet.");
   }
   if (!isGaslessSupportedOnChain(chain.id)) {
     throw new Error(`Gasless trading isn't available on ${chain.name}.`);
