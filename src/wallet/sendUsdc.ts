@@ -227,7 +227,8 @@ async function sendSolanaUsdc(session: DerivedAccounts, toAddress: string, amoun
           return tx;
         },
       };
-      const {signature} = await signAndSendSponsoredSolanaStep(instructions, [], localSigner, connection);
+      // Same spend guard as trades: this withdrawal may move exactly the USDC entered.
+      const {signature} = await signAndSendSponsoredSolanaStep(instructions, [], localSigner, connection, {spend: mintAddress, maxSpend: amountRaw});
       return {signature};
     } catch (sponsorErr) {
       const haveSol = Number(lamportsMatch[1]) / 1e9;

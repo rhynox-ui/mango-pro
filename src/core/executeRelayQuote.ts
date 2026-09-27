@@ -32,8 +32,9 @@
 import {createPublicClient, createWalletClient, encodeFunctionData} from 'viem';
 import {privateKeyToAccount} from 'viem/accounts';
 import {transportFor, viemChainForChainId} from './chainRegistry.ts';
-import {assertQuoteSafeToSign} from './txIntentFirewall.ts';
+import {assertQuoteSafeToSign, type TransactionIntent} from './txIntentFirewall.ts';
 import {assertSolanaTransactionMatchesIntent} from './solanaTxIntent.ts';
+import {SOLANA_NATIVE_SPEND, assertSolanaSpendWithinIntentWeb3, isInsufficientSolSimulation, type SolanaSpendIntent} from './solanaSpendGuard.ts';
 import {intentForQuote, type RelayQuote, type RelayTransactionStepItem} from './relayQuote.ts';
 import {getEip7702AuthorizationIfNeeded, getSponsoredSmartAccountClient, isGaslessSupportedOnChain, isSmartAccountSponsorshipConfigured} from '../wallet/smartAccount.ts';
 import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, ARC_USDC, MAINNET_CHAIN_IDS, assetDecimalsForChain, chainKeyForChainId} from './chainData.ts';
@@ -93,6 +94,12 @@ export type ExecuteStep = 'build' | 'signing' | 'filling' | 'done';
 
 function isSolanaShaped(item: RelayTransactionStepItem): boolean {
   return Boolean(item.data?.instructions);
+}
+
+/** What a Solana step may spend: exactly the trade's own input (see solanaSpendGuard.ts). */
+function solanaSpendIntentFor(intent: TransactionIntent): SolanaSpendIntent {
+  if (intent.originIsNative || !intent.originCurrency) return {spend: SOLANA_NATIVE_SPEND, maxSpend: intent.amount};
+  return {spend: intent.originCurrency, maxSpend: intent.amount};
 }
 
 async function pollRelayStatus(requestId: string, {intervalMs = 2000, timeoutMs = 10 * 60 * 1000}: {intervalMs?: number; timeoutMs?: number} = {}): Promise<void> {
@@ -846,6 +853,7 @@ export async function signAndSendSponsoredSolanaStep(
   lookupTables: InstanceType<typeof import('@solana/web3.js').AddressLookupTableAccount>[],
   signer: SolanaTransactionSigner,
   connection: InstanceType<typeof import('@solana/web3.js').Connection>,
+  spendIntent?: SolanaSpendIntent,
 ): Promise<{signature: string; warnings: string[]}> {
   const [{PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction, ComputeBudgetProgram}, bs58Module, splToken] = await Promise.all([
     import('@solana/web3.js'),
@@ -858,6 +866,9 @@ export async function signAndSendSponsoredSolanaStep(
 
   const {blockhash} = await connection.getLatestBlockhash('confirmed');
   let finalInstructions = rewrittenInstructions;
+  // USDC this transaction's own cost recovery adds on top of the trade —
+  // allowed by the spend guard below as Mango's, not the route's.
+  let recoveryUnitsIncluded = 0n;
 
   // Cost recovery — strictly opportunistic, per this file's own header
   // above. Any failure anywhere in this block (no live price, no/not
@@ -900,6 +911,7 @@ export async function signAndSendSponsoredSolanaStep(
             const safeUnits = Math.ceil(simulation.value.unitsConsumed * COMPUTE_BUDGET_SAFETY_MULTIPLE);
             const computeUnitLimitInstruction = ComputeBudgetProgram.setComputeUnitLimit({units: safeUnits});
             finalInstructions = withComputeUnitLimit(candidateInstructions, safeUnits, computeUnitLimitInstruction);
+            recoveryUnitsIncluded = BigInt(recoveryUnits);
           } else if (simulation.value.err) {
             console.warn('[sponsorshipRecovery] Augmented transaction did not simulate clean — sending the plain sponsored transaction instead:', JSON.stringify(simulation.value.err));
           }
@@ -921,6 +933,14 @@ export async function signAndSendSponsoredSolanaStep(
     expectedSigner: signer.publicKey.toBase58(),
     expectedFeePayer: feePayerPubkey.toBase58(),
   });
+  // The semantic check (solanaSpendGuard.ts): the wallet's balances may
+  // only change as the trade allows. Sponsorship moves who pays the fee,
+  // not what the user may lose.
+  if (spendIntent) {
+    const usdcMintAddress = TOKEN_ADDRESSES.USDC?.solana;
+    const extra = recoveryUnitsIncluded > 0n && usdcMintAddress ? [...(spendIntent.extra ?? []), {mint: usdcMintAddress, units: recoveryUnitsIncluded}] : spendIntent.extra;
+    await assertSolanaSpendWithinIntentWeb3(connection, unsignedTransaction, signer.publicKey.toBase58(), {...spendIntent, extra});
+  }
 
   const transaction = await signer.sign(unsignedTransaction);
 
@@ -942,7 +962,7 @@ export async function signAndSendSponsoredSolanaStep(
   return {signature: await confirmSolanaSignature(connection, signature), warnings};
 }
 
-async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secretKeyBase58: string): Promise<{signature: string; warnings: string[]}> {
+async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secretKeyBase58: string, spendIntent: SolanaSpendIntent): Promise<{signature: string; warnings: string[]}> {
   const [{Connection, Keypair, PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction}, bs58Module] = await Promise.all([import('@solana/web3.js'), import('bs58')]);
   const bs58 = bs58Module.default;
   const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
@@ -973,6 +993,29 @@ async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secret
   // caught here instead of silently signed.
   const solanaWarnings = assertSolanaTransactionMatchesIntent(transaction, {expectedSigner: keypair.publicKey.toBase58()});
 
+  const localSigner: SolanaTransactionSigner = {
+    publicKey: keypair.publicKey,
+    sign: async tx => {
+      tx.sign([keypair]);
+      return tx;
+    },
+  };
+  // The semantic check (solanaSpendGuard.ts), before anything is signed.
+  // A wallet short of SOL can't be simulated as its own fee payer — that
+  // case goes straight to Mango's sponsored path, which runs the same
+  // check with the sponsor paying.
+  try {
+    await assertSolanaSpendWithinIntentWeb3(connection, transaction, keypair.publicKey.toBase58(), spendIntent);
+  } catch (guardErr) {
+    if (!isInsufficientSolSimulation(guardErr)) throw guardErr;
+    try {
+      return await signAndSendSponsoredSolanaStep(instructions, lookupTables, localSigner, connection, spendIntent);
+    } catch (sponsorErr) {
+      const sponsorMessage = sponsorErr instanceof Error ? sponsorErr.message : String(sponsorErr);
+      throw new Error(`This wallet doesn't have enough SOL for this route's network fees, and fee sponsorship didn't cover it: ${sponsorMessage}`);
+    }
+  }
+
   transaction.sign([keypair]);
   const signature = bs58.encode(transaction.signatures[0]);
 
@@ -988,14 +1031,7 @@ async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secret
       // to the plain "add more SOL" message if sponsorship itself isn't
       // available or also fails.
       try {
-        const localSigner: SolanaTransactionSigner = {
-          publicKey: keypair.publicKey,
-          sign: async tx => {
-            tx.sign([keypair]);
-            return tx;
-          },
-        };
-        return await signAndSendSponsoredSolanaStep(instructions, lookupTables, localSigner, connection);
+        return await signAndSendSponsoredSolanaStep(instructions, lookupTables, localSigner, connection, spendIntent);
       } catch (sponsorErr) {
         const haveSol = Number(lamportsMatch[1]) / 1e9;
         const needSol = Number(lamportsMatch[2]) / 1e9;
@@ -1056,7 +1092,7 @@ async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secret
  * real getBalance() read. Same outcome (sponsor when short, don't when
  * not), a more robust trigger for this specific signer.
  */
-async function signAndSendRelaySolanaStepViaParticle(item: RelayTransactionStepItem, solanaAddress: string): Promise<{signature: string; warnings: string[]}> {
+async function signAndSendRelaySolanaStepViaParticle(item: RelayTransactionStepItem, solanaAddress: string, spendIntent: SolanaSpendIntent): Promise<{signature: string; warnings: string[]}> {
   const {Connection, PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction} = await import('@solana/web3.js');
   const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
   const payerKey = new PublicKey(solanaAddress);
@@ -1080,6 +1116,17 @@ async function signAndSendRelaySolanaStepViaParticle(item: RelayTransactionStepI
   // Same real pre-sign check as the local-signing path above, run on
   // the exact object about to be serialized and handed to Particle.
   const solanaWarnings = assertSolanaTransactionMatchesIntent(transaction, {expectedSigner: solanaAddress});
+  // The semantic check (solanaSpendGuard.ts), before Particle signs. A
+  // wallet short of SOL can't be simulated as its own fee payer; the
+  // balance check below then takes the sponsored path, which runs the
+  // same check with the sponsor paying.
+  let spendVerified = false;
+  try {
+    await assertSolanaSpendWithinIntentWeb3(connection, transaction, solanaAddress, spendIntent);
+    spendVerified = true;
+  } catch (guardErr) {
+    if (!isInsufficientSolSimulation(guardErr)) throw guardErr;
+  }
 
   // Pre-flight balance check — see this function's own header for why
   // this replaces the local-signing path's catch-the-RPC-error approach
@@ -1100,7 +1147,7 @@ async function signAndSendRelaySolanaStepViaParticle(item: RelayTransactionStepI
         },
       };
       try {
-        return await signAndSendSponsoredSolanaStep(instructions, lookupTables, particleSigner, connection);
+        return await signAndSendSponsoredSolanaStep(instructions, lookupTables, particleSigner, connection, spendIntent);
       } catch (sponsorErr) {
         const sponsorMessage = sponsorErr instanceof Error ? sponsorErr.message : String(sponsorErr);
         throw new Error(
@@ -1119,6 +1166,10 @@ async function signAndSendRelaySolanaStepViaParticle(item: RelayTransactionStepI
     if (err instanceof Error && /^This wallet has ~/.test(err.message)) throw err;
   }
 
+  // Never hand Particle a transaction the spend guard couldn't verify.
+  if (!spendVerified) {
+    throw new Error("This wallet doesn't have enough SOL for this route's network fees, and fee sponsorship couldn't be checked — try again in a moment.");
+  }
   const serialized = transaction.serialize();
 
   // Dynamic import, not a static one — see sendRelayEvmStepViaParticle's
@@ -1300,9 +1351,10 @@ export async function executeRelayQuote(
   try {
     for (const item of pendingItems) {
       if (isSolanaShaped(item)) {
+        const spendIntent = solanaSpendIntentFor(tagged.intent);
         const {signature, warnings: solanaStepWarnings} = isGoogleSession
-          ? await signAndSendRelaySolanaStepViaParticle(item, session.solana.address)
-          : await signAndSendRelaySolanaStep(item, session.solana.privateKey);
+          ? await signAndSendRelaySolanaStepViaParticle(item, session.solana.address, spendIntent)
+          : await signAndSendRelaySolanaStep(item, session.solana.privateKey, spendIntent);
         txHashes.push(signature);
         for (const warning of solanaStepWarnings) {
           console.warn(`[solanaTxIntent] ${warning}`);
