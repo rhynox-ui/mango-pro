@@ -59,6 +59,12 @@ import {appFeeBps} from './fees.ts';
 export const ONE_CLICK_MANAGER_PUB_KEY = 'ed25519:reYaWhvwu8Jzo3WUM3zhn6VrhuMEF4eADL17qtRVifc';
 
 export const ONE_CLICK_BASE_URL = 'https://1click.chaindefuser.com';
+// Mango's own proxy for the same /v0 routes (mango-bridge.jsx
+// api/v1/near/v0/*): keeps a 1Click partner JWT server-side and pins the
+// fee account. Pass as `baseUrl` once that is deployed. The quote
+// signature check below works the same either way — the proxy can't
+// alter a deposit address without failing it.
+export const ONE_CLICK_PROXY_BASE_URL = 'https://mangoprotocol.site/api/v1/near';
 
 // The NEAR Intents account Mango's app fee is paid to. Null until a real
 // Mango-controlled account is chosen — never defaulted, since fees sent
