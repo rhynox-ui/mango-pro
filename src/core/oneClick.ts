@@ -40,13 +40,11 @@
 //
 // FEE. Same 0.5% (capped at $50) as every Relay trade — appFeeBps() in
 // fees.ts is the one source of that rate. 1Click pays it out inside NEAR
-// Intents to ONE_CLICK_FEE_ACCOUNT, which is still unset: quotes refuse
-// to build until it names a real Mango-controlled Intents account. With
-// a 1Click partner JWT, 1Click keeps half of the app fee; without one it
-// adds its own fee on top of ours instead.
+// Intents to ONE_CLICK_FEE_ACCOUNT. No 1Click partner JWT is used, so
+// 1Click adds its own small fee on top, paid by the user — Mango keeps
+// its full 0.5%.
 //
-// Still open: the fee account, and whether calls go through a Mango
-// proxy (to keep a 1Click JWT server-side). No UI wiring yet.
+// Still open: where users receive on NEAR in this app. No UI wiring yet.
 
 import {ed25519} from '@noble/curves/ed25519.js';
 import {sha256} from '@noble/hashes/sha2.js';
@@ -59,17 +57,17 @@ import {appFeeBps} from './fees.ts';
 export const ONE_CLICK_MANAGER_PUB_KEY = 'ed25519:reYaWhvwu8Jzo3WUM3zhn6VrhuMEF4eADL17qtRVifc';
 
 export const ONE_CLICK_BASE_URL = 'https://1click.chaindefuser.com';
-// Mango's own proxy for the same /v0 routes (mango-bridge.jsx
-// api/v1/near/v0/*): keeps a 1Click partner JWT server-side and pins the
-// fee account. Pass as `baseUrl` once that is deployed. The quote
+// Mango's own proxy for the same /v0 routes (the mango-api Cloudflare
+// Worker, near-intents.js): pins the fee account server-side. Pass as
+// `baseUrl` once that is deployed. The quote
 // signature check below works the same either way — the proxy can't
 // alter a deposit address without failing it.
 export const ONE_CLICK_PROXY_BASE_URL = 'https://mangoprotocol.site/api/v1/near';
 
-// The NEAR Intents account Mango's app fee is paid to. Null until a real
-// Mango-controlled account is chosen — never defaulted, since fees sent
-// to an account nobody holds the key for are unrecoverable.
-export const ONE_CLICK_FEE_ACCOUNT: string | null = null;
+// The NEAR Intents account Mango's app fee is paid to — Mango's own
+// NEAR wallet. Must match the mango-api Worker's NEAR_FEE_ACCOUNT, or
+// the quote check below refuses every proxied quote.
+export const ONE_CLICK_FEE_ACCOUNT: string | null = 'widekingdom6862.near';
 
 const ED25519_PREFIX = 'ed25519:';
 

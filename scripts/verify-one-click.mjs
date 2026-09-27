@@ -217,9 +217,11 @@ assert.deepEqual(oneClickAppFees(20_000, FEE_ACCOUNT), [{recipient: FEE_ACCOUNT,
 assert.deepEqual(oneClickAppFees(100_000, FEE_ACCOUNT), [{recipient: FEE_ACCOUNT, fee: 5}]);
 ok('and the same $50 cap on large trades');
 
-assert.equal(ONE_CLICK_FEE_ACCOUNT, null);
-assert.throws(() => oneClickAppFees(100));
-ok('no NEAR quote can be built until a real fee account is configured');
+assert.equal(ONE_CLICK_FEE_ACCOUNT, 'widekingdom6862.near');
+assert.equal(isNearIntentsAccountId(ONE_CLICK_FEE_ACCOUNT), true);
+assert.deepEqual(oneClickAppFees(100), [{recipient: 'widekingdom6862.near', fee: 50}]);
+assert.throws(() => oneClickAppFees(100, null));
+ok("fees go to Mango's NEAR account; with no account, no quote can be built");
 
 for (const good of [FEE_ACCOUNT, 'mango.near', 'fees.mango-protocol.near', '0xf07becc2401a646fff10d10b969ef18b03582e88']) {
   assert.equal(isNearIntentsAccountId(good), true, good);
