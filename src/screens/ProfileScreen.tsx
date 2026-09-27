@@ -27,7 +27,7 @@ import {
   UploadIcon,
 } from '../components/icons';
 import {CHAIN_LABEL, type ChainKey} from '../core/chainData';
-import {fetchCashPortfolio, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
+import {fetchCashPortfolio, spendableCash, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
 import {ConvertCashSheet} from '../components/ConvertCashSheet';
 import {NetworkIcon} from '../wallet/NetworkIcon';
 import {sendUsdc, isValidRecipientAddress} from '../wallet/sendUsdc';
@@ -502,7 +502,8 @@ export function ProfileScreen({
   }
 
   const withdrawAmountNumber = Number(withdrawAmount);
-  const withdrawChainBalance = balanceForChain(withdrawChain);
+  // Spendable, so a MAX withdraw on Arc leaves the USDC its gas is paid in.
+  const withdrawChainBalance = withdrawChain ? spendableCash(withdrawChain, balanceForChain(withdrawChain)) : 0;
   const canSubmitWithdraw =
     withdrawChain !== null &&
     isValidRecipientAddress(withdrawChain, withdrawAddress.trim()) &&

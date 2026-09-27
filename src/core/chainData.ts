@@ -20,7 +20,11 @@ const NATIVE_TOKEN_ADDRESS = '0x0000000000000000000000000000000000000000';
 export type ChainKey =
   | 'ethereum' | 'base' | 'bnb' | 'robinhood' | 'stable' | 'solana'
   | 'arbitrum' | 'avalanche' | 'abstract' | 'hyperevm' | 'ink' | 'plasma'
-  | 'unichain' | 'xlayer';
+  | 'unichain' | 'xlayer' | 'arc';
+
+// Arc's native gas balance and this ERC-20 (6 decimals) are the same funds;
+// eth_getBalance reports them with 18 decimals.
+export const ARC_USDC = '0x3600000000000000000000000000000000000000';
 
 export const MAINNET_CHAIN_IDS: Record<ChainKey, number> = {
   ethereum: 1,
@@ -38,6 +42,7 @@ export const MAINNET_CHAIN_IDS: Record<ChainKey, number> = {
   plasma: 9745,
   unichain: 130,
   xlayer: 196,
+  arc: 5042,
 };
 
 export const NATIVE_SYMBOL: Record<ChainKey, string> = {
@@ -46,6 +51,7 @@ export const NATIVE_SYMBOL: Record<ChainKey, string> = {
   solana: 'SOL',
   arbitrum: 'ETH', avalanche: 'AVAX', abstract: 'ETH', hyperevm: 'HYPE',
   ink: 'ETH', plasma: 'XPL', unichain: 'ETH', xlayer: 'OKB',
+  arc: 'USDC',
 };
 
 // Copied verbatim from mango-mobile's src/wallet/walletAssets.js
@@ -66,6 +72,7 @@ export const CHAIN_LABEL: Record<ChainKey, string> = {
   plasma: 'Plasma',
   unichain: 'Unichain',
   xlayer: 'X Layer',
+  arc: 'Arc',
 };
 
 export const TOKEN_ADDRESSES: Record<string, Partial<Record<ChainKey, string>>> = {
@@ -80,6 +87,7 @@ export const TOKEN_ADDRESSES: Record<string, Partial<Record<ChainKey, string>>> 
     hyperevm: '0xb88339cb7199b77e23db6e890353e22632ba630f',
     ink: '0x2d270e6886d130d724215a266106e6832161eaed',
     abstract: '0x84A71ccD554Cc1b02749b35d22F684CC8ec987e1',
+    arc: ARC_USDC,
   },
   USDT: {
     ethereum: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
@@ -126,6 +134,9 @@ const NATIVE_PLACEHOLDER_BY_CHAIN: Record<ChainKey, string> = {
   plasma: NATIVE_TOKEN_ADDRESS,
   unichain: NATIVE_TOKEN_ADDRESS,
   xlayer: NATIVE_TOKEN_ADDRESS,
+  // Never the 0x0 sentinel on Arc: that denominates USDC in 18 decimals
+  // while every amount here is built with USDC's 6.
+  arc: ARC_USDC,
 };
 
 // Solana's entry is Relay's own synthetic id (see MAINNET_CHAIN_IDS's

@@ -95,6 +95,9 @@ export const SPONSORSHIP_COST_ESTIMATE_USD: Record<ChainKey, number> = {
   plasma: 0.02,
   unichain: 0.02,
   xlayer: 0.05,
+  // Base fee is pinned around 20 gwei and paid in USDC, so a swap-sized
+  // transaction costs well under a cent.
+  arc: 0.01,
 };
 
 // Minimum profit the protocol wants on TOP of covering the sponsorship

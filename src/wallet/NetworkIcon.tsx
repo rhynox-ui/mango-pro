@@ -3,7 +3,7 @@
 // Ported from mango-mobile's own src/wallet/NetworkIcon.tsx — real
 // per-chain network icons (same extracted {fill, d} path data, see that
 // file's own header for the full extraction history), trimmed down to
-// only the 14 chains ChainKey (chainData.ts) actually covers, rather
+// only the chains ChainKey (chainData.ts) actually covers, rather
 // than porting mobile's full 80+-chain set for a chain list this app
 // will never render.
 
@@ -18,9 +18,12 @@ const CHAIN_COLOR: Record<ChainKey, string> = {
   ethereum: '#8C9BAE', base: '#3D6BFF', bnb: '#F0B90B', robinhood: '#00C805', stable: '#26A17B', solana: '#9945FF',
   arbitrum: '#28A0F0', avalanche: '#E84142', abstract: '#00E599', hyperevm: '#97FCE4',
   ink: '#7132F5', plasma: '#0FDD8D', unichain: '#FF007A', xlayer: '#00D2B5',
+  arc: '#8C9BAE',
 };
 
-const CHAIN_PATHS: Record<ChainKey, IconPath[]> = {
+// Partial: Arc has no verified icon path yet, so it takes the neutral
+// badge below instead of a guessed logo.
+const CHAIN_PATHS: Partial<Record<ChainKey, IconPath[]>> = {
   solana: [
     {fill: 'url(#solana__a)', d: 'M18.413 7.902a.62.62 0 0 1-.411.163H3.58c-.512 0-.77-.585-.416-.928l2.369-2.284a.6.6 0 0 1 .41-.169H20.42c.517 0 .77.59.41.935z'},
     {fill: 'url(#solana__b)', d: 'M18.413 19.158a.62.62 0 0 1-.411.158H3.58c-.512 0-.77-.58-.416-.923l2.369-2.29a.6.6 0 0 1 .41-.163H20.42c.517 0 .77.586.41.928z'},
@@ -140,9 +143,8 @@ const SOLANA_GRADIENT_STOPS: Record<string, {x1: string; y1: string; x2: string;
 export function NetworkIcon({chainKey, size = 20}: {chainKey: ChainKey; size?: number}) {
   const paths = CHAIN_PATHS[chainKey];
   if (!paths) {
-    // Never actually reached for a real ChainKey (every entry above has
-    // real path data) — a neutral badge only for defensiveness against
-    // a future ChainKey added here without its own icon yet.
+    // Reached for Arc today, and for any future ChainKey added before its
+    // own icon path is verified.
     const color = CHAIN_COLOR[chainKey];
     return (
       <Svg width={size} height={size} viewBox="0 0 24 24">

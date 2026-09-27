@@ -25,7 +25,7 @@ import {privateKeyToAccount} from 'viem/accounts';
 import bs58 from 'bs58';
 import {getViemChain, transportFor} from '../core/chainRegistry.ts';
 import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, assetDecimalsForChain, type ChainKey} from '../core/chainData.ts';
-import {getEip7702AuthorizationIfNeeded, getSponsoredSmartAccountClient, isSmartAccountSponsorshipConfigured} from './smartAccount.ts';
+import {getEip7702AuthorizationIfNeeded, getSponsoredSmartAccountClient, isGaslessSupportedOnChain, isSmartAccountSponsorshipConfigured} from './smartAccount.ts';
 import {signAndSendSponsoredSolanaStep, type SolanaTransactionSigner} from '../core/executeRelayQuote.ts';
 import type {DerivedAccounts} from './keys';
 
@@ -108,7 +108,7 @@ async function sendEvmCashAsset(chainKey: ChainKey, asset: CashAsset, session: D
   // have happened before anything broadcast — same discipline
   // executeRelayQuote.ts's own dispatch already holds sponsored EVM
   // steps to, never a broader catch-and-retry.
-  if (useGaslessTrading && isSmartAccountSponsorshipConfigured()) {
+  if (useGaslessTrading && isSmartAccountSponsorshipConfigured() && isGaslessSupportedOnChain(chain.id)) {
     let sponsoredClient: Awaited<ReturnType<typeof getSponsoredSmartAccountClient>> | null = null;
     try {
       sponsoredClient = await getSponsoredSmartAccountClient({chain, owner: account});
@@ -143,6 +143,16 @@ async function sendEvmCashAsset(chainKey: ChainKey, asset: CashAsset, session: D
     publicClient.estimateGas({account: account.address, to: tokenAddress as `0x${string}`, data}),
     publicClient.estimateFeesPerGas(),
   ]);
+
+  // On Arc the USDC being sent and the gas paying for it are one balance
+  // (native reads it with 18 decimals, the token with 6). Check both fit
+  // before broadcasting, rather than reverting after the gas is taken.
+  if (chainKey === 'arc') {
+    const nativeBalance = await publicClient.getBalance({address: account.address});
+    if (nativeBalance < amountRaw * 10n ** 12n + gasLimit * maxFeePerGas) {
+      throw new Error("Insufficient USDC for network fees on Arc. Gas there is paid in the same USDC you're sending — try a slightly smaller amount.");
+    }
+  }
 
   const hash = await walletClient.writeContract({
     address: tokenAddress as `0x${string}`,

@@ -2,7 +2,7 @@
 //
 // Scoped port of mango-mobile's own src/wallet/chainRegistry.js — same
 // verified, independently-sourced RPC fallback list and viem chain
-// definitions, cut down to exactly the 14 chains in this app's own
+// definitions, cut down to exactly the chains in this app's own
 // ChainKey (chainData.ts), not mobile's much broader 60+-chain wallet-
 // dashboard expansion. Every RPC URL here is copied from mobile's own
 // already-verified list, not re-researched or guessed.
@@ -30,6 +30,9 @@ export const RPC_FALLBACKS: Partial<Record<number, string[]>> = {
   196: ['https://xlayerrpc.okx.com', 'https://rpc.xlayer.tech'],
   4663: ['https://rpc.mainnet.chain.robinhood.com', 'https://robinhood-rpc.publicnode.com'],
   988: ['https://rpc.stable.xyz'],
+  // Arc's own four public mainnet endpoints, as listed in viem 2.56.9's
+  // official `arc` chain (the installed 2.56.3 ships an empty stub).
+  5042: ['https://rpc.mainnet.arc.io', 'https://rpc.drpc.mainnet.arc.io', 'https://rpc.blockdaemon.mainnet.arc.io', 'https://rpc.quicknode.mainnet.arc.io'],
 };
 
 export function transportFor(chainId: number) {
@@ -62,6 +65,19 @@ export const stableMainnet = defineChain({
   testnet: false,
 });
 
+// Arc's native gas token is USDC. viem reports it with 18 decimals (that
+// is what eth_getBalance returns); the ERC-20 view at 0x3600… reports the
+// same funds with 6. Nothing here should ever mix the two.
+export const arcMainnet = defineChain({
+  id: 5042,
+  name: 'Arc',
+  nativeCurrency: {name: 'USDC', symbol: 'USDC', decimals: 18},
+  rpcUrls: {default: {http: ['https://rpc.mainnet.arc.io']}},
+  blockExplorers: {default: {name: 'Arc Explorer', url: 'https://explorer.arc.io'}},
+  contracts: {multicall3: {address: MULTICALL3_ADDRESS}},
+  testnet: false,
+});
+
 // solana has no viem Chain object — callers branch on chainKey === 'solana'
 // before ever reaching this map, same convention chainData.ts's own
 // NATIVE_PLACEHOLDER_BY_CHAIN uses.
@@ -79,6 +95,7 @@ export const CHAIN_KEY_TO_VIEM_CHAIN: Partial<Record<ChainKey, Chain>> = {
   plasma: plasma,
   unichain: unichain,
   xlayer: xLayer,
+  arc: arcMainnet,
 };
 
 export function getViemChain(chainKey: ChainKey): Chain {

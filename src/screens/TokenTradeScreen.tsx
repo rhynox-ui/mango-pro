@@ -68,7 +68,7 @@ import {useSession} from '../wallet/SessionContext';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {TradeSettingsSheet} from '../components/TradeSettingsSheet';
 import {TradeResultModal, type TradeResultSummary} from '../components/TradeResultModal';
-import {cashLogoUrl, fetchCashPortfolio, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
+import {cashLogoUrl, fetchCashPortfolio, spendableCash, spendableTotalUsd, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
 
 /**
  * Buy-side only — which chain the user's cash actually gets spent from.
@@ -315,8 +315,11 @@ export function TokenTradeScreen({
   useEffect(() => {
     let best: {chainKey: ChainKey; balance: number} | null = null;
     for (const result of cashPortfolio?.results ?? []) {
-      if (result.status !== 'ok' || result.balance <= 0) continue;
-      if (!best || result.balance > best.balance) best = {chainKey: result.chainKey, balance: result.balance};
+      if (result.status !== 'ok') continue;
+      // Spendable, not raw: an Arc balance that is all gas reserve can't pay.
+      const spendable = spendableCash(result.chainKey, result.balance);
+      if (spendable <= 0) continue;
+      if (!best || spendable > best.balance) best = {chainKey: result.chainKey, balance: spendable};
     }
     const fallbackChain = CASH_SUPPORTED_CHAINS.includes(token.chainKey) ? token.chainKey : CASH_SUPPORTED_CHAINS[0];
     setPayOrigin({chainKey: best ? best.chainKey : fallbackChain});
@@ -385,7 +388,8 @@ export function TokenTradeScreen({
   const fetchPayBalance = useCallback((): Promise<number> => {
     if (!session) return Promise.resolve(0);
     if (isBuySide) {
-      return Promise.resolve(cashPortfolio?.totalUsd ?? 0);
+      // Spendable total: Arc's gas reserve comes out of its USDC balance.
+      return Promise.resolve(spendableTotalUsd(cashPortfolio));
     }
     if (tokenDecimals === null) return Promise.resolve(0);
     return solana
@@ -412,7 +416,7 @@ export function TokenTradeScreen({
   // other chains into payOrigin's chain via the same fee-free Convert
   // mechanism) before executing the real Buy, all behind the one Buy tap.
   const payOriginResult = isBuySide ? cashPortfolio?.results.find(r => r.chainKey === payOrigin.chainKey) : undefined;
-  const payOriginChainBalance = payOriginResult?.status === 'ok' ? payOriginResult.balance : 0;
+  const payOriginChainBalance = payOriginResult?.status === 'ok' ? spendableCash(payOriginResult.chainKey, payOriginResult.balance) : 0;
   const needsConsolidation = isBuySide && amtNum > 0 && !insufficientBalance && amtNum > payOriginChainBalance;
   // A resolved balance of 0 is real (an empty wallet) and looks
   // identical to a null balance in `balance !== null` checks — this
@@ -459,7 +463,9 @@ export function TokenTradeScreen({
   function handleMax() {
     // Buy always spends cash, Sell always spends the searched token —
     // gas is paid separately in the origin chain's native asset either
-    // way, so the full balance is always spendable. No native-asset MAX
+    // way, so the full balance is always spendable. Arc is the exception
+    // on Buy, where gas is the same USDC; fetchPayBalance already
+    // returns the spendable total with that reserve taken out. No native-asset MAX
     // path remains reachable now that Buy never pays in native currency
     // (see this file's own header on the USDC-first product decision).
     if (balance === null) return;
@@ -735,7 +741,7 @@ export function TokenTradeScreen({
     const contributors = CASH_SUPPORTED_CHAINS.filter(c => c !== payOrigin.chainKey)
       .map(chainKey => {
         const result = cashPortfolio.results.find(r => r.chainKey === chainKey);
-        return {chainKey, balance: result?.status === 'ok' ? result.balance : 0};
+        return {chainKey, balance: result?.status === 'ok' ? spendableCash(chainKey, result.balance) : 0};
       })
       .filter(c => c.balance > 0)
       .sort((a, b) => b.balance - a.balance);

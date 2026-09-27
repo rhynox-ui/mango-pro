@@ -176,6 +176,27 @@ export function cashLogoUrl(chainKey: ChainKey): string | null {
   return `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${slug}/assets/${address}/logo.png`;
 }
 
+// Arc pays gas in the same USDC the wallet holds, so a MAX that spends
+// all of it leaves nothing for the transaction doing the spending. At
+// Arc's pinned ~20 gwei base fee an approve + swap costs well under a
+// cent; 5 cents leaves room for a fee spike and a follow-up transaction.
+// Totals shown to the user stay the real balance. This only caps what
+// MAX, Withdraw, Convert and payment routing treat as spendable.
+export const ARC_GAS_RESERVE_USDC = 0.05;
+
+/** A chain's cash balance minus whatever must stay behind to pay that chain's gas, clamped to 0. */
+export function spendableCash(chainKey: ChainKey, balance: number): number {
+  if (chainKey !== 'arc') return balance;
+  const spendable = balance - ARC_GAS_RESERVE_USDC;
+  return spendable > 0 ? spendable : 0;
+}
+
+/** The whole portfolio's spendable cash — totalUsd with each chain's gas reserve taken out. */
+export function spendableTotalUsd(portfolio: CashPortfolio | null): number {
+  if (!portfolio) return 0;
+  return portfolio.results.reduce((sum, r) => (r.status === 'ok' ? sum + spendableCash(r.chainKey, r.balance) : sum), 0);
+}
+
 export type ChainCashResult =
   | {chainKey: ChainKey; asset: 'USDC' | 'USDG'; status: 'ok'; balance: number}
   | {chainKey: ChainKey; asset: 'USDC' | 'USDG'; status: 'error'; error: string};

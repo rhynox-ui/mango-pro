@@ -37,7 +37,7 @@ import {parseUnits} from 'viem';
 import {BottomSheet} from './BottomSheet';
 import {NetworkIcon} from '../wallet/NetworkIcon';
 import {CHAIN_LABEL, assetDecimalsForChain, currencyAddress, type ChainKey} from '../core/chainData';
-import {CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
+import {spendableCash, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
 import {getRelayQuote, summarizeQuote, type QuoteSummary} from '../core/relayQuote';
 import {executeRelayQuote, getPartialTxHashes, type ExecuteStep} from '../core/executeRelayQuote';
 import {TransactionIntentError} from '../core/txIntentFirewall';
@@ -146,7 +146,8 @@ export function ConvertCashSheet({
   }, [visible]);
 
   const amtNum = Number(amount) || 0;
-  const fromBalance = balanceFor(cashPortfolio, fromChain);
+  // Spendable, so MAX on Arc leaves the USDC its own gas is paid in.
+  const fromBalance = spendableCash(fromChain, balanceFor(cashPortfolio, fromChain));
   // Same guard TokenTradeScreen's own insufficientBalance uses (there
   // via `balance !== null`) — cashPortfolio not having resolved yet
   // reads identically to "balance is 0" via balanceFor's own fallback,
