@@ -1,22 +1,12 @@
 name: Dependency audit
 
-# Continuous advisory check on the dependencies that ship in the app
-# (an uploaded audit's M-03). Separate from the APK workflows on purpose:
-# it never blocks a build.
-#
-# Fails only on CRITICAL advisories in production dependencies. As of
-# adding this, production has high-severity advisories with no safe fix:
-#   - bigint-buffer (via @solana/spl-token) has no patched release;
-#   - @coral-xyz/anchor / toml (via the pump.fun SDKs), where npm's
-#     suggested "fix" is a breaking downgrade of those SDKs;
-#   - image-size, which is React Native build tooling, not app runtime.
-# The full report is printed on every run so new ones are visible, and a
-# CycloneDX SBOM is kept for each run.
+# Advisory check for dependencies that ship in the app.
+# PRs get an immediate check; main is checked by the scheduled weekly run.
+# Keeping the audit off main-push events avoids paying for the same audit
+# again immediately after a pull request has already been checked.
 
 on:
   pull_request:
-  push:
-    branches: [main]
   schedule:
     - cron: '17 6 * * 1' # Mondays 06:17 UTC
   workflow_dispatch: {}
