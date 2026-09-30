@@ -1,54 +1,17 @@
 name: Android release APK
 
-# Builds a real, installable APK on every push to main (and on demand)
-# and uploads it as a workflow artifact — the practical way to get a
-# sideloadable build onto a real device for testing (Google login in
-# particular needs a real device/emulator with Play Services; there's no
-# way to produce or run that from this repo's own dev sandbox).
-#
-# Builds the `release` variant, NOT `assembleDebug` — a real device
-# hit "Unable to load script" on the first debug APK this workflow
-# produced: android/app/build.gradle's own react block documents why
-# ("the list of variants that are debuggable... skip the bundling of the
-# JS bundle and the assets. Default is 'debug', 'debugOptimized'"), so a
-# debug APK expects to fetch JS from a live Metro dev server rather than
-# carrying it, and there's no dev machine on the same network as a
-# tester's phone for it to reach. `release` bundles the JS into the APK
-# itself. android/app/build.gradle now fails closed on a release build
-# with no android/keystore.properties (a security audit flagged the old
-# unconditional signingConfigs.debug fallback -- debug.keystore's
-# password is the public, documented 'android', so anyone could sign a
-# replacement "update"). "Configure release signing" below writes a
-# real android/keystore.properties from repository secrets when they're
-# set (RELEASE_KEYSTORE_BASE64/RELEASE_KEYSTORE_PASSWORD/RELEASE_KEY_ALIAS
-# -- see android/keystore.properties.example for what each maps to), so
-# every build from here on is signed with the SAME real key, which is
-# what lets a tester install one build over the last without
-# uninstalling first. -PALLOW_DEBUG_SIGNED_RELEASE=true stays on the
-# build step purely as a fallback so this workflow never just breaks if
-# those secrets are ever unset -- build.gradle only consults that flag
-# when android/keystore.properties is actually missing.
+# Manual release/sideload build. Android release builds are intentionally
+# not run on every main push because they install the Android SDK/NDK and
+# perform two full Gradle builds (APK + AAB).
+
 on:
-  push:
-    branches: [main]
   workflow_dispatch: {}
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # GitHub Actions doesn't let a step's own `if:` reference the
-    # `secrets` context directly ("Unrecognized named-value: 'secrets'")
-    # — every run from the commit that first added the signing step
-    # below through the next 17 pushes failed at workflow-parse time
-    # over exactly this, before a single job step ever ran. Exposing the
-    # one secret this workflow needs to gate on as a job-level env var
-    # and testing THAT in the if: is the documented workaround.
     env:
       RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
-    # softprops/action-gh-release below needs to create a tag + release
-    # and upload assets to it — the default GITHUB_TOKEN is read-only
-    # unless a repo has "Read and write permissions" set for Actions, so
-    # this is declared explicitly rather than depending on that setting.
     permissions:
       contents: write
     steps:
@@ -63,31 +26,8 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # First run revealed ubuntu-latest does NOT ship sdkmanager on PATH
-      # (that assumption was wrong) — this action installs the cmdline-
-      # tools and sets ANDROID_HOME/ANDROID_SDK_ROOT.
-      #
-      # Third run (this line) revealed @v3 itself unconditionally
-      # installs the standalone `tools` package as part of its own setup,
-      # independent of this step's own `packages` input (which only ever
-      # controls ADDITIONAL packages on top of that) — Google removed
-      # `tools` from the SDK repository, so every run started failing at
-      # "Failed to find package 'tools'" with no source change involved
-      # (confirmed: android-actions/setup-android#537, fixed in #538,
-      # released as v4.0.2 — "drops tools from the defaults"). Bumped to
-      # @v4 to pick that up; this step passes no `with:` block, so the
-      # only behavior change is the removal of that broken install.
       - uses: android-actions/setup-android@v4
 
-      # Second run revealed hand-picking "platforms;android-37" here was
-      # also wrong — that exact platform isn't in the SDK repository this
-      # cmdline-tools version can see, and hardcoding a package string
-      # here just drifts out of sync with android/build.gradle's own
-      # compileSdkVersion/buildToolsVersion/ndkVersion the moment either
-      # changes. Accept licenses up front and let the Android Gradle
-      # Plugin auto-download exactly what IT asks for (on by default —
-      # android.builder.sdkDownload) once ANDROID_HOME is set — the
-      # standard, drift-proof way to do this in CI.
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses > /dev/null || true
 
@@ -97,11 +37,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Only runs when the three secrets are actually set (see this
-      # file's own header for what they map to) — a fork PR or a repo
-      # that hasn't added them yet just skips this and the build step
-      # below falls back to the explicit debug-signed opt-in instead of
-      # failing.
       - name: Configure release signing
         if: ${{ env.RELEASE_KEYSTORE_BASE64 != '' }}
         working-directory: android
@@ -117,33 +52,14 @@ jobs:
           keyPassword=$RELEASE_KEYSTORE_PASSWORD
           PROPS
 
-      # Read once, used by both Gradle builds below AND by the Release
-      # step further down — one source of truth for "what version is
-      # this", not two separately-typed values that could drift.
       - name: Read app version
         id: pkgver
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
-      # -PVERSION_CODE=<run number>: Google Play rejects any upload whose
-      # versionCode isn't strictly higher than the last one it has on
-      # file — this always increases, run over run, with nothing to
-      # remember to bump by hand. -PVERSION_NAME=<package.json version>
-      # is the human-readable string Play's own listing shows real users
-      # (see build.gradle's own comment — this used to be hardcoded
-      # "1.0" forever). -PALLOW_DEBUG_SIGNED_RELEASE=true is the explicit
-      # opt-in build.gradle requires for a debug-signed release build
-      # (only consulted when the signing step above didn't run) — see
-      # this file's own header comment.
       - name: Build release APK (sideload-testable, bundles JS)
         working-directory: android
         run: ./gradlew assembleRelease --no-daemon -PVERSION_CODE=${{ github.run_number }} -PVERSION_NAME=${{ steps.pkgver.outputs.version }} -PALLOW_DEBUG_SIGNED_RELEASE=true
 
-      # The .aab, not the .apk, is what actually gets uploaded to Google
-      # Play Console — Play has required App Bundle (not a raw APK) for
-      # new apps since 2021; it slices this into per-device APKs itself
-      # at install time. Same signingConfig, same versionCode/versionName
-      # as the APK above (Gradle just reuses the already-configured
-      # release variant).
       - name: Build release AAB (for Google Play Console upload)
         working-directory: android
         run: ./gradlew bundleRelease --no-daemon -PVERSION_CODE=${{ github.run_number }} -PVERSION_NAME=${{ steps.pkgver.outputs.version }} -PALLOW_DEBUG_SIGNED_RELEASE=true
@@ -162,16 +78,6 @@ jobs:
           path: android/app/build/outputs/bundle/release/*.aab
           retention-days: 30
 
-      # Workflow artifacts (above) expire after 30 days and aren't
-      # browsable as "pick a version" the way a Releases page is — this
-      # publishes the same signed APK/AAB as a permanent, tagged GitHub
-      # Release instead, so testers can go to the repo's Releases tab and
-      # choose which build number to install rather than only ever
-      # grabbing the latest one from Actions. Tag combines package.json's
-      # version (read once, above, and reused here) with the run number
-      # (package.json alone repeats across every untagged build; the run
-      # number alone means nothing at a glance) — always unique since
-      # github.run_number only increases.
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
