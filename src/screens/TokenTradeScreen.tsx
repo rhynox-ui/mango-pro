@@ -640,25 +640,19 @@ export function TokenTradeScreen({
           const remainingContributors = contributors.slice();
           const plan: MultiSourceLeg[] = [];
 
-          // Relay already runs a competitive filler/route auction for each
-          // individual quote. Our job here is only to choose which wallet
-          // balance(s) feed that auction. Fewer source legs are normally
-          // cheaper because Relay app fees have a per-transaction minimum,
-          // and every extra sponsored execution can consume more protocol
-          // sponsorship budget. Therefore: if one source can fund the whole
-          // remaining amount, quote those full-size candidates and choose the
-          // best output. Only split when no single source can cover the buy.
-          //
-          // This preserves the "one balance" UX without recreating the old
-          // hidden bridge/consolidation flow.
-          while (remainingUsd > 0.000001 && remainingContributors.length > 0) {
-            const fullCover = remainingContributors.filter(c => c.balance + 0.000001 >= remainingUsd);
-            const candidatesToQuote = fullCover.length > 0
-              ? fullCover
-              : remainingContributors;
+          type Candidate = {
+            contributor: typeof contributors[number];
+            legUsd: number;
+            legParams: GetRelayQuoteParams;
+            legQuote: RelayQuote;
+            impact: number | null;
+            outputScore: number;
+            totalFeeUsd: number;
+          };
 
-            const candidates = await Promise.allSettled(
-              candidatesToQuote.map(async contributor => {
+          const quoteCandidates = async (candidateContributors: typeof contributors): Promise<Candidate[]> => {
+            const results = await Promise.allSettled(
+              candidateContributors.map(async contributor => {
                 const legUsd = Math.min(remainingUsd, contributor.balance);
                 if (legUsd < 0.05) throw new Error('leg too small');
 
@@ -714,22 +708,13 @@ export function TokenTradeScreen({
               }),
             );
 
-            const executable = candidates
-              .filter((r): r is PromiseFulfilledResult<{
-                contributor: typeof contributors[number];
-                legUsd: number;
-                legParams: GetRelayQuoteParams;
-                legQuote: RelayQuote;
-                impact: number | null;
-                outputScore: number;
-                totalFeeUsd: number;
-              }> => r.status === 'fulfilled')
+            return results
+              .filter((r): r is PromiseFulfilledResult<Candidate> => r.status === 'fulfilled')
               .map(r => r.value)
               .sort((a, b) => {
                 // Primary objective: what the user actually receives.
-                // Relay's output is the all-in execution result; do not
-                // subtract fees again because that would double-count
-                // costs already reflected in the quoted output.
+                // Relay's quoted output is the final execution result, so
+                // subtracting fees again here would double-count costs.
                 if (Math.abs(b.outputScore - a.outputScore) > 1e-9) {
                   return b.outputScore - a.outputScore;
                 }
@@ -740,6 +725,23 @@ export function TokenTradeScreen({
                 // Stable final tie-break: lower price impact.
                 return Math.abs(a.impact ?? 0) - Math.abs(b.impact ?? 0);
               });
+          };
+
+          while (remainingUsd > 0.000001 && remainingContributors.length > 0) {
+            // Prefer a single full-size quote whenever one source can cover
+            // the remaining buy. Relay's app fee has a per-transaction
+            // minimum, so unnecessary splitting can make the user's quote
+            // worse even when the split legs individually have good rates.
+            const fullCover = remainingContributors.filter(c => c.balance + 0.000001 >= remainingUsd);
+            let executable = await quoteCandidates(fullCover.length > 0 ? fullCover : remainingContributors);
+
+            // A full-cover source may have no route (or may be rejected for
+            // high impact) while smaller sources together can still execute
+            // the buy. Do not let the "one leg is cheaper" optimization turn
+            // a valid unified balance into a false no-route error.
+            if (executable.length === 0 && fullCover.length > 0 && fullCover.length < remainingContributors.length) {
+              executable = await quoteCandidates(remainingContributors);
+            }
 
             if (executable.length === 0) break;
 
