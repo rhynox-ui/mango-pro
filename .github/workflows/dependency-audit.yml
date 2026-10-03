@@ -31,6 +31,9 @@ jobs:
       - name: TypeScript check
         run: npm run typecheck
 
+      - name: Run repository verification suite
+        run: npm run verify
+
       - name: Full report (production dependencies)
         run: npm audit --omit=dev || true
 
