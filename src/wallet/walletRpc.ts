@@ -155,18 +155,31 @@ export async function fetchWalletSplTokenBalance(mintAddress: string, decimals: 
   }
   let lastError: unknown;
   try {
-    const [{TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID}] = await Promise.all([import('@solana/spl-token')]);
-    for (const programId of [TOKEN_PROGRAM_ID.toBase58(), TOKEN_2022_PROGRAM_ID.toBase58()]) {
-      const result = await heliusRpc<{value?: Array<{account?: {data?: {parsed?: {info?: {tokenAmount?: {uiAmount?: number | null}}}}}}>}>(
-        'getTokenAccountsByOwner',
-        [ownerAddress, {programId}, {encoding: 'jsonParsed', commitment: 'confirmed'}],
-      );
-      const accounts = result.value ?? [];
-      const balance = accounts.reduce((sum, item) => sum + (Number(item.account?.data?.parsed?.info?.tokenAmount?.uiAmount ?? 0) || 0), 0);
-      if (accounts.length > 0) {
-        setCached(key, balance);
-        return balance;
-      }
+    const [{TOKEN_2022_PROGRAM_ID}] = await Promise.all([import('@solana/spl-token')]);
+    // Standard RPC supports a mint filter; this keeps the Helius path scoped
+    // to the requested asset instead of summing every SPL token in the wallet.
+    const mintResult = await heliusRpc<{value?: Array<{account?: {data?: {parsed?: {info?: {tokenAmount?: {uiAmount?: number | null}}}}}}>}>(
+      'getTokenAccountsByOwner',
+      [ownerAddress, {mint: mintAddress}, {encoding: 'jsonParsed', commitment: 'confirmed'}],
+    );
+    const mintAccounts = mintResult.value ?? [];
+    if (mintAccounts.length > 0) {
+      const balance = mintAccounts.reduce((sum, item) => sum + (Number(item.account?.data?.parsed?.info?.tokenAmount?.uiAmount ?? 0) || 0), 0);
+      setCached(key, balance);
+      return balance;
+    }
+    // Token-2022 fallback: ask for Token-2022 accounts and filter the parsed
+    // mint locally because the RPC filter accepts either mint or programId,
+    // not both in the same request.
+    const token2022Result = await heliusRpc<{value?: Array<{account?: {data?: {parsed?: {info?: {mint?: string; tokenAmount?: {uiAmount?: number | null}}}}}}>}>(
+      'getTokenAccountsByOwner',
+      [ownerAddress, {programId: TOKEN_2022_PROGRAM_ID.toBase58()}, {encoding: 'jsonParsed', commitment: 'confirmed'}],
+    );
+    const token2022Accounts = (token2022Result.value ?? []).filter(item => item.account?.data?.parsed?.info?.mint === mintAddress);
+    const balance = token2022Accounts.reduce((sum, item) => sum + (Number(item.account?.data?.parsed?.info?.tokenAmount?.uiAmount ?? 0) || 0), 0);
+    if (token2022Accounts.length > 0) {
+      setCached(key, balance);
+      return balance;
     }
     setCached(key, 0);
     return 0;
