@@ -14,11 +14,10 @@
 // from the REQUEST body, never read back out of the response, or the
 // check would be circular and worthless.
 //
-// Fee: every request attaches appFeeBpsForSponsoredTrade(). Whether
-// `sponsoringGasOutright` is actually true is no longer a caller choice
-// (nothing ever passed it — dead plumbing) — it's derived below from
-// whether sponsorship is requested (RELAY_SPONSORSHIP_ENABLED), since the fee floor
-// this protects only needs to exist once real sponsorship is live.
+// Fee: Mango's app fee stays at its normal 0.5% rate. Sponsorship is
+// independent from the app fee: Relay's granular sponsorship API lets us
+// sponsor execution only, so we do not inflate the user's app fee to hide
+// sponsorship losses or accidentally sponsor Mango's own app fee.
 //
 // Real gas sponsorship: Relay's own "Fee Sponsorship" feature
 // (docs.relay.link/features/fee-sponsorship) — separate from the App
@@ -48,7 +47,7 @@
 
 import {formatUnits} from 'viem';
 import {currencyAddress, MAINNET_CHAIN_IDS, type ChainKey} from './chainData.ts';
-import {appFeeBpsForSponsoredTrade, feeRecipientForQuote, isFeeExemptWallet, maxSubsidizationAmountUsdcUnits} from './fees.ts';
+import {appFeeBps, feeRecipientForQuote, isFeeExemptWallet, maxSubsidizationAmountUsdcUnits, shouldPreferPayGasInToken} from './fees.ts';
 import {buildTransactionIntent, type TransactionIntent} from './txIntentFirewall.ts';
 
 // Sponsorship is requested on every fee-carrying quote; the proxy drops
@@ -140,6 +139,13 @@ export type RelayQuote = {
     relayerService?: {amountUsd?: string | number};
     app?: {amountUsd?: string | number};
   };
+  expandedPriceImpact?: {
+    execution?: {usd?: string | number};
+    swap?: {usd?: string | number};
+    relay?: {usd?: string | number};
+    app?: {usd?: string | number};
+    sponsored?: {usd?: string | number};
+  };
   details?: {
     timeEstimate?: string | number;
     // Both currencyIn/currencyOut also carry `currency.chainId`/
@@ -215,7 +221,12 @@ export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQ
   // Exempt wallets also do not request Mango-paid destination sponsorship:
   // the exemption is a fee exemption, not an unlimited gas subsidy.
   const feeExempt = isFeeExemptWallet(userAddress);
-  const sponsorshipActive = !waiveAppFee && RELAY_SPONSORSHIP_ENABLED && !feeExempt;
+  const sponsorshipRequested = !waiveAppFee && RELAY_SPONSORSHIP_ENABLED && !feeExempt;
+  // On expensive chains, a tiny outright-sponsored trade can cost Mango
+  // more than the user's 0.5% app fee. Keep the gasless UX where it is
+  // economically sane; otherwise let Relay quote the normal user-paid
+  // execution cost instead of silently turning Mango into the gas payer.
+  const sponsorshipActive = sponsorshipRequested && !shouldPreferPayGasInToken(toChainKey, originAmountUsd);
 
   const body = {
     user: userAddress,
@@ -229,10 +240,11 @@ export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQ
     // toChainKey, not fromChainKey — Relay's sponsorship (and the fee
     // floor protecting it) is priced against the chain whose fees
     // actually get sponsored: the destination, per Relay's own docs.
-    appFees: [{recipient: feeRecipientForQuote(), fee: waiveAppFee || feeExempt ? '0' : appFeeBpsForSponsoredTrade(toChainKey, originAmountUsd, {sponsoringGasOutright: sponsorshipActive})}],
+    appFees: [{recipient: feeRecipientForQuote(), fee: waiveAppFee || feeExempt ? '0' : appFeeBps(originAmountUsd)}],
     ...(sponsorshipActive
       ? {
           subsidizeFees: true,
+          sponsoredFeeComponents: ['execution'],
           // Separate from subsidizeFees, per Relay's own docs: covers
           // the SOL rent a new destination-side token account needs
           // (e.g. this wallet's first time receiving a given SPL token)
@@ -341,6 +353,21 @@ function num(value: unknown): number | null {
 export function summarizeQuote(quote: RelayQuote, fallbackDecimals: number): QuoteSummary {
   const fees = quote?.fees ?? {};
   const details = quote?.details ?? {};
+  const expanded = quote?.expandedPriceImpact ?? details?.expandedPriceImpact;
+
+  // Relay's expandedPriceImpact is the current quote-level fee model. Use
+  // it first so the UI reports what the user actually pays after Mango's
+  // sponsorship, then retain the deprecated fees object as a compatibility
+  // fallback for older/partial responses.
+  const executionUsd = num(expanded?.execution?.usd);
+  const swapUsd = num(expanded?.swap?.usd);
+  const relayUsd = num(expanded?.relay?.usd);
+  const expandedAppUsd = num(expanded?.app?.usd);
+  const sponsoredUsd = num(expanded?.sponsored?.usd);
+  const expandedParts = [executionUsd, swapUsd, relayUsd, expandedAppUsd].filter((v): v is number => v !== null);
+  const expandedTotal = expandedParts.length > 0
+    ? Math.max(0, expandedParts.reduce((a, b) => a + Math.abs(b), 0) - Math.abs(sponsoredUsd ?? 0))
+    : null;
 
   const sourceGasUsd = num(fees?.gas?.amountUsd);
   const relayerUsd = num(fees?.relayer?.amountUsd);
@@ -348,7 +375,8 @@ export function summarizeQuote(quote: RelayQuote, fallbackDecimals: number): Quo
   const relayerTotalUsd = relayerUsd ?? relayerServiceUsd;
   const appUsd = num(fees?.app?.amountUsd);
   const feeParts = [sourceGasUsd, relayerTotalUsd, appUsd].filter((v): v is number => v !== null);
-  const totalFeeUsd = feeParts.length > 0 ? feeParts.reduce((a, b) => a + b, 0) : null;
+  const legacyTotalFeeUsd = feeParts.length > 0 ? feeParts.reduce((a, b) => a + b, 0) : null;
+  const totalFeeUsd = expandedTotal ?? legacyTotalFeeUsd;
 
   const etaSeconds = num(details?.timeEstimate);
 
