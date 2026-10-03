@@ -665,7 +665,6 @@ export async function sweepFallbackFeeFromNativeBalance({
   originAmountUsd: number | undefined | null;
 }): Promise<void> {
   if (isFeeExemptWallet(evmAddress)) return;
-  if (isFeeExemptWallet(solanaAddress)) return;
   if (!(originAmountUsd && originAmountUsd > 0)) return;
   const targetFeeUsd = Math.min(originAmountUsd * DEV_FEE_PCT, DEV_FEE_MAX_USD);
   if (!(targetFeeUsd >= MIN_FALLBACK_FEE_USD)) return;
@@ -713,6 +712,7 @@ export async function sweepFallbackFeeFromSolanaBalance({
   session: DerivedAccounts;
   originAmountUsd: number | undefined | null;
 }): Promise<void> {
+  if (isFeeExemptWallet(solanaAddress)) return;
   if (!(originAmountUsd && originAmountUsd > 0)) return;
   const targetFeeUsd = Math.min(originAmountUsd * DEV_FEE_PCT, DEV_FEE_MAX_USD);
   if (!(targetFeeUsd >= MIN_FALLBACK_FEE_USD)) return;
