@@ -25,15 +25,11 @@
 //   supported chain (src/core/usdcBalances.ts's fetchCashPortfolio,
 //   the same total ProfileScreen's own Total Cash shows) — there is no
 //   user-facing chain picker, no native-asset payment option, nothing
-//   to choose. Internally, payOrigin still auto-picks whichever single
-//   chain holds the most, because Relay's own quote API needs one
-//   concrete origin chain per call — that's a routing detail, not
-//   something shown to the user. One real, disclosed limitation this
-//   creates: if the typed amount fits the aggregate only by combining
-//   several chains (funds split across them), execution can't do that
-//   yet (true multi-chain splitting is separate, unbuilt engineering)
-//   and the trade is blocked with an honest explanation rather than
-//   silently failing on-chain. Sell spends the searched token's own
+//   to choose. Internally, Relay still needs one concrete origin chain
+//   per quote, so the execution planner can split a unified Buy across
+//   multiple source chains and route each leg directly to the destination.
+//   The user never has to see or manage those source-chain legs. Sell
+//   spends the searched token's own
 //   real on-chain balance and always delivers proceeds as that same
 //   aggregate USDC (native only on the rare chain with no verified
 //   cash address at all).
@@ -439,16 +435,12 @@ export function TokenTradeScreen({
   const {balance, loading: balanceLoading} = useAvailableBalance(session ? fetchPayBalance : null, [session, isBuySide, solana, token, tokenDecimals, balanceRetryToken, cashPortfolio]);
   const insufficientBalance = amtNum > 0 && balance !== null && amtNum > balance;
   // Relay's quote API takes one concrete origin chain per call. The
-  // aggregate cash balance is still presented as one balance, but when a
-  // buy needs multiple sources the quote builder creates direct
-  // source -> destination legs instead of first consolidating everything
-  // into payOrigin. `needsMultiSourceRouting` is retained as a local name to
-  // minimize churn; it means "this buy needs multiple cash sources."
-  // Build the execution plan whenever the aggregate cash portfolio is
-  // available, even if payOrigin alone can cover the trade. A unified-balance
-  // router should compare the available origins rather than assuming the
-  // largest balance is automatically the best route.
-  const needsMultiSourceRouting = !nearToken && isBuySide && amtNum > 0 && !insufficientBalance && cashPortfolio !== null;
+  // aggregate cash balance is presented as one balance, while the planner
+  // builds direct source -> destination legs underneath it. Build the
+  // unified execution plan whenever the aggregate cash portfolio is
+  // available, even if one chain alone can cover the trade, so Relay route
+  // quality is compared instead of assuming the largest balance is best.
+  const needsUnifiedRouting = !nearToken && isBuySide && amtNum > 0 && !insufficientBalance && cashPortfolio !== null;
   // A resolved balance of 0 is real (an empty wallet) and looks
   // identical to a null balance in `balance !== null` checks — this
   // specifically catches the OTHER case, where the fetch itself failed
@@ -634,7 +626,7 @@ export function TokenTradeScreen({
       // payOrigin can.
       const sellReceiveCurrency = receiveAsset === 'cash' ? currencyAddress(chainKey, CASH_ASSET_BY_CHAIN[chainKey] ?? 'USDC') : nativeCurrency;
       const originCurrency = isBuySide ? currencyAddress(payOrigin.chainKey, CASH_ASSET_BY_CHAIN[payOrigin.chainKey] ?? 'USDC') : token.address;
-      if (isBuySide && needsMultiSourceRouting && cashPortfolio) {
+      if (isBuySide && needsUnifiedRouting && cashPortfolio) {
         const contributors = CASH_SUPPORTED_CHAINS
           .map(sourceChainKey => {
             const result = cashPortfolio.results.find(r => r.chainKey === sourceChainKey);
@@ -973,7 +965,7 @@ export function TokenTradeScreen({
    * (fetchPayBalance above), but execution could only ever pull from
    * payOrigin's single chain — Relay's quote API takes one concrete
    * origin per call. A typed/Max'd amount that only added up by
-   * combining chains used to just block here (needsMultiSourceRouting's own
+   * combining chains used to just block here (needsUnifiedRouting's own
    * comment called this "real, separate follow-up engineering" — never
    * actually built). This is that: moves the shortfall from every other
    * chain the wallet holds cash on into payOrigin's chain, largest-
@@ -1487,7 +1479,7 @@ export function TokenTradeScreen({
       {!isBuySide && tokenDecimalsError && <Text style={styles.errorText}>{tokenDecimalsError}</Text>}
       {!isBuySide && !tokenDecimalsError && tokenDecimals === null && amtNum > 0 && <Text style={styles.noteText}>Verifying this token…</Text>}
       {insufficientBalance && <Text style={styles.errorText}>{nearToken && isBuySide ? 'Not enough USDC on NEAR — move some there with Convert on Profile first.' : `Insufficient ${paySymbol} balance`}</Text>}
-      {needsMultiSourceRouting && (
+      {needsUnifiedRouting && (
         <Text style={styles.noteText}>
           Your ${amtNum.toFixed(2)} buy will be split across available cash chains and routed directly to {CHAIN_LABEL[chainKey]} — no manual bridging or chain selection.
         </Text>
