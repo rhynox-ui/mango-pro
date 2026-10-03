@@ -86,6 +86,13 @@ import {cashLogoUrl, fetchCashPortfolio, spendableCash, spendableTotalUsd, CASH_
  */
 type PayOrigin = {chainKey: ChainKey};
 
+type MultiSourceLeg = {
+  chainKey: ChainKey;
+  amountUsd: number;
+  quote: RelayQuote;
+  params: GetRelayQuoteParams;
+};
+
 export type DemoToken = {
   /** A Relay chain, or 'near' — a NEAR token trades through nearTrade.ts instead of Relay. */
   chainKey: TradeChain;
@@ -229,6 +236,8 @@ export function TokenTradeScreen({
   // needs the actual RelayQuote (steps + the intent relayQuote.ts tagged
   // it with), not the display-only numbers summarizeQuote() derives.
   const rawQuoteRef = useRef<RelayQuote | null>(null);
+  // Direct source -> destination legs for FOMO-style unified buys.
+  const multiSourcePlanRef = useRef<MultiSourceLeg[]>([]);
   // The NEAR equivalent of rawQuoteRef (nearToken only): the checked route
   // plus fee that handleNearTrade sends.
   const nearQuoteRef = useRef<NearTradeQuote | null>(null);
@@ -627,6 +636,97 @@ export function TokenTradeScreen({
       // payOrigin can.
       const sellReceiveCurrency = receiveAsset === 'cash' ? currencyAddress(chainKey, CASH_ASSET_BY_CHAIN[chainKey] ?? 'USDC') : nativeCurrency;
       const originCurrency = isBuySide ? currencyAddress(payOrigin.chainKey, CASH_ASSET_BY_CHAIN[payOrigin.chainKey] ?? 'USDC') : token.address;
+      if (isBuySide && needsConsolidation && cashPortfolio) {
+        const contributors = CASH_SUPPORTED_CHAINS
+          .map(sourceChainKey => {
+            const result = cashPortfolio.results.find(r => r.chainKey === sourceChainKey);
+            return {chainKey: sourceChainKey, balance: result?.status === 'ok' ? spendableCash(sourceChainKey, result.balance) : 0};
+          })
+          .filter(item => item.balance > 0)
+          .sort((a, b) => a.chainKey === payOrigin.chainKey ? -1 : b.chainKey === payOrigin.chainKey ? 1 : b.balance - a.balance);
+
+        const buildPlan = async (): Promise<MultiSourceLeg[]> => {
+          let remainingUsd = amtNum;
+          const plan: MultiSourceLeg[] = [];
+          for (const contributor of contributors) {
+            if (remainingUsd <= 0.000001) break;
+            const legUsd = Math.min(remainingUsd, contributor.balance);
+            if (legUsd < 0.05) continue;
+            const fromSymbol = CASH_ASSET_BY_CHAIN[contributor.chainKey] ?? 'USDC';
+            const payDecimalsForLeg = assetDecimalsForChain(contributor.chainKey, fromSymbol);
+            if (payDecimalsForLeg == null) continue;
+            const legAmountBaseUnits = parseUnits(legUsd.toFixed(payDecimalsForLeg), payDecimalsForLeg).toString();
+            const legUserAddress = contributor.chainKey === 'solana' ? session.solana.address : session.evm.address;
+            const legRecipientAddress = solana ? session.solana.address : session.evm.address;
+            const legParams: GetRelayQuoteParams = {
+              fromChainKey: contributor.chainKey,
+              toChainKey: chainKey,
+              originCurrency: currencyAddress(contributor.chainKey, fromSymbol),
+              destinationCurrency: token.address,
+              amountBaseUnits: legAmountBaseUnits,
+              userAddress: legUserAddress,
+              recipientAddress: legRecipientAddress,
+              originAmountUsd: legUsd,
+              slippageTolerance: slippageBps ?? undefined,
+            };
+            try {
+              const legQuote = await getRelayQuote(legParams);
+              plan.push({chainKey: contributor.chainKey, amountUsd: legUsd, quote: legQuote, params: legParams});
+              remainingUsd -= legUsd;
+            } catch {}
+          }
+          if (remainingUsd > 0.01) {
+            throw new Error('Only $' + (amtNum - remainingUsd).toFixed(2) + ' of this buy has a direct route to ' + CHAIN_LABEL[chainKey] + '; try a smaller amount or wait for another route.');
+          }
+          return plan;
+        };
+
+        buildPlan().then(plan => {
+          if (requestId !== quoteRequestIdRef.current) return;
+          multiSourcePlanRef.current = plan;
+          rawQuoteRef.current = null;
+          lastQuoteParamsRef.current = null;
+          fallbackParamsRef.current = null;
+          const receiveDecimalsFallback = tokenDecimals ?? 18;
+          let totalReceivedBaseUnits = 0n;
+          let totalFeeUsd = 0;
+          let maxEtaSeconds = 0;
+          let weightedImpact = 0;
+          let weightedInput = 0;
+          for (const leg of plan) {
+            const summary = summarizeQuote(leg.quote, receiveDecimalsFallback);
+            try { if (summary.receivedAmountFormatted) totalReceivedBaseUnits += parseUnits(summary.receivedAmountFormatted, receiveDecimalsFallback); } catch {}
+            totalFeeUsd += summary.totalFeeUsd ?? 0;
+            maxEtaSeconds = Math.max(maxEtaSeconds, summary.etaSeconds ?? 0);
+            if (summary.priceImpactPct != null) {
+              weightedImpact += Math.abs(summary.priceImpactPct) * leg.amountUsd;
+              weightedInput += leg.amountUsd;
+            }
+          }
+          let receivedAmountFormatted: string | null = null;
+          try { receivedAmountFormatted = formatUnits(totalReceivedBaseUnits, receiveDecimalsFallback); } catch {}
+          setQuote({
+            totalFeeUsd,
+            etaSeconds: maxEtaSeconds,
+            receivedAmountFormatted,
+            payAmountUsd: amtNum,
+            receiveAmountUsd: null,
+            priceImpactPct: weightedInput > 0 ? weightedImpact / weightedInput : null,
+          });
+          setQuoteError(null);
+          setQuoteLoading(false);
+        }).catch(err => {
+          if (requestId !== quoteRequestIdRef.current) return;
+          multiSourcePlanRef.current = [];
+          rawQuoteRef.current = null;
+          fallbackParamsRef.current = null;
+          setQuote(null);
+          setQuoteLoading(false);
+          setQuoteError(err instanceof Error ? err.message : 'Could not find direct routes for your combined cash balance.');
+        });
+        return;
+      }
+
       const quoteParams: GetRelayQuoteParams = {
         fromChainKey: isBuySide ? payOrigin.chainKey : chainKey,
         toChainKey: chainKey,
@@ -638,6 +738,7 @@ export function TokenTradeScreen({
         originAmountUsd,
         slippageTolerance: slippageBps ?? undefined,
       };
+      multiSourcePlanRef.current = [];
       getRelayQuote(quoteParams)
         .then(q => {
           // Stale-response guard — a slower earlier request landing
@@ -971,17 +1072,17 @@ export function TokenTradeScreen({
   async function handleTrade() {
     const chainKey = token.chainKey;
     if (chainKey === 'near') return handleNearTrade();
+    const multiSourcePlan = multiSourcePlanRef.current;
     let quoteToExecute = rawQuoteRef.current;
     const fallbackParams = fallbackParamsRef.current;
-    if ((!quoteToExecute && !fallbackParams) || !session) return;
+    if ((!quoteToExecute && !fallbackParams && multiSourcePlan.length === 0) || !session) return;
     setExecuteError(null);
     setExecuteWarnings([]);
     setExecuteTxHashes([]);
     setResultModalDismissed(false);
     const fromAddress = solana ? session.solana.address : session.evm.address;
-    if (needsConsolidation) {
-      setExecuteState('consolidating');
-      try {
+    // Multi-source buys execute each direct source -> destination quote below.
+    try {
         await consolidateIntoPayOrigin(amtNum - payOriginChainBalance);
       } catch (err) {
         setExecuteError(err instanceof Error ? err.message : 'Could not consolidate your balance across chains.');
@@ -1016,7 +1117,29 @@ export function TokenTradeScreen({
       let txHashes: string[];
       let warnings: string[];
       let receivedAmountFormatted: string | null;
-      if (quoteToExecute) {
+      if (multiSourcePlan.length > 0) {
+        const allHashes: string[] = [];
+        const allWarnings: string[] = [];
+        let completedLegs = 0;
+        try {
+          for (const leg of multiSourcePlan) {
+            setExecuteState('build');
+            const result = await executeRelayQuote(leg.quote, session, step => setExecuteState(step), {
+              useGaslessTrading: gaslessTradingEnabled,
+              requote: () => getRelayQuote(leg.params),
+            });
+            allHashes.push(...result.txHashes);
+            allWarnings.push(...result.warnings);
+            completedLegs += 1;
+          }
+          txHashes = allHashes;
+          warnings = allWarnings;
+          receivedAmountFormatted = quote?.receivedAmountFormatted ?? null;
+        } catch (err) {
+          const message = err instanceof TransactionIntentError ? err.message : describeTradeError(err).message;
+          throw new Error('Direct multi-chain buy partially completed after ' + completedLegs + ' of ' + multiSourcePlan.length + ' source legs: ' + message);
+        }
+      } else if (quoteToExecute) {
         const quoteParamsForRetry = lastQuoteParamsRef.current;
         const result = await executeRelayQuote(quoteToExecute, session, step => setExecuteState(step), {
           useGaslessTrading: gaslessTradingEnabled,
@@ -1025,7 +1148,6 @@ export function TokenTradeScreen({
         txHashes = result.txHashes;
         warnings = result.warnings;
         receivedAmountFormatted = quote?.receivedAmountFormatted ?? null;
-      } else {
         // Fallback path re-quotes fresh (tryFallbackProviders runs its
         // own quoteAllProviders internally) rather than reusing the
         // preview amount — same as the Relay path only ever executes the
@@ -1130,7 +1252,7 @@ export function TokenTradeScreen({
 
   const extremePriceImpact = quote?.priceImpactPct != null && Math.abs(quote.priceImpactPct) > EXTREME_PRICE_IMPACT_PCT;
   const canTrade =
-    (Boolean(rawQuoteRef.current) || Boolean(fallbackParamsRef.current) || Boolean(nearQuoteRef.current)) &&
+    (Boolean(rawQuoteRef.current) || Boolean(fallbackParamsRef.current) || multiSourcePlanRef.current.length > 0 || Boolean(nearQuoteRef.current)) &&
     Boolean(session) &&
     !insufficientBalance &&
     !extremePriceImpact &&
