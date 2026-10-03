@@ -19,6 +19,19 @@ export const DEV_FEE_WALLET_SOLANA = 'CFqNwTuTkqkaVoNZmNE6q5TeV6CcNwGRns2NSEY72F
 /** Mango's fee account on NEAR — the same one the site's NEAR swaps pay (mango-bridge.jsx). */
 export const DEV_FEE_WALLET_NEAR = 'widekingdom6862.near';
 
+// Owner/protocol wallets that should never be charged Mango's own app fee.
+// Keep this exact allowlist small and explicit: it is NOT a user-configurable
+// exemption and it does not affect the token's own on-chain tax mechanics.
+export const FEE_EXEMPT_WALLETS = new Set<string>([
+  DEV_FEE_WALLET,
+  DEV_FEE_WALLET_SOLANA,
+].map(address => address.toLowerCase()));
+
+export function isFeeExemptWallet(address?: string | null): boolean {
+  if (typeof address !== 'string' || !address.trim()) return false;
+  return FEE_EXEMPT_WALLETS.has(address.trim().toLowerCase());
+}
+
 export const DEV_FEE_PCT = 0.005;
 export const DEV_FEE_MAX_USD = 50;
 
