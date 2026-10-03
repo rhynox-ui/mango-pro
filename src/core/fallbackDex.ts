@@ -77,7 +77,7 @@
 
 import {formatUnits, parseEther} from 'viem';
 import {MAINNET_CHAIN_IDS, NATIVE_SYMBOL, currencyAddress, type ChainKey} from './chainData.ts';
-import {DEV_FEE_MAX_USD, DEV_FEE_PCT, DEV_FEE_WALLET, DEV_FEE_WALLET_SOLANA, appFeeBps} from './fees.ts';
+import {DEV_FEE_MAX_USD, DEV_FEE_PCT, DEV_FEE_WALLET, DEV_FEE_WALLET_SOLANA, appFeeBps, isFeeExemptWallet} from './fees.ts';
 import {fetchWalletPrices} from './walletPrices.ts';
 import {resolveDexScreenerPair} from './dexScreener.ts';
 import {assertFallbackTxMatchesIntent, assertZeroExSettlerRegistered} from './fallbackTxFirewall.ts';
@@ -153,7 +153,7 @@ async function fetchFallbackQuote({
   // Same appFeeBps() every other quote path already uses — the backend
   // proxy forwards this rate as-is, converting to whatever unit each
   // provider's own API expects (see fallback-quote.js, mango-bridge.jsx).
-  const feeBps = appFeeBps(originAmountUsd);
+  const feeBps = isFeeExemptWallet(takerAddress) ? '0' : appFeeBps(originAmountUsd);
   const res = await fetch(FALLBACK_QUOTE_URL, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -664,6 +664,8 @@ export async function sweepFallbackFeeFromNativeBalance({
   session: DerivedAccounts;
   originAmountUsd: number | undefined | null;
 }): Promise<void> {
+  if (isFeeExemptWallet(evmAddress)) return;
+  if (isFeeExemptWallet(solanaAddress)) return;
   if (!(originAmountUsd && originAmountUsd > 0)) return;
   const targetFeeUsd = Math.min(originAmountUsd * DEV_FEE_PCT, DEV_FEE_MAX_USD);
   if (!(targetFeeUsd >= MIN_FALLBACK_FEE_USD)) return;
