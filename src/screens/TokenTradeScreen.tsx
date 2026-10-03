@@ -640,15 +640,25 @@ export function TokenTradeScreen({
           const remainingContributors = contributors.slice();
           const plan: MultiSourceLeg[] = [];
 
-          // Do not blindly spend the biggest balance first. Relay can return
-          // materially different execution quality by origin chain. At each
-          // allocation step we quote every remaining source for the amount it
-          // can actually contribute, then take the best executable net output.
-          // This keeps the unified balance UX while making the execution layer
-          // behave like a router rather than a balance sorter.
+          // Relay already runs a competitive filler/route auction for each
+          // individual quote. Our job here is only to choose which wallet
+          // balance(s) feed that auction. Fewer source legs are normally
+          // cheaper because Relay app fees have a per-transaction minimum,
+          // and every extra sponsored execution can consume more protocol
+          // sponsorship budget. Therefore: if one source can fund the whole
+          // remaining amount, quote those full-size candidates and choose the
+          // best output. Only split when no single source can cover the buy.
+          //
+          // This preserves the "one balance" UX without recreating the old
+          // hidden bridge/consolidation flow.
           while (remainingUsd > 0.000001 && remainingContributors.length > 0) {
+            const fullCover = remainingContributors.filter(c => c.balance + 0.000001 >= remainingUsd);
+            const candidatesToQuote = fullCover.length > 0
+              ? fullCover
+              : remainingContributors;
+
             const candidates = await Promise.allSettled(
-              remainingContributors.map(async contributor => {
+              candidatesToQuote.map(async contributor => {
                 const legUsd = Math.min(remainingUsd, contributor.balance);
                 if (legUsd < 0.05) throw new Error('leg too small');
 
@@ -682,8 +692,8 @@ export function TokenTradeScreen({
                   throw new Error('route price impact too high');
                 }
 
-                let outputScore = 0;
                 const outputUsd = summary.receiveAmountUsd;
+                let outputScore = 0;
                 if (outputUsd != null && Number.isFinite(outputUsd) && outputUsd > 0) {
                   outputScore = outputUsd / legUsd;
                 } else if (summary.receivedAmountFormatted) {
@@ -699,6 +709,7 @@ export function TokenTradeScreen({
                   legQuote,
                   impact,
                   outputScore,
+                  totalFeeUsd: summary.totalFeeUsd ?? Number.POSITIVE_INFINITY,
                 };
               }),
             );
@@ -711,9 +722,24 @@ export function TokenTradeScreen({
                 legQuote: RelayQuote;
                 impact: number | null;
                 outputScore: number;
+                totalFeeUsd: number;
               }> => r.status === 'fulfilled')
               .map(r => r.value)
-              .sort((a, b) => b.outputScore - a.outputScore);
+              .sort((a, b) => {
+                // Primary objective: what the user actually receives.
+                // Relay's output is the all-in execution result; do not
+                // subtract fees again because that would double-count
+                // costs already reflected in the quoted output.
+                if (Math.abs(b.outputScore - a.outputScore) > 1e-9) {
+                  return b.outputScore - a.outputScore;
+                }
+                // Secondary objective: lower explicit quoted fees.
+                if (a.totalFeeUsd !== b.totalFeeUsd) {
+                  return a.totalFeeUsd - b.totalFeeUsd;
+                }
+                // Stable final tie-break: lower price impact.
+                return Math.abs(a.impact ?? 0) - Math.abs(b.impact ?? 0);
+              });
 
             if (executable.length === 0) break;
 
@@ -725,6 +751,7 @@ export function TokenTradeScreen({
               params: best.legParams,
             });
             remainingUsd -= best.legUsd;
+
             const usedIndex = remainingContributors.findIndex(c => c.chainKey === best.contributor.chainKey);
             if (usedIndex >= 0) remainingContributors.splice(usedIndex, 1);
           }
