@@ -442,13 +442,13 @@ export function TokenTradeScreen({
   // aggregate cash balance is still presented as one balance, but when a
   // buy needs multiple sources the quote builder creates direct
   // source -> destination legs instead of first consolidating everything
-  // into payOrigin. `needsConsolidation` is retained as a local name to
+  // into payOrigin. `needsMultiSourceRouting` is retained as a local name to
   // minimize churn; it means "this buy needs multiple cash sources."
   // Build the execution plan whenever the aggregate cash portfolio is
   // available, even if payOrigin alone can cover the trade. A unified-balance
   // router should compare the available origins rather than assuming the
   // largest balance is automatically the best route.
-  const needsConsolidation = !nearToken && isBuySide && amtNum > 0 && !insufficientBalance && cashPortfolio !== null;
+  const needsMultiSourceRouting = !nearToken && isBuySide && amtNum > 0 && !insufficientBalance && cashPortfolio !== null;
   // A resolved balance of 0 is real (an empty wallet) and looks
   // identical to a null balance in `balance !== null` checks — this
   // specifically catches the OTHER case, where the fetch itself failed
@@ -634,7 +634,7 @@ export function TokenTradeScreen({
       // payOrigin can.
       const sellReceiveCurrency = receiveAsset === 'cash' ? currencyAddress(chainKey, CASH_ASSET_BY_CHAIN[chainKey] ?? 'USDC') : nativeCurrency;
       const originCurrency = isBuySide ? currencyAddress(payOrigin.chainKey, CASH_ASSET_BY_CHAIN[payOrigin.chainKey] ?? 'USDC') : token.address;
-      if (isBuySide && needsConsolidation && cashPortfolio) {
+      if (isBuySide && needsMultiSourceRouting && cashPortfolio) {
         const contributors = CASH_SUPPORTED_CHAINS
           .map(sourceChainKey => {
             const result = cashPortfolio.results.find(r => r.chainKey === sourceChainKey);
@@ -755,6 +755,7 @@ export function TokenTradeScreen({
           fallbackParamsRef.current = null;
           const receiveDecimalsFallback = tokenDecimals ?? 18;
           let totalReceivedBaseUnits = 0n;
+          let totalReceiveUsd = 0;
           let totalFeeUsd = 0;
           let maxEtaSeconds = 0;
           let weightedImpact = 0;
@@ -762,6 +763,7 @@ export function TokenTradeScreen({
           for (const leg of plan) {
             const summary = summarizeQuote(leg.quote, receiveDecimalsFallback);
             try { if (summary.receivedAmountFormatted) totalReceivedBaseUnits += parseUnits(summary.receivedAmountFormatted, receiveDecimalsFallback); } catch {}
+            totalReceiveUsd += summary.receiveAmountUsd ?? 0;
             totalFeeUsd += summary.totalFeeUsd ?? 0;
             maxEtaSeconds = Math.max(maxEtaSeconds, summary.etaSeconds ?? 0);
             if (summary.priceImpactPct != null) {
@@ -776,7 +778,7 @@ export function TokenTradeScreen({
             etaSeconds: maxEtaSeconds,
             receivedAmountFormatted,
             payAmountUsd: amtNum,
-            receiveAmountUsd: null,
+            receiveAmountUsd: totalReceiveUsd > 0 ? totalReceiveUsd : null,
             priceImpactPct: weightedInput > 0 ? weightedImpact / weightedInput : null,
           });
           setQuoteError(null);
@@ -971,7 +973,7 @@ export function TokenTradeScreen({
    * (fetchPayBalance above), but execution could only ever pull from
    * payOrigin's single chain — Relay's quote API takes one concrete
    * origin per call. A typed/Max'd amount that only added up by
-   * combining chains used to just block here (needsConsolidation's own
+   * combining chains used to just block here (needsMultiSourceRouting's own
    * comment called this "real, separate follow-up engineering" — never
    * actually built). This is that: moves the shortfall from every other
    * chain the wallet holds cash on into payOrigin's chain, largest-
@@ -1403,7 +1405,6 @@ export function TokenTradeScreen({
           <View style={styles.prMainRow}>
             {isBuySide ? (
               <View style={styles.assetSelector}>
-                <CashBadge chainKey={payOrigin.chainKey} size={16} />
                 <Text style={styles.assetSelectorText}>{paySymbol}</Text>
               </View>
             ) : (
@@ -1486,7 +1487,7 @@ export function TokenTradeScreen({
       {!isBuySide && tokenDecimalsError && <Text style={styles.errorText}>{tokenDecimalsError}</Text>}
       {!isBuySide && !tokenDecimalsError && tokenDecimals === null && amtNum > 0 && <Text style={styles.noteText}>Verifying this token…</Text>}
       {insufficientBalance && <Text style={styles.errorText}>{nearToken && isBuySide ? 'Not enough USDC on NEAR — move some there with Convert on Profile first.' : `Insufficient ${paySymbol} balance`}</Text>}
-      {needsConsolidation && (
+      {needsMultiSourceRouting && (
         <Text style={styles.noteText}>
           Your ${amtNum.toFixed(2)} buy will be split across available cash chains and routed directly to {CHAIN_LABEL[chainKey]} — no manual bridging or chain selection.
         </Text>
@@ -1920,7 +1921,7 @@ function makeStyles(colors: Colors) {
    * (fetchPayBalance above), but execution could only ever pull from
    * payOrigin's single chain — Relay's quote API takes one concrete
    * origin per call. A typed/Max'd amount that only added up by
-   * combining chains used to just block here (needsConsolidation's own
+   * combining chains used to just block here (needsMultiSourceRouting's own
    * comment called this "real, separate follow-up engineering" — never
    * actually built). This is that: moves the shortfall from every other
    * chain the wallet holds cash on into payOrigin's chain, largest-
@@ -2435,7 +2436,7 @@ function makeStyles(colors: Colors) {
       {!isBuySide && tokenDecimalsError && <Text style={styles.errorText}>{tokenDecimalsError}</Text>}
       {!isBuySide && !tokenDecimalsError && tokenDecimals === null && amtNum > 0 && <Text style={styles.noteText}>Verifying this token…</Text>}
       {insufficientBalance && <Text style={styles.errorText}>{nearToken && isBuySide ? 'Not enough USDC on NEAR — move some there with Convert on Profile first.' : `Insufficient ${paySymbol} balance`}</Text>}
-      {needsConsolidation && (
+      {needsMultiSourceRouting && (
         <Text style={styles.noteText}>
           Your ${amtNum.toFixed(2)} buy will be split across available cash chains and routed directly to {CHAIN_LABEL[chainKey]} — no manual bridging or chain selection.
         </Text>
