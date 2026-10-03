@@ -165,6 +165,13 @@ export type RelayQuote = {
     recipient?: string;
     swapImpact?: {percent?: string | number};
     totalImpact?: {percent?: string | number};
+    expandedPriceImpact?: {
+      execution?: {usd?: string | number};
+      swap?: {usd?: string | number};
+      relay?: {usd?: string | number};
+      app?: {usd?: string | number};
+      sponsored?: {usd?: string | number};
+    };
     slippageTolerance?: {total?: string | number};
   };
   steps?: RelayStep[];
