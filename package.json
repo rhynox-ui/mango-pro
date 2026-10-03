@@ -1,6 +1,6 @@
 {
   "name": "com.mangoprotocol.pro",
-  "version": "0.0.1",
+  "version": "1.9.2",
   "private": true,
   "scripts": {
     "android": "react-native run-android",
