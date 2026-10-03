@@ -517,6 +517,10 @@ export function TokenTradeScreen({
     setExecuteWarnings([]);
     setExecuteTxHashes([]);
     nearQuoteRef.current = null;
+    // A new quote request invalidates every previously built execution plan.
+    // Without this, a stale multi-source plan could remain tradeable while a
+    // newer amount/token quote is still loading.
+    multiSourcePlanRef.current = [];
     if (amtNum <= 0) {
       setQuote(null);
       rawQuoteRef.current = null;
@@ -920,9 +924,8 @@ export function TokenTradeScreen({
    * total moved still doesn't cover `neededUsd` — this function's own
    * caller never proceeds to the real Buy on an unverified balance.
    */
-  // Legacy intermediate-consolidation execution was intentionally removed:
-  // multi-source buys now route each contributing cash chain directly to
-  // the destination token chain, matching the unified-balance UX.
+  // Multi-source buys route each contributing cash chain directly to the
+  // destination token chain; there is no intermediate consolidation step.
   
   async function handleNearTrade() {
     const nearQuote = nearQuoteRef.current;
@@ -1008,7 +1011,6 @@ export function TokenTradeScreen({
       if (multiSourcePlan.length > 0) {
         const allHashes: string[] = [];
         const allWarnings: string[] = [];
-        let completedLegs = 0;
         try {
           for (const leg of multiSourcePlan) {
             setExecuteState('build');
@@ -1018,7 +1020,7 @@ export function TokenTradeScreen({
             });
             allHashes.push(...result.txHashes);
             allWarnings.push(...result.warnings);
-            completedLegs += 1;
+            
           }
           txHashes = allHashes;
           warnings = allWarnings;
@@ -1462,8 +1464,8 @@ export function TokenTradeScreen({
   );
 }
 
-// Called only from the isExecuting branch (executeState there is always
-// 'consolidating' or an ExecuteStep in practice), but `isExecuting` is a
+// Called only from the isExecuting branch (executeState is an ExecuteStep
+// in practice), but `isExecuting` is a
 // plain boolean, so TS can't narrow `executeState`'s own union type at
 // that call site — accepts the full ExecuteState shape here instead of
 // forcing a cast at every call.
