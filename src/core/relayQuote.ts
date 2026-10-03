@@ -182,7 +182,7 @@ const HIGH_IMPACT_REQUOTE_THRESHOLD_PCT = 2;
 
 function rawQuoteOutputAmount(quote: RelayQuote): bigint | null {
   const raw = quote?.details?.currencyOut?.amount;
-  if (typeof raw !== 'string' || !/^\\d+$/.test(raw)) return null;
+  if (typeof raw !== 'string' || !/^\d+$/.test(raw)) return null;
   try {
     return BigInt(raw);
   } catch {
