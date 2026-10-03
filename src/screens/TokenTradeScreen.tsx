@@ -1136,8 +1136,12 @@ export function TokenTradeScreen({
           warnings = allWarnings;
           receivedAmountFormatted = quote?.receivedAmountFormatted ?? null;
         } catch (err) {
-          const message = err instanceof TransactionIntentError ? err.message : describeTradeError(err).message;
-          throw new Error('Direct multi-chain buy partially completed after ' + completedLegs + ' of ' + multiSourcePlan.length + ' source legs: ' + message);
+          // Preserve already-broadcast hashes so the outer error handler can
+          // record a genuinely partial multi-source buy in History.
+          if (allHashes.length > 0 && err && typeof err === 'object') {
+            (err as Record<string, unknown>)['mangoPartialTxHashes'] = allHashes;
+          }
+          throw err;
         }
       } else if (quoteToExecute) {
         const quoteParamsForRetry = lastQuoteParamsRef.current;
@@ -1525,7 +1529,7 @@ export function TokenTradeScreen({
       {insufficientBalance && <Text style={styles.errorText}>{nearToken && isBuySide ? 'Not enough USDC on NEAR — move some there with Convert on Profile first.' : `Insufficient ${paySymbol} balance`}</Text>}
       {needsConsolidation && (
         <Text style={styles.noteText}>
-          Only ${payOriginChainBalance.toFixed(2)} of this ${amtNum.toFixed(2)} is on {CHAIN_LABEL[payOrigin.chainKey]} — the rest will be moved in from your other chains automatically before this buy executes.
+          Your $${amtNum.toFixed(2)}.toFixed(2) buy will be split across available cash chains and routed directly to {CHAIN_LABEL[chainKey]} — no manual bridging or chain selection.
         </Text>
       )}
       <View style={styles.feeRow}>
