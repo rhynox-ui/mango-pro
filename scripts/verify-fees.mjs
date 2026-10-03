@@ -31,6 +31,15 @@ console.log('ok', ++checks, '- DEV_FEE_WALLET_NEAR is the NEAR fee account the s
 assert.equal(fees.DEV_FEE_PCT, 0.005);
 console.log('ok', ++checks, '- DEV_FEE_PCT is 0.5%, matching the site/mobile (not the bot\'s once-stale 1%)');
 
+assert.equal(fees.isFeeExemptWallet(fees.DEV_FEE_WALLET), true);
+console.log('ok', ++checks, '- the EVM owner/protocol wallet is fee-exempt');
+
+assert.equal(fees.isFeeExemptWallet(fees.DEV_FEE_WALLET_SOLANA), true);
+console.log('ok', ++checks, '- the Solana owner/protocol wallet is fee-exempt');
+
+assert.equal(fees.isFeeExemptWallet('0x0000000000000000000000000000000000000001'), false);
+console.log('ok', ++checks, '- arbitrary wallets are not fee-exempt');
+
 assert.equal(fees.DEV_FEE_MAX_USD, 50);
 console.log('ok', ++checks, '- DEV_FEE_MAX_USD caps the dollar fee at $50 on large trades');
 
