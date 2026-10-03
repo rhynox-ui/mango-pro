@@ -444,8 +444,6 @@ export function TokenTradeScreen({
   // source -> destination legs instead of first consolidating everything
   // into payOrigin. `needsConsolidation` is retained as a local name to
   // minimize churn; it means "this buy needs multiple cash sources."
-  const payOriginResult = isBuySide ? cashPortfolio?.results.find(r => r.chainKey === payOrigin.chainKey) : undefined;
-  const payOriginChainBalance = payOriginResult?.status === 'ok' ? spendableCash(payOriginResult.chainKey, payOriginResult.balance) : 0;
   // Build the execution plan whenever the aggregate cash portfolio is
   // available, even if payOrigin alone can cover the trade. A unified-balance
   // router should compare the available origins rather than assuming the
