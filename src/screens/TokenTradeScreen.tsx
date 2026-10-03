@@ -446,7 +446,11 @@ export function TokenTradeScreen({
   // minimize churn; it means "this buy needs multiple cash sources."
   const payOriginResult = isBuySide ? cashPortfolio?.results.find(r => r.chainKey === payOrigin.chainKey) : undefined;
   const payOriginChainBalance = payOriginResult?.status === 'ok' ? spendableCash(payOriginResult.chainKey, payOriginResult.balance) : 0;
-  const needsConsolidation = !nearToken && isBuySide && amtNum > 0 && !insufficientBalance && amtNum > payOriginChainBalance;
+  // Build the execution plan whenever the aggregate cash portfolio is
+  // available, even if payOrigin alone can cover the trade. A unified-balance
+  // router should compare the available origins rather than assuming the
+  // largest balance is automatically the best route.
+  const needsConsolidation = !nearToken && isBuySide && amtNum > 0 && !insufficientBalance && cashPortfolio !== null;
   // A resolved balance of 0 is real (an empty wallet) and looks
   // identical to a null balance in `balance !== null` checks — this
   // specifically catches the OTHER case, where the fetch itself failed
