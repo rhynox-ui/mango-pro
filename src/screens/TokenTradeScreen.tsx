@@ -922,89 +922,10 @@ export function TokenTradeScreen({
    * total moved still doesn't cover `neededUsd` — this function's own
    * caller never proceeds to the real Buy on an unverified balance.
    */
-  async function consolidateIntoPayOrigin(neededUsd: number): Promise<void> {
-    if (!session) throw new Error('Unlock your wallet first.');
-    if (!cashPortfolio) throw new Error("Couldn't read your cash balances — try again.");
-
-    const contributors = CASH_SUPPORTED_CHAINS.filter(c => c !== payOrigin.chainKey)
-      .map(chainKey => {
-        const result = cashPortfolio.results.find(r => r.chainKey === chainKey);
-        return {chainKey, balance: result?.status === 'ok' ? spendableCash(chainKey, result.balance) : 0};
-      })
-      .filter(c => c.balance > 0)
-      .sort((a, b) => b.balance - a.balance);
-
-    let remaining = neededUsd;
-    const movedFrom: string[] = [];
-
-    for (const contributor of contributors) {
-      if (remaining <= 0) break;
-      const leg = Math.min(remaining, contributor.balance);
-      // Same nickel dust floor this codebase already applies to
-      // fallback-fee sweeps — a sub-$0.05 leg would spend more on gas
-      // than it consolidates.
-      if (leg < 0.05) continue;
-
-      const fromSymbol = CASH_ASSET_BY_CHAIN[contributor.chainKey] ?? 'USDC';
-      const toSymbol = CASH_ASSET_BY_CHAIN[payOrigin.chainKey] ?? 'USDC';
-      const payDecimals = assetDecimalsForChain(contributor.chainKey, fromSymbol);
-      if (payDecimals == null) continue;
-
-      const amountBaseUnits = parseUnits(leg.toFixed(payDecimals), payDecimals).toString();
-      const userAddress = contributor.chainKey === 'solana' ? session.solana.address : session.evm.address;
-      const recipientAddress = payOrigin.chainKey === 'solana' ? session.solana.address : session.evm.address;
-
-      const legQuote = await getRelayQuote({
-        fromChainKey: contributor.chainKey,
-        toChainKey: payOrigin.chainKey,
-        originCurrency: currencyAddress(contributor.chainKey, fromSymbol),
-        destinationCurrency: currencyAddress(payOrigin.chainKey, toSymbol),
-        amountBaseUnits,
-        userAddress,
-        recipientAddress,
-        originAmountUsd: leg,
-        waiveAppFee: true,
-      });
-      const legResult = await executeRelayQuote(legQuote, session, () => {}, {useGaslessTrading: gaslessTradingEnabled});
-      // Real gap this closes: a leg that lands here is done — real
-      // funds already moved on-chain — regardless of whether a LATER
-      // leg in this same loop then fails. Recording it the moment it
-      // succeeds (same as ConvertCashSheet.tsx's own addTxHistoryEntry
-      // call for a user-initiated Convert) means its real hash survives
-      // in History even if the app crashes or closes before this
-      // function returns, rather than living only in the `movedFrom`
-      // string built below — human-readable, but never durably stored,
-      // so a partial failure's own successful legs would otherwise be
-      // unrecoverable from this app's own record of what happened.
-      addTxHistoryEntry({
-        status: 'success',
-        chainKey: payOrigin.chainKey,
-        chainLabel: CHAIN_LABEL[payOrigin.chainKey],
-        isBuySide: true,
-        kind: 'convert',
-        paySymbol: fromSymbol,
-        receiveSymbol: toSymbol,
-        payAmount: leg.toFixed(2),
-        receivedAmountFormatted: null,
-        hashes: legResult.txHashes,
-        fromAddress: userAddress,
-      });
-      movedFrom.push(`$${leg.toFixed(2)} from ${CHAIN_LABEL[contributor.chainKey]}`);
-      remaining -= leg;
-    }
-
-    if (remaining > 0.01) {
-      throw new Error(
-        movedFrom.length > 0
-          ? `Moved ${movedFrom.join(', ')}, but that still leaves $${remaining.toFixed(2)} short — try again once your other balances update.`
-          : "Couldn't find enough spare balance on your other chains to cover this trade.",
-      );
-    }
-
-    const freshPortfolio = await fetchCashPortfolio(session);
-    setCashPortfolio(freshPortfolio);
-  }
-
+  // Legacy intermediate-consolidation execution was intentionally removed:
+  // multi-source buys now route each contributing cash chain directly to
+  // the destination token chain, matching the unified-balance UX.
+  
   async function handleNearTrade() {
     const nearQuote = nearQuoteRef.current;
     if (!nearQuote || !session?.near) return;
