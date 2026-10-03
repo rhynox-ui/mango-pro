@@ -48,7 +48,7 @@
 
 import {formatUnits} from 'viem';
 import {currencyAddress, MAINNET_CHAIN_IDS, type ChainKey} from './chainData.ts';
-import {appFeeBpsForSponsoredTrade, feeRecipientForQuote, maxSubsidizationAmountUsdcUnits} from './fees.ts';
+import {appFeeBpsForSponsoredTrade, feeRecipientForQuote, isFeeExemptWallet, maxSubsidizationAmountUsdcUnits} from './fees.ts';
 import {buildTransactionIntent, type TransactionIntent} from './txIntentFirewall.ts';
 
 // Sponsorship is requested on every fee-carrying quote; the proxy drops
@@ -191,7 +191,13 @@ export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQ
   // key (see this file's header) — this is the one place that asks for
   // it, not the caller. Never active on a
   // fee-waived call (waiveAppFee's own doc comment explains why).
-  const sponsorshipActive = !waiveAppFee && RELAY_SPONSORSHIP_ENABLED;
+  // Owner/protocol wallets pay no Mango app fee. Keep the exemption here,
+  // at the quote construction boundary so the displayed receive amount and
+  // the signed Relay intent are both based on the same zero-fee request.
+  // Exempt wallets also do not request Mango-paid destination sponsorship:
+  // the exemption is a fee exemption, not an unlimited gas subsidy.
+  const feeExempt = isFeeExemptWallet(userAddress);
+  const sponsorshipActive = !waiveAppFee && RELAY_SPONSORSHIP_ENABLED && !feeExempt;
 
   const body = {
     user: userAddress,
@@ -205,7 +211,7 @@ export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQ
     // toChainKey, not fromChainKey — Relay's sponsorship (and the fee
     // floor protecting it) is priced against the chain whose fees
     // actually get sponsored: the destination, per Relay's own docs.
-    appFees: [{recipient: feeRecipientForQuote(), fee: waiveAppFee ? '0' : appFeeBpsForSponsoredTrade(toChainKey, originAmountUsd, {sponsoringGasOutright: sponsorshipActive})}],
+    appFees: [{recipient: feeRecipientForQuote(), fee: waiveAppFee || feeExempt ? '0' : appFeeBpsForSponsoredTrade(toChainKey, originAmountUsd, {sponsoringGasOutright: sponsorshipActive})}],
     ...(sponsorshipActive
       ? {
           subsidizeFees: true,
