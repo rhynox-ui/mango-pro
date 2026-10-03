@@ -1,11 +1,12 @@
 name: Dependency audit
 
 # Advisory check for dependencies that ship in the app.
-# PRs get an immediate check; main is checked by the scheduled weekly run.
-# Keeping the audit off main-push events avoids paying for the same audit
-# again immediately after a pull request has already been checked.
+# PRs and every main push get an immediate check; the weekly run remains
+# as a backstop for dependency drift.
 
 on:
+  push:
+    branches: [main]
   pull_request:
   schedule:
     - cron: '17 6 * * 1' # Mondays 06:17 UTC
