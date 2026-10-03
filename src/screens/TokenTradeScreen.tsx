@@ -1042,6 +1042,7 @@ export function TokenTradeScreen({
         txHashes = result.txHashes;
         warnings = result.warnings;
         receivedAmountFormatted = quote?.receivedAmountFormatted ?? null;
+      } else {
         // Fallback path re-quotes fresh (tryFallbackProviders runs its
         // own quoteAllProviders internally) rather than reusing the
         // preview amount — same as the Relay path only ever executes the
