@@ -1004,37 +1004,6 @@ export function TokenTradeScreen({
     const fromAddress = solana ? session.solana.address : session.evm.address;
     // Multi-source buys execute each direct source -> destination quote below.
     try {
-        await consolidateIntoPayOrigin(amtNum - payOriginChainBalance);
-      } catch (err) {
-        setExecuteError(err instanceof Error ? err.message : 'Could not consolidate your balance across chains.');
-        setExecuteState('error');
-        return;
-      }
-      // Real gap this closes: consolidation is itself real Relay
-      // execution across however many other chains hold spare balance —
-      // that can easily take real wall-clock seconds per leg. The Buy
-      // quote in rawQuoteRef was obtained BEFORE any of that ran, so by
-      // the time consolidation finishes it can have crossed
-      // executeRelayQuote's own RELAY_QUOTE_MAX_AGE_MS (2 minutes).
-      // That firewall already fails closed on a stale quote — it would
-      // never sign one — but for a multi-leg consolidation this is a
-      // real, avoidable failure mode, not just a theoretical one: the
-      // user did everything right and consolidation itself succeeded,
-      // only to have the Buy refused for staleness a moment later.
-      // Re-quote here with the exact same params instead of waiting to
-      // find out at the firewall.
-      if (quoteToExecute && lastQuoteParamsRef.current) {
-        try {
-          quoteToExecute = await getRelayQuote(lastQuoteParamsRef.current);
-          rawQuoteRef.current = quoteToExecute;
-        } catch (err) {
-          setExecuteError(err instanceof Error ? err.message : 'Your balance was moved into place, but getting a fresh quote for the buy failed — try again.');
-          setExecuteState('error');
-          return;
-        }
-      }
-    }
-    try {
       let txHashes: string[];
       let warnings: string[];
       let receivedAmountFormatted: string | null;
