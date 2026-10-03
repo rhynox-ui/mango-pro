@@ -256,9 +256,7 @@ export function TokenTradeScreen({
   // re-executes the exact quote it locked in rather than a display value.
   const fallbackParamsRef = useRef<FallbackRouteParams | null>(null);
 
-  // 'consolidating' is a purely local UI phase, not one of
-  // executeRelayQuote's own steps — see consolidateIntoPayOrigin below.
-  type ExecuteState = 'idle' | 'consolidating' | ExecuteStep | 'success' | 'error';
+  type ExecuteState = 'idle' | ExecuteStep | 'success' | 'error';
   const [executeState, setExecuteState] = useState<ExecuteState>('idle');
   const [executeError, setExecuteError] = useState<string | null>(null);
   const [executeWarnings, setExecuteWarnings] = useState<string[]>([]);
@@ -1471,8 +1469,6 @@ export function TokenTradeScreen({
 // forcing a cast at every call.
 function executeStatusLabel(state: 'idle' | 'consolidating' | ExecuteStep | 'success' | 'error'): string {
   switch (state) {
-    case 'consolidating':
-      return 'Moving cash…';
     case 'build':
       return 'Preparing…';
     case 'signing':
