@@ -1529,7 +1529,7 @@ export function TokenTradeScreen({
       {insufficientBalance && <Text style={styles.errorText}>{nearToken && isBuySide ? 'Not enough USDC on NEAR — move some there with Convert on Profile first.' : `Insufficient ${paySymbol} balance`}</Text>}
       {needsConsolidation && (
         <Text style={styles.noteText}>
-          Your $${amtNum.toFixed(2)}.toFixed(2) buy will be split across available cash chains and routed directly to {CHAIN_LABEL[chainKey]} — no manual bridging or chain selection.
+          Your ${amtNum.toFixed(2)} buy will be split across available cash chains and routed directly to {CHAIN_LABEL[chainKey]} — no manual bridging or chain selection.
         </Text>
       )}
       <View style={styles.feeRow}>
