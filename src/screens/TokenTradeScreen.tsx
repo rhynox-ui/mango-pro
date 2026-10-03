@@ -1111,7 +1111,19 @@ export function TokenTradeScreen({
           }
           txHashes = allHashes;
           warnings = allWarnings;
-          receivedAmountFormatted = quote?.receivedAmountFormatted ?? null;
+          // Multi-source execution can complete several independent Relay
+          // quotes, so the final receive amount must come from the executed
+          // plan, not the stale single-quote React state. All legs target
+          // the same token/chain, so their raw output amounts can be summed
+          // exactly before formatting.
+          const totalReceivedRaw = multiSourcePlan.reduce((sum, leg) => {
+            const raw = leg.quote?.details?.currencyOut?.amount;
+            return sum + (typeof raw === 'string' && /^\\d+$/.test(raw) ? BigInt(raw) : 0n);
+          }, 0n);
+          const outputDecimals = multiSourcePlan[0]?.quote?.details?.currencyOut?.currency?.decimals ?? 18;
+          receivedAmountFormatted = totalReceivedRaw > 0n
+            ? formatUnits(totalReceivedRaw, outputDecimals)
+            : null;
         } catch (err) {
           // Preserve hashes from completed legs AND any transactions already
           // broadcast by the current leg before it failed. executeRelayQuote()
