@@ -737,7 +737,13 @@ export function TokenTradeScreen({
 
           if (remainingUsd > 0.01) {
             throw new Error(
-              'Only 
+              'Only $' + (amtNum - remainingUsd).toFixed(2) +
+              ' of this buy has a safe direct route to ' + CHAIN_LABEL[chainKey] +
+              '; try a smaller amount or wait for another route.',
+            );
+          }
+          return plan;
+        };
 
         buildPlan().then(plan => {
           if (requestId !== quoteRequestIdRef.current) return;
