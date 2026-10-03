@@ -51,6 +51,21 @@ function getAsyncStorage() {
 // Solana endpoints, both real infra providers already relied on
 // elsewhere in the RPC-aggregator ecosystem, not first-party but not a
 // fly-by-night host either.
+const MANGO_HELIUS_RPC_URL = 'https://mangoprotocol.site/api/v1/pro/helius-rpc';
+
+async function heliusRpc<T>(method: string, params: unknown[]): Promise<T> {
+  const response = await fetch(MANGO_HELIUS_RPC_URL, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({jsonrpc: '2.0', id: Date.now(), method, params}),
+  });
+  if (!response.ok) throw new Error('Mango Helius proxy unavailable');
+  const payload = await response.json() as {result?: T; error?: {message?: string}};
+  if (payload.error) throw new Error(payload.error.message ?? 'Helius RPC error');
+  if (payload.result === undefined) throw new Error('Helius RPC returned no result');
+  return payload.result;
+}
+
 const SOLANA_RPC_ENDPOINTS = [
   'https://rpc.solanatracker.io/public',
   'https://solana-rpc.publicnode.com',
@@ -139,6 +154,38 @@ export async function fetchWalletSplTokenBalance(mintAddress: string, decimals: 
     if (cached !== null) return cached;
   }
   let lastError: unknown;
+  try {
+    const [{TOKEN_2022_PROGRAM_ID}] = await Promise.all([import('@solana/spl-token')]);
+    // Standard RPC supports a mint filter; this keeps the Helius path scoped
+    // to the requested asset instead of summing every SPL token in the wallet.
+    const mintResult = await heliusRpc<{value?: Array<{account?: {data?: {parsed?: {info?: {tokenAmount?: {uiAmount?: number | null}}}}}}>}>(
+      'getTokenAccountsByOwner',
+      [ownerAddress, {mint: mintAddress}, {encoding: 'jsonParsed', commitment: 'confirmed'}],
+    );
+    const mintAccounts = mintResult.value ?? [];
+    if (mintAccounts.length > 0) {
+      const balance = mintAccounts.reduce((sum, item) => sum + (Number(item.account?.data?.parsed?.info?.tokenAmount?.uiAmount ?? 0) || 0), 0);
+      setCached(key, balance);
+      return balance;
+    }
+    // Token-2022 fallback: ask for Token-2022 accounts and filter the parsed
+    // mint locally because the RPC filter accepts either mint or programId,
+    // not both in the same request.
+    const token2022Result = await heliusRpc<{value?: Array<{account?: {data?: {parsed?: {info?: {mint?: string; tokenAmount?: {uiAmount?: number | null}}}}}}>}>(
+      'getTokenAccountsByOwner',
+      [ownerAddress, {programId: TOKEN_2022_PROGRAM_ID.toBase58()}, {encoding: 'jsonParsed', commitment: 'confirmed'}],
+    );
+    const token2022Accounts = (token2022Result.value ?? []).filter(item => item.account?.data?.parsed?.info?.mint === mintAddress);
+    const balance = token2022Accounts.reduce((sum, item) => sum + (Number(item.account?.data?.parsed?.info?.tokenAmount?.uiAmount ?? 0) || 0), 0);
+    if (token2022Accounts.length > 0) {
+      setCached(key, balance);
+      return balance;
+    }
+    setCached(key, 0);
+    return 0;
+  } catch (err) {
+    lastError = err;
+  }
   for (const url of SOLANA_RPC_ENDPOINTS) {
     try {
       const [{Connection, PublicKey}, {getAssociatedTokenAddress, getAccount, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID}] = await Promise.all([import('@solana/web3.js'), import('@solana/spl-token')]);
@@ -179,6 +226,16 @@ export async function fetchWalletSolanaBalance(address: string, {forceFresh = fa
     if (cached !== null) return cached;
   }
   let lastError: unknown;
+  try {
+    const result = await heliusRpc<{value?: number}>('getBalance', [address, {commitment: 'confirmed'}]);
+    if (typeof result.value === 'number') {
+      const balance = result.value / 1e9;
+      setCached(key, balance);
+      return balance;
+    }
+  } catch (err) {
+    lastError = err;
+  }
   for (const url of SOLANA_RPC_ENDPOINTS) {
     try {
       const [{Connection, PublicKey}] = await Promise.all([import('@solana/web3.js')]);
@@ -221,6 +278,10 @@ export async function estimateEvmNativeFeeReserve(chainKey: ChainKey): Promise<n
 /** Same reserve math as mango-mobile's own sendTransaction.js estimateSolanaMaxReserveSol — live rent-exemption minimum, falling back to its documented current on-chain value if every RPC endpoint fails. */
 export async function estimateSolanaMaxReserveSol(): Promise<number> {
   let rentLamports = SOLANA_RENT_EXEMPT_MINIMUM_LAMPORTS;
+  try {
+    const result = await heliusRpc<number>('getMinimumBalanceForRentExemption', [0, {commitment: 'confirmed'}]);
+    if (Number.isFinite(result) && result > 0) rentLamports = result;
+  } catch {}
   for (const url of SOLANA_RPC_ENDPOINTS) {
     try {
       const {Connection} = await import('@solana/web3.js');

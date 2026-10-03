@@ -268,17 +268,19 @@ export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQ
   }
   let quote = (await res.json()) as RelayQuote;
 
-  // Relay is already a meta-aggregator, so do not add another router or
-  // alter normal quotes. The one safe optimization here is a bounded
-  // second quote only when Relay itself reports meaningful swap impact:
-  // a thin/fast-moving pool can produce a materially better solver result
-  // a moment later. We keep the first quote if the second is not strictly
-  // better by exact-input output. Cross-chain routes are left untouched.
+  // Relay already runs a competitive filler market, so do not add another
+  // router or alter normal quotes. The one safe optimization here is a
+  // bounded second quote when Relay itself reports meaningful swap impact:
+  // a thin/fast-moving market or a different available filler can produce
+  // a materially better result a moment later. This applies to BOTH
+  // same-chain and cross-chain routes; the second request is the exact same
+  // sponsored/app-fee request, so sponsorship behavior is unchanged. We keep
+  // the first quote if the second is not strictly better by exact-input
+  // output, and we never turn a valid first quote into a failure.
   const initialImpact = Number(quote?.details?.swapImpact?.percent ?? quote?.details?.totalImpact?.percent);
   if (
-    fromChainKey === toChainKey &&
     Number.isFinite(initialImpact) &&
-    initialImpact > HIGH_IMPACT_REQUOTE_THRESHOLD_PCT
+    Math.abs(initialImpact) > HIGH_IMPACT_REQUOTE_THRESHOLD_PCT
   ) {
     try {
       const retry = await postRelayQuote(body);
