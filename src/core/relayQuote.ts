@@ -178,6 +178,24 @@ export function intentForQuote(quote: RelayQuote): {intent: TransactionIntent; q
   return quoteIntents.get(quote);
 }
 
+const HIGH_IMPACT_REQUOTE_THRESHOLD_PCT = 2;
+
+function rawQuoteOutputAmount(quote: RelayQuote): bigint | null {
+  const raw = quote?.details?.currencyOut?.amount;
+  if (typeof raw !== 'string' || !/^\\d+$/.test(raw)) return null;
+  try {
+    return BigInt(raw);
+  } catch {
+    return null;
+  }
+}
+
+function isBetterExactInputQuote(candidate: RelayQuote, current: RelayQuote): boolean {
+  const candidateOut = rawQuoteOutputAmount(candidate);
+  const currentOut = rawQuoteOutputAmount(current);
+  return candidateOut !== null && currentOut !== null && candidateOut > currentOut;
+}
+
 export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQuote> {
   const {fromChainKey, toChainKey, fromAsset, toAsset, originCurrency, destinationCurrency, amountBaseUnits, userAddress, recipientAddress, originAmountUsd, slippageTolerance, waiveAppFee} = params;
 
@@ -248,7 +266,31 @@ export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQ
     const text = await res.text().catch(() => '');
     throw new Error(`Relay quote failed (${res.status}): ${text || res.statusText}`);
   }
-  const quote = (await res.json()) as RelayQuote;
+  let quote = (await res.json()) as RelayQuote;
+
+  // Relay is already a meta-aggregator, so do not add another router or
+  // alter normal quotes. The one safe optimization here is a bounded
+  // second quote only when Relay itself reports meaningful swap impact:
+  // a thin/fast-moving pool can produce a materially better solver result
+  // a moment later. We keep the first quote if the second is not strictly
+  // better by exact-input output. Cross-chain routes are left untouched.
+  const initialImpact = Number(quote?.details?.swapImpact?.percent ?? quote?.details?.totalImpact?.percent);
+  if (
+    fromChainKey === toChainKey &&
+    Number.isFinite(initialImpact) &&
+    initialImpact > HIGH_IMPACT_REQUOTE_THRESHOLD_PCT
+  ) {
+    try {
+      const retry = await postRelayQuote(body);
+      if (retry.ok) {
+        const candidate = (await retry.json()) as RelayQuote;
+        if (isBetterExactInputQuote(candidate, quote)) quote = candidate;
+      }
+    } catch {
+      // Quote optimization is strictly best-effort. Never turn a valid
+      // first quote into a failure because the second request timed out.
+    }
+  }
 
   // Built from `body` — what was actually asked for — never from the
   // response; reading intent back out of the answer would make the
