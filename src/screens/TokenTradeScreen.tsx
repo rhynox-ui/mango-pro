@@ -1484,6 +1484,11 @@ export function TokenTradeScreen({
                 ))}
             </View>
           )}
+          {isBuySide && cashPortfolio && !cashPortfolio.complete && (
+            <Text style={styles.balanceTextSmall}>
+              Some chain balances couldn’t be verified.
+            </Text>
+          )}
         </View>
         <View style={[styles.card, styles.payReceiveCard]}>
           <Text style={styles.cardLabel}>You receive</Text>
