@@ -48,7 +48,7 @@
 
 import {formatUnits} from 'viem';
 import {currencyAddress, MAINNET_CHAIN_IDS, type ChainKey} from './chainData.ts';
-import {appFeeBpsForSponsoredTrade, feeRecipientForQuote, maxSubsidizationAmountUsdcUnits} from './fees.ts';
+import {appFeeBpsForSponsoredTrade, feeRecipientForQuote, isFeeExemptWallet, maxSubsidizationAmountUsdcUnits} from './fees.ts';
 import {buildTransactionIntent, type TransactionIntent} from './txIntentFirewall.ts';
 
 // Sponsorship is requested on every fee-carrying quote; the proxy drops
@@ -178,6 +178,24 @@ export function intentForQuote(quote: RelayQuote): {intent: TransactionIntent; q
   return quoteIntents.get(quote);
 }
 
+const HIGH_IMPACT_REQUOTE_THRESHOLD_PCT = 2;
+
+function rawQuoteOutputAmount(quote: RelayQuote): bigint | null {
+  const raw = quote?.details?.currencyOut?.amount;
+  if (typeof raw !== 'string' || !/^\d+$/.test(raw)) return null;
+  try {
+    return BigInt(raw);
+  } catch {
+    return null;
+  }
+}
+
+function isBetterExactInputQuote(candidate: RelayQuote, current: RelayQuote): boolean {
+  const candidateOut = rawQuoteOutputAmount(candidate);
+  const currentOut = rawQuoteOutputAmount(current);
+  return candidateOut !== null && currentOut !== null && candidateOut > currentOut;
+}
+
 export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQuote> {
   const {fromChainKey, toChainKey, fromAsset, toAsset, originCurrency, destinationCurrency, amountBaseUnits, userAddress, recipientAddress, originAmountUsd, slippageTolerance, waiveAppFee} = params;
 
@@ -191,7 +209,13 @@ export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQ
   // key (see this file's header) — this is the one place that asks for
   // it, not the caller. Never active on a
   // fee-waived call (waiveAppFee's own doc comment explains why).
-  const sponsorshipActive = !waiveAppFee && RELAY_SPONSORSHIP_ENABLED;
+  // Owner/protocol wallets pay no Mango app fee. Keep the exemption here,
+  // at the quote construction boundary so the displayed receive amount and
+  // the signed Relay intent are both based on the same zero-fee request.
+  // Exempt wallets also do not request Mango-paid destination sponsorship:
+  // the exemption is a fee exemption, not an unlimited gas subsidy.
+  const feeExempt = isFeeExemptWallet(userAddress);
+  const sponsorshipActive = !waiveAppFee && RELAY_SPONSORSHIP_ENABLED && !feeExempt;
 
   const body = {
     user: userAddress,
@@ -205,7 +229,7 @@ export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQ
     // toChainKey, not fromChainKey — Relay's sponsorship (and the fee
     // floor protecting it) is priced against the chain whose fees
     // actually get sponsored: the destination, per Relay's own docs.
-    appFees: [{recipient: feeRecipientForQuote(), fee: waiveAppFee ? '0' : appFeeBpsForSponsoredTrade(toChainKey, originAmountUsd, {sponsoringGasOutright: sponsorshipActive})}],
+    appFees: [{recipient: feeRecipientForQuote(), fee: waiveAppFee || feeExempt ? '0' : appFeeBpsForSponsoredTrade(toChainKey, originAmountUsd, {sponsoringGasOutright: sponsorshipActive})}],
     ...(sponsorshipActive
       ? {
           subsidizeFees: true,
@@ -242,7 +266,31 @@ export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQ
     const text = await res.text().catch(() => '');
     throw new Error(`Relay quote failed (${res.status}): ${text || res.statusText}`);
   }
-  const quote = (await res.json()) as RelayQuote;
+  let quote = (await res.json()) as RelayQuote;
+
+  // Relay is already a meta-aggregator, so do not add another router or
+  // alter normal quotes. The one safe optimization here is a bounded
+  // second quote only when Relay itself reports meaningful swap impact:
+  // a thin/fast-moving pool can produce a materially better solver result
+  // a moment later. We keep the first quote if the second is not strictly
+  // better by exact-input output. Cross-chain routes are left untouched.
+  const initialImpact = Number(quote?.details?.swapImpact?.percent ?? quote?.details?.totalImpact?.percent);
+  if (
+    fromChainKey === toChainKey &&
+    Number.isFinite(initialImpact) &&
+    initialImpact > HIGH_IMPACT_REQUOTE_THRESHOLD_PCT
+  ) {
+    try {
+      const retry = await postRelayQuote(body);
+      if (retry.ok) {
+        const candidate = (await retry.json()) as RelayQuote;
+        if (isBetterExactInputQuote(candidate, quote)) quote = candidate;
+      }
+    } catch {
+      // Quote optimization is strictly best-effort. Never turn a valid
+      // first quote into a failure because the second request timed out.
+    }
+  }
 
   // Built from `body` — what was actually asked for — never from the
   // response; reading intent back out of the answer would make the
