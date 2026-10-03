@@ -1467,7 +1467,7 @@ export function TokenTradeScreen({
 // plain boolean, so TS can't narrow `executeState`'s own union type at
 // that call site — accepts the full ExecuteState shape here instead of
 // forcing a cast at every call.
-function executeStatusLabel(state: 'idle' | 'consolidating' | ExecuteStep | 'success' | 'error'): string {
+function executeStatusLabel(state: 'idle' | ExecuteStep | 'success' | 'error'): string {
   switch (state) {
     case 'build':
       return 'Preparing…';
