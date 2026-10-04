@@ -340,8 +340,10 @@ export function TokenTradeScreen({
     }
     const tokenChain = token.chainKey;
     const tokenChainKey: ChainKey | null =
-      tokenChain !== 'near' && CASH_SUPPORTED_CHAINS.includes(tokenChain) ? tokenChain : null;
-    const fallbackChain = tokenChainKey ?? CASH_SUPPORTED_CHAINS[0];
+      tokenChain !== 'near' && (CASH_SUPPORTED_CHAINS as readonly string[]).includes(tokenChain)
+        ? (tokenChain as ChainKey)
+        : null;
+    const fallbackChain: ChainKey = tokenChainKey ?? CASH_SUPPORTED_CHAINS[0];
 
     // Prefer same-chain cash whenever the destination chain has a usable
     // balance. Cross-chain Relay routes are a fallback: they have minimum
@@ -354,7 +356,10 @@ export function TokenTradeScreen({
     const destinationSpendable = destinationCash?.status === 'ok'
       ? spendableCash(tokenChainKey, destinationCash.balance)
       : 0;
-    const preferredChain: ChainKey = destinationSpendable > 0 ? tokenChainKey : (best ? best.chainKey : fallbackChain);
+    let preferredChain: ChainKey = best?.chainKey ?? fallbackChain;
+    if (destinationSpendable > 0 && tokenChainKey) {
+      preferredChain = tokenChainKey;
+    }
 
     setPayOrigin({chainKey: preferredChain});
   }, [token, cashPortfolio]);
@@ -467,7 +472,9 @@ export function TokenTradeScreen({
   // quality is compared instead of assuming the largest balance is best.
   const unifiedCashSources = cashPortfolio?.results.filter(r => r.status === 'ok' && spendableCash(r.chainKey, r.balance) > 0).length ?? 0;
   const routingTokenChain: ChainKey | null =
-    !nearToken && CASH_SUPPORTED_CHAINS.includes(token.chainKey) ? token.chainKey : null;
+    !nearToken && (CASH_SUPPORTED_CHAINS as readonly string[]).includes(token.chainKey)
+      ? (token.chainKey as ChainKey)
+      : null;
   const destinationSpendableForRouting = routingTokenChain
     ? spendableCash(
         routingTokenChain,
