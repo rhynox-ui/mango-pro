@@ -713,6 +713,8 @@ const needsUnifiedRouting =
                   recipientAddress: legRecipientAddress,
                   originAmountUsd: legUsd,
                   slippageTolerance: slippageBps ?? undefined,
+        originGasOverhead: gaslessTradingEnabled ? '80000' : undefined,
+                  originGasOverhead: gaslessTradingEnabled ? '80000' : undefined,
                 };
                 const legQuote = await getRelayQuote(legParams);
                 const summary = summarizeQuote(legQuote, tokenDecimals ?? 18);
@@ -863,6 +865,7 @@ const needsUnifiedRouting =
         recipientAddress,
         originAmountUsd,
         slippageTolerance: slippageBps ?? undefined,
+        originGasOverhead: gaslessTradingEnabled ? '80000' : undefined,
       };
       multiSourcePlanRef.current = [];
       getRelayQuote(quoteParams)
@@ -1010,7 +1013,7 @@ const needsUnifiedRouting =
         });
     }, QUOTE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [isBuySide, amount, amtNum, session, token, tokenDecimals, slippageBps, originAmountUsd, payOrigin, originIsSolana, solana, receiveAsset]);
+  }, [isBuySide, amount, amtNum, session, token, tokenDecimals, slippageBps, gaslessTradingEnabled, originAmountUsd, payOrigin, originIsSolana, solana, receiveAsset]);
 
   // Flipping side changes which balance the pay card is even reading
   // (native vs. the searched token) — any preset percentage of the OLD
