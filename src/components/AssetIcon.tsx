@@ -21,6 +21,11 @@ import {dexScreenerChainForChain} from '../core/dexScreener';
 const logoCache = new Map<string, string | null>();
 const logoInFlight = new Map<string, Promise<string | null>>();
 
+function logoCacheKey(chainKey: TradeChain, address: string): string {
+  // EVM addresses are case-insensitive; Solana base58 addresses are not.
+  return `${chainKey}:${chainKey === 'solana' ? address : address.toLowerCase()}`;
+}
+
 function trustWalletChain(chainKey: TradeChain): string | null {
   const map: Partial<Record<TradeChain, string>> = {
     ethereum: 'ethereum', base: 'base', bnb: 'smartchain', solana: 'solana',
@@ -31,7 +36,7 @@ function trustWalletChain(chainKey: TradeChain): string | null {
 }
 
 async function resolveTokenLogo(chainKey: TradeChain, address: string): Promise<string | null> {
-  const key = `${chainKey}:${address.toLowerCase()}`;
+  const key = logoCacheKey(chainKey, address);
   if (logoCache.has(key)) return logoCache.get(key) ?? null;
   const pending = logoInFlight.get(key);
   if (pending) return pending;
@@ -57,33 +62,53 @@ async function resolveTokenLogo(chainKey: TradeChain, address: string): Promise<
 
 export function AssetIcon({symbol, imageUrl, chainKey, address, size = 16}: {symbol: string; imageUrl?: string | null; chainKey?: TradeChain; address?: string; size?: number}) {
   const {colors} = useTheme();
-  const [failed, setFailed] = useState(false);
-  const [fetchedUrl, setFetchedUrl] = useState<string | null>(null);
+  const [sourceFailed, setSourceFailed] = useState(false);
+  const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
+  const [fallbackFailed, setFallbackFailed] = useState(false);
+
   useEffect(() => {
-    setFailed(false);
-    setFetchedUrl(null);
-    if (!imageUrl && chainKey && address) {
-      resolveTokenLogo(chainKey, address).then(setFetchedUrl).catch(() => setFetchedUrl(null));
+    setSourceFailed(false);
+    setFallbackUrl(null);
+    setFallbackFailed(false);
+    if (chainKey && address && !imageUrl) {
+      resolveTokenLogo(chainKey, address).then(setFallbackUrl).catch(() => setFallbackUrl(null));
     }
   }, [imageUrl, chainKey, address]);
-  const resolvedImageUrl = failed ? fetchedUrl : imageUrl || fetchedUrl;
+
   const s = StyleSheet.create({
     circle: {width: size, height: size, borderRadius: size / 2, backgroundColor: colors.pillBg, alignItems: 'center', justifyContent: 'center'},
     letter: {fontSize: size * 0.55, fontWeight: '700', color: colors.textPrimary},
     image: {width: size, height: size, borderRadius: size / 2},
   });
-  if (resolvedImageUrl && !failed) {
+
+  // Prefer the token's supplied logo. If it fails, switch to the address-
+  // resolved exact-chain fallback. A failed fallback is terminal for this
+  // render so a broken URL cannot cause an image/error loop.
+  const activeUrl = sourceFailed ? fallbackUrl : imageUrl || fallbackUrl;
+  const showingFallback = sourceFailed || !imageUrl;
+
+  if (activeUrl && !fallbackFailed) {
     return <Image
-      source={{uri: resolvedImageUrl}}
+      source={{uri: activeUrl}}
       style={s.image}
       onError={() => {
-        if (chainKey && address && !fetchedUrl) {
-          resolveTokenLogo(chainKey, address).then(setFetchedUrl).catch(() => {});
+        if (showingFallback) {
+          setFallbackFailed(true);
+        } else {
+          setSourceFailed(true);
+          if (chainKey && address) {
+            resolveTokenLogo(chainKey, address).then(url => {
+              setFallbackUrl(url);
+              if (!url) setFallbackFailed(true);
+            }).catch(() => setFallbackFailed(true));
+          } else {
+            setFallbackFailed(true);
+          }
         }
-        setFailed(true);
       }}
     />;
   }
+
   return (
     <View style={s.circle}>
       <Text style={s.letter}>{symbol.slice(0, 1).toUpperCase()}</Text>
