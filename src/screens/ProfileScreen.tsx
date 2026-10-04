@@ -932,68 +932,75 @@ export function ProfileScreen({
                 </View>
                 <Text style={styles.modalSubtitle}>Choose a network to deposit from.</Text>
 
-                {/* Real per-chain cash asset — USDC everywhere except
-                    Robinhood Chain, which has its own real stablecoin
-                    (USDG) instead; CASH_ASSET_BY_CHAIN is the one place
-                    that distinction lives, so this list never needs to
-                    special-case it. */}
-                {CASH_SUPPORTED_CHAINS.map(chainKey => (
+                <ScrollView
+                  style={styles.depositNetworkList}
+                  contentContainerStyle={styles.depositNetworkListContent}
+                  nestedScrollEnabled
+                  showsVerticalScrollIndicator
+                  bounces={false}>
+                  {/* Real per-chain cash asset — USDC everywhere except
+                      Robinhood Chain, which has its own real stablecoin
+                      (USDG) instead; CASH_ASSET_BY_CHAIN is the one place
+                      that distinction lives, so this list never needs to
+                      special-case it. */}
+                  {CASH_SUPPORTED_CHAINS.map(chainKey => (
+                    <TouchableOpacity
+                      key={chainKey}
+                      style={styles.networkRow}
+                      activeOpacity={0.7}
+                      onPress={() => {
+                        setDepositChain(chainKey);
+                        setDepositIsNativeGas(false);
+                        setDepositStep('address');
+                      }}>
+                      <View style={styles.networkRowLeft}>
+                        <NetworkIcon chainKey={chainKey} size={22} />
+                        <Text style={styles.networkRowText}>{CHAIN_LABEL[chainKey]}</Text>
+                      </View>
+                      <ChevronRightIcon color={colors.textMuted} size={16} />
+                    </TouchableOpacity>
+                  ))}
+
+                  {/* USDC on NEAR — the same row, for the wallet's own NEAR account. */}
+                  {NEAR_ENABLED && session?.near && (
+                    <TouchableOpacity
+                      style={styles.networkRow}
+                      activeOpacity={0.7}
+                      onPress={() => {
+                        setDepositChain('near');
+                        setDepositIsNativeGas(false);
+                        setDepositStep('address');
+                      }}>
+                      <View style={styles.networkRowLeft}>
+                        <NetworkIcon chainKey="near" size={22} />
+                        <Text style={styles.networkRowText}>{NEAR_LABEL}</Text>
+                      </View>
+                      <ChevronRightIcon color={colors.textMuted} size={16} />
+                    </TouchableOpacity>
+                  )}
+
+                  {/* Separate from the row above: this is Robinhood
+                      Chain's NATIVE ETH specifically, for paying gas on a
+                      trade there — a genuinely different real asset from
+                      the USDG row already in the list above, not a
+                      duplicate of it. Without this row a user would have
+                      no way to fund gas there directly at all. */}
+                  <Text style={styles.modalSectionLabel}>Native asset — for gas</Text>
                   <TouchableOpacity
-                    key={chainKey}
                     style={styles.networkRow}
                     activeOpacity={0.7}
                     onPress={() => {
-                      setDepositChain(chainKey);
-                      setDepositIsNativeGas(false);
+                      setDepositChain('robinhood');
+                      setDepositIsNativeGas(true);
                       setDepositStep('address');
                     }}>
                     <View style={styles.networkRowLeft}>
-                      <NetworkIcon chainKey={chainKey} size={22} />
-                      <Text style={styles.networkRowText}>{CHAIN_LABEL[chainKey]}</Text>
+                      <NetworkIcon chainKey="robinhood" size={22} />
+                      <Text style={styles.networkRowText}>{CHAIN_LABEL.robinhood} — ETH</Text>
                     </View>
                     <ChevronRightIcon color={colors.textMuted} size={16} />
                   </TouchableOpacity>
-                ))}
-
-                {/* USDC on NEAR — the same row, for the wallet's own NEAR account. */}
-                {NEAR_ENABLED && session?.near && (
-                  <TouchableOpacity
-                    style={styles.networkRow}
-                    activeOpacity={0.7}
-                    onPress={() => {
-                      setDepositChain('near');
-                      setDepositIsNativeGas(false);
-                      setDepositStep('address');
-                    }}>
-                    <View style={styles.networkRowLeft}>
-                      <NetworkIcon chainKey="near" size={22} />
-                      <Text style={styles.networkRowText}>{NEAR_LABEL}</Text>
-                    </View>
-                    <ChevronRightIcon color={colors.textMuted} size={16} />
-                  </TouchableOpacity>
-                )}
-
-                {/* Separate from the row above: this is Robinhood
-                    Chain's NATIVE ETH specifically, for paying gas on a
-                    trade there — a genuinely different real asset from
-                    the USDG row already in the list above, not a
-                    duplicate of it. Without this row a user would have
-                    no way to fund gas there directly at all. */}
-                <Text style={styles.modalSectionLabel}>Native asset — for gas</Text>
-                <TouchableOpacity
-                  style={styles.networkRow}
-                  activeOpacity={0.7}
-                  onPress={() => {
-                    setDepositChain('robinhood');
-                    setDepositIsNativeGas(true);
-                    setDepositStep('address');
-                  }}>
-                  <View style={styles.networkRowLeft}>
-                    <NetworkIcon chainKey="robinhood" size={22} />
-                    <Text style={styles.networkRowText}>{CHAIN_LABEL.robinhood} — ETH</Text>
-                  </View>
-                  <ChevronRightIcon color={colors.textMuted} size={16} />
-                </TouchableOpacity>
+                </ScrollView>
               </>
             )}
 
@@ -1543,6 +1550,8 @@ function makeStyles(colors: Colors) {
     modalWarning: {color: colors.danger, fontSize: 11.5, lineHeight: 16, marginTop: 10, fontWeight: '600'},
     withdrawDisabledReason: {color: colors.danger, fontSize: 12, lineHeight: 16, marginTop: 10},
     modalSubtitle: {color: colors.textSecondary, fontSize: 13, marginBottom: 16},
+    depositNetworkList: {maxHeight: 520},
+    depositNetworkListContent: {paddingBottom: 4},
     modalHeaderSpacer: {width: 20},
     reviewRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.divider},
     reviewRowLabel: {color: colors.textMuted, fontSize: 13, fontWeight: '600'},
