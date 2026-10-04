@@ -26,12 +26,10 @@ import {
   type Chain,
   type Hex,
 } from 'viem';
-import {signAuthorization} from 'viem/actions';
 import {privateKeyToAccount} from 'viem/accounts';
-import {getRelayQuote, type RelayQuote, type RelayTransactionStepItem} from '../core/relayQuote.ts';
+import {getRelayQuote, intentForQuote, type RelayQuote, type RelayTransactionStepItem} from '../core/relayQuote.ts';
+import type {ChainKey} from '../core/chainData.ts';
 import {assertQuoteSafeToSign} from '../core/txIntentFirewall.ts';
-import {buildTransactionIntent} from '../core/txIntentFirewall.ts';
-import {intentForQuote} from '../core/relayQuote.ts';
 import {transportFor} from '../core/chainRegistry.ts';
 
 const RELAY_EXECUTE_PROXY_URL = 'https://mangoprotocol.site/api/v1/pro/relay-execute';
@@ -129,13 +127,13 @@ async function postRelayExecute(body: Record<string, unknown>): Promise<RelayExe
   return parsed;
 }
 
-async function pollRelayStatus(requestId: string): Promise<void> {
+async function pollRelayStatus(requestId: string): Promise<string> {
   const started = Date.now();
   while (Date.now() - started < 10 * 60 * 1000) {
     const res = await fetch(`${RELAY_STATUS_URL}?requestId=${encodeURIComponent(requestId)}`);
     if (res.ok) {
       const body = await res.json() as {status?: string; message?: string};
-      if (body.status === 'success') return;
+      if (body.status === 'success') return (body as {txHashes?: string[]}).txHashes?.[0] || requestId;
       if (body.status === 'failure' || body.status === 'refund') {
         throw new Error(body.message || `Relay reported withdrawal status: ${body.status}.`);
       }
@@ -152,18 +150,19 @@ async function pollRelayStatus(requestId: string): Promise<void> {
  */
 export async function sendEvmCashAssetViaRelayGasless(params: {
   chain: Chain;
+  chainKey: ChainKey;
   tokenAddress: Address;
   fromAddress: Address;
   toAddress: Address;
   amountRaw: bigint;
   privateKey: Hex;
 }): Promise<{hash: string}> {
-  const {chain, tokenAddress, fromAddress, toAddress, amountRaw, privateKey} = params;
+  const {chain, chainKey, tokenAddress, fromAddress, toAddress, amountRaw, privateKey} = params;
   if (amountRaw <= 0n) throw new Error('Withdrawal amount must be greater than zero.');
 
   const quote = await getRelayQuote({
-    fromChainKey: chain.key as never,
-    toChainKey: chain.key as never,
+    fromChainKey: chainKey,
+    toChainKey: chainKey,
     originCurrency: tokenAddress,
     destinationCurrency: tokenAddress,
     amountBaseUnits: amountRaw.toString(),
@@ -299,6 +298,6 @@ export async function sendEvmCashAssetViaRelayGasless(params: {
     },
   });
 
-  await pollRelayStatus(execute.requestId!);
-  return {hash: execute.requestId!};
+  const hash = await pollRelayStatus(execute.requestId!);
+  return {hash};
 }
