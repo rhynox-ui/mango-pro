@@ -769,7 +769,7 @@ export function ProfileScreen({
       {positionTab === 'Open' && assetFilter !== 'Perps' ? (
         <View style={styles.closedTradesList}>
           {walletAssetsLoading && displayWalletAssets.length === 0 ? (
-            <View style={styles.emptyPositions}>
+            <View style={styles.emptyPositionsBox}>
               <ActivityIndicator size="small" color={colors.textSecondary} />
               <Text style={styles.emptyPositionsText}>Loading wallet assets…</Text>
             </View>
@@ -1404,6 +1404,9 @@ function makeStyles(colors: Colors) {
     assetFilterTextActive: {color: colors.ctaText},
 
     emptyPositions: {color: colors.textMuted, fontSize: 13, textAlign: 'center', marginTop: 28},
+    emptyPositionsBox: {alignItems: 'center', justifyContent: 'center', paddingVertical: 28, paddingHorizontal: 20},
+    emptyPositionsText: {color: colors.textMuted, fontSize: 13, textAlign: 'center', marginTop: 8},
+    emptyPositionsHint: {color: colors.textMuted, fontSize: 11.5, textAlign: 'center', marginTop: 6},
 
     closedTradesList: {paddingHorizontal: 16, marginTop: 14, gap: 2},
     closedTradeRow: {flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.divider},
