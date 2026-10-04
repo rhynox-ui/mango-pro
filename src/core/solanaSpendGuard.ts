@@ -105,20 +105,22 @@ export async function assertSolanaSpendWithinIntent(
     ownerAddress,
     intent,
     tokenProgramIds,
+    tokenAccountConnection,
     encodeBase58,
     overheadLamports = SOLANA_OVERHEAD_LAMPORTS,
     expectedOutputMint,
     expectedOutputMinimum = 0n,
     expectedOutputAccounts = [],
-  }: {owner: unknown; ownerAddress: string; intent: SolanaSpendIntent; tokenProgramIds: [unknown, unknown]; encodeBase58: (b: Uint8Array) => string; overheadLamports?: bigint; expectedOutputMint?: string; expectedOutputMinimum?: bigint; expectedOutputAccounts?: string[]},
+  }: {owner: unknown; ownerAddress: string; intent: SolanaSpendIntent; tokenProgramIds: [unknown, unknown]; tokenAccountConnection?: SpendGuardConnection; encodeBase58: (b: Uint8Array) => string; overheadLamports?: bigint; expectedOutputMint?: string; expectedOutputMinimum?: bigint; expectedOutputAccounts?: string[]},
 ): Promise<void> {
   const spendsSol = intent.spend === SOLANA_NATIVE_SPEND;
   const allowance = (mint: string): bigint =>
     (!spendsSol && eq(mint, intent.spend) ? intent.maxSpend : 0n) + (intent.extra ?? []).filter(e => eq(e.mint, mint)).reduce((s, e) => s + e.units, 0n);
 
+  const tokenReader = tokenAccountConnection ?? connection;
   const [classic, t22, preLamports] = await Promise.all([
-    connection.getParsedTokenAccountsByOwner(owner, {programId: tokenProgramIds[0]}),
-    connection.getParsedTokenAccountsByOwner(owner, {programId: tokenProgramIds[1]}),
+    tokenReader.getParsedTokenAccountsByOwner(owner, {programId: tokenProgramIds[0]}),
+    tokenReader.getParsedTokenAccountsByOwner(owner, {programId: tokenProgramIds[1]}),
     connection.getBalance(owner),
   ]);
   const held: Tracked[] = [];
@@ -205,7 +207,7 @@ export async function assertSolanaSpendWithinIntent(
 }
 
 /** The standard wiring: web3.js PublicKeys for the two token programs, bs58 for addresses. */
-export async function assertSolanaSpendWithinIntentWeb3(connection: SpendGuardConnection, transaction: unknown, ownerAddress: string, intent: SolanaSpendIntent): Promise<void> {
+export async function assertSolanaSpendWithinIntentWeb3(connection: SpendGuardConnection, transaction: unknown, ownerAddress: string, intent: SolanaSpendIntent, tokenAccountConnection?: SpendGuardConnection): Promise<void> {
   const [{PublicKey}, bs58Module] = await Promise.all([import('@solana/web3.js'), import('bs58')]);
   const bs58 = bs58Module.default;
   await assertSolanaSpendWithinIntent(connection, transaction, {
@@ -213,6 +215,7 @@ export async function assertSolanaSpendWithinIntentWeb3(connection: SpendGuardCo
     ownerAddress,
     intent,
     tokenProgramIds: [new PublicKey(TOKEN_PROGRAM), new PublicKey(TOKEN_2022_PROGRAM)],
+    tokenAccountConnection,
     encodeBase58: b => bs58.encode(b),
   });
 }
