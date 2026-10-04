@@ -539,6 +539,7 @@ async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secret
   const [{Connection, Keypair, PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction}, bs58Module] = await Promise.all([import('@solana/web3.js'), import('bs58')]);
   const bs58 = bs58Module.default;
   const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
+  const tokenAccountConnection = new Connection(SOLANA_TOKEN_ACCOUNT_READ_RPC_URL, 'confirmed');
   const keypair = Keypair.fromSecretKey(bs58.decode(secretKeyBase58));
 
   const instructions = (item.data?.instructions ?? []).map(
@@ -581,7 +582,7 @@ async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secret
   // case goes straight to Mango's sponsored path, which runs the same
   // check with the sponsor paying.
   try {
-    await assertSolanaSpendWithinIntentWeb3(connection, transaction, keypair.publicKey.toBase58(), spendIntent);
+    await assertSolanaSpendWithinIntentWeb3(connection, transaction, keypair.publicKey.toBase58(), spendIntent, tokenAccountConnection);
   } catch (guardErr) {
     if (!isInsufficientSolSimulation(guardErr)) throw guardErr;
     try {
