@@ -55,7 +55,6 @@ import {executeNearTrade, fetchNearTokenBalance, fetchNearTokenMeta, quoteNearTr
 import {getRelayQuote, summarizeQuote, type GetRelayQuoteParams, type QuoteSummary, type RelayQuote} from '../core/relayQuote';
 import {executeRelayQuote, getPartialTxHashes, type ExecuteStep} from '../core/executeRelayQuote';
 import {loadGaslessTradingEnabled} from '../settings/gaslessTradingPrefs';
-import {checkFallbackRoute, fetchLiveTokenPriceUsd, sweepFallbackFeeFromNativeBalance, sweepFallbackFeeFromSolanaBalance, tryFallbackProviders, type FallbackRouteParams} from '../core/fallbackDex';
 import {fetchWalletPrices} from '../core/walletPrices';
 import {TransactionIntentError} from '../core/txIntentFirewall';
 import {describeTradeError} from '../core/tradeErrors';
@@ -252,7 +251,6 @@ export function TokenTradeScreen({
   // `quote` is non-null). handleTrade below re-quotes fresh against these
   // params rather than reusing the preview amount, same as the Relay path
   // re-executes the exact quote it locked in rather than a display value.
-  const fallbackParamsRef = useRef<FallbackRouteParams | null>(null);
 
   type ExecuteState = 'idle' | ExecuteStep | 'success' | 'error';
   const [executeState, setExecuteState] = useState<ExecuteState>('idle');
@@ -571,14 +569,12 @@ export function TokenTradeScreen({
     if (amtNum <= 0) {
       setQuote(null);
       rawQuoteRef.current = null;
-      fallbackParamsRef.current = null;
       setQuoteLoading(false);
       return;
     }
     if (!session) {
       setQuote(null);
       rawQuoteRef.current = null;
-      fallbackParamsRef.current = null;
       setQuoteLoading(false);
       return;
     }
@@ -587,7 +583,6 @@ export function TokenTradeScreen({
       // NEAR: Intear's routes over every NEAR DEX, each checked by the
       // site's own route checks (nearTrade.ts) — never Relay.
       rawQuoteRef.current = null;
-      fallbackParamsRef.current = null;
       const nearAccount = session.near;
       const decimals = tokenDecimals;
       if (!nearAccount || decimals === null) {
@@ -649,7 +644,6 @@ export function TokenTradeScreen({
     if (payDecimals === undefined || payDecimals === null) {
       setQuote(null);
       rawQuoteRef.current = null;
-      fallbackParamsRef.current = null;
       setQuoteLoading(false);
       return;
     }
@@ -833,7 +827,6 @@ export function TokenTradeScreen({
           multiSourcePlanRef.current = plan;
           rawQuoteRef.current = null;
           lastQuoteParamsRef.current = null;
-          fallbackParamsRef.current = null;
           const receiveDecimalsFallback = tokenDecimals ?? 18;
           let totalReceivedBaseUnits = 0n;
           let totalReceiveUsd = 0;
@@ -878,7 +871,6 @@ export function TokenTradeScreen({
           if (requestId !== quoteRequestIdRef.current) return;
           multiSourcePlanRef.current = [];
           rawQuoteRef.current = null;
-          fallbackParamsRef.current = null;
           setQuote(null);
           setQuoteLoading(false);
           setQuoteError(err instanceof Error ? err.message : 'Could not find direct routes for your combined cash balance.');
@@ -906,7 +898,6 @@ export function TokenTradeScreen({
           if (requestId !== quoteRequestIdRef.current) return;
           rawQuoteRef.current = q;
           lastQuoteParamsRef.current = quoteParams;
-          fallbackParamsRef.current = null;
           // Only used if Relay's own response omits currency.decimals on
           // the receiving side (summarizeQuote's own doc comment) — the
           // receiving side is the token on Buy (tokenDecimals, already
@@ -929,7 +920,6 @@ export function TokenTradeScreen({
           // would recreate the exact native-gas failure this screen is
           // designed to eliminate.
           rawQuoteRef.current = null;
-          fallbackParamsRef.current = null;
           setQuote(null);
           setQuoteLoading(false);
           setQuoteError(relayErr instanceof Error ? relayErr.message : 'Could not get a Relay route — try again.');
@@ -1059,8 +1049,7 @@ export function TokenTradeScreen({
     if (chainKey === 'near') return handleNearTrade();
     const multiSourcePlan = multiSourcePlanRef.current;
     let quoteToExecute = rawQuoteRef.current;
-    const fallbackParams = fallbackParamsRef.current;
-    if ((!quoteToExecute && !fallbackParams && multiSourcePlan.length === 0) || !session) return;
+    if ((!quoteToExecute && multiSourcePlan.length === 0) || !session) return;
     setExecuteError(null);
     setExecuteWarnings([]);
     setExecuteTxHashes([]);
@@ -1194,7 +1183,7 @@ export function TokenTradeScreen({
 
   const extremePriceImpact = quote?.priceImpactPct != null && Math.abs(quote.priceImpactPct) > EXTREME_PRICE_IMPACT_PCT;
   const canTrade =
-    (Boolean(rawQuoteRef.current) || Boolean(fallbackParamsRef.current) || multiSourcePlanRef.current.length > 0 || Boolean(nearQuoteRef.current)) &&
+    (Boolean(rawQuoteRef.current) || multiSourcePlanRef.current.length > 0 || Boolean(nearQuoteRef.current)) &&
     Boolean(session) &&
     !insufficientBalance &&
     !extremePriceImpact &&
