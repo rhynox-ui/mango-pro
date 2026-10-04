@@ -122,6 +122,7 @@ async function executeEvmOrigin(
   items.push(item);
   const warnings = assertTransactionItemsMatchIntent(items, intent);
 
+  if (quote.quote.transaction.chainType !== 'evm') throw new Error('Expected an EVM-origin transaction.');
   const tx = quote.quote.transaction.details;
   const nativeValue = BigInt(tx.value ?? '0');
   if (!isNative0xToken(quote.sellToken)) {
