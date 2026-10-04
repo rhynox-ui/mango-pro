@@ -10,7 +10,7 @@
 
 import {useEffect, useMemo, useState} from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {ActivityIndicator, Alert, Image, Modal, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {ActivityIndicator, Alert, Dimensions, Image, Modal, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import {launchImageLibrary} from 'react-native-image-picker';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import Svg, {Defs, LinearGradient, Line as SvgLine, Path as SvgPath, Stop} from 'react-native-svg';
@@ -989,7 +989,10 @@ export function ProfileScreen({
                   style={styles.depositNetworkList}
                   contentContainerStyle={styles.depositNetworkListContent}
                   nestedScrollEnabled
+                  scrollEnabled
+                  keyboardShouldPersistTaps="handled"
                   showsVerticalScrollIndicator
+                  persistentScrollbar
                   bounces={false}>
                   {/* Real per-chain cash asset — USDC everywhere except
                       Robinhood Chain, which has its own real stablecoin
@@ -1621,7 +1624,10 @@ function makeStyles(colors: Colors) {
     modalWarning: {color: colors.danger, fontSize: 11.5, lineHeight: 16, marginTop: 10, fontWeight: '600'},
     withdrawDisabledReason: {color: colors.danger, fontSize: 12, lineHeight: 16, marginTop: 10},
     modalSubtitle: {color: colors.textSecondary, fontSize: 13, marginBottom: 16},
-    depositNetworkList: {maxHeight: 520},
+    // Every network picker must remain usable on short phones as well as tall phones.
+    // flexShrink prevents the modal from being pushed below the viewport; the
+    // ScrollView owns the overflow instead of clipping the remaining networks.
+    depositNetworkList: {maxHeight: Math.min(520, Dimensions.get('window').height * 0.58), flexShrink: 1},
     depositNetworkListContent: {paddingBottom: 4},
     modalHeaderSpacer: {width: 20},
     reviewRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.divider},
