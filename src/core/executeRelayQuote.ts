@@ -38,7 +38,7 @@ import {SOLANA_NATIVE_SPEND, assertSolanaSpendWithinIntentWeb3, isInsufficientSo
 import {intentForQuote, type RelayQuote, type RelayTransactionStepItem} from './relayQuote.ts';
 import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, ARC_USDC, MAINNET_CHAIN_IDS, assetDecimalsForChain} from './chainData.ts';
 import {DEV_FEE_WALLET} from './fees.ts';
-import {sendEvmCallsViaRelayGasless, isPreBroadcastRelayError} from './relayGaslessEvm.ts';
+import {sendEvmCallsViaRelayGasless} from './relayGaslessEvm.ts';
 import {fetchWalletPrices} from './walletPrices.ts';
 import type {DerivedAccounts} from '../wallet/keys';
 
@@ -257,72 +257,6 @@ const ARC_INSUFFICIENT_MESSAGE = "Insufficient USDC for network fees on Arc. Gas
  * executeRelayQuote's own top) are only ever consulted if this pre-flight
  * simulate reverts, as the allowance-recovery fallback above.
  */
-async function sendRelayEvmStep(
-  walletClient: ReturnType<typeof createWalletClient>,
-  publicClient: ReturnType<typeof createPublicClient>,
-  item: RelayTransactionStepItem,
-  originToken?: `0x${string}`,
-  originAmount?: bigint,
-): Promise<string> {
-  const {to, data, value} = item.data ?? {};
-  if (!to) throw new Error('The routing service returned a transaction with no destination address.');
-  const account = walletClient.account;
-  if (!account) throw new Error('No signer account on this wallet client.');
-  const tx = {account, to: to as `0x${string}`, data: (data || undefined) as `0x${string}` | undefined, value: value ? BigInt(value) : 0n};
-
-  try {
-    await publicClient.call(tx);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    // Only surface this as a real revert when the simulation itself ran
-    // and rejected the call — a transport-level hiccup isn't evidence
-    // the real transaction would fail.
-    if (message && !/timeout|network|fetch|429|403/i.test(message)) {
-      const recovery = await toppedUpOriginAllowance(publicClient, account.address, tx.to, originToken, originAmount, async approveData => {
-        const hash = await walletClient.sendTransaction({account, to: originToken!, data: approveData, value: 0n, chain: walletClient.chain});
-        await publicClient.waitForTransactionReceipt({hash});
-      });
-      if (!recovery.recovered) throw new Error(`This transaction would revert: ${revertMessageAfterFailedRecovery(message, recovery)}`);
-      try {
-        await publicClient.call(tx);
-      } catch (err2) {
-        const message2 = err2 instanceof Error ? err2.message : String(err2);
-        throw new Error(`This transaction would revert: (An allowance top-up was sent first, but the retry still reverted the same way.) ${message2}`);
-      }
-    }
-  }
-
-  let gas: bigint;
-  let maxFeePerGas: bigint;
-  let maxPriorityFeePerGas: bigint;
-  let nativeBalance: bigint;
-  try {
-    const [gasEstimate, fees, balance] = await Promise.all([publicClient.estimateGas(tx), publicClient.estimateFeesPerGas(), publicClient.getBalance({address: account.address})]);
-    gas = gasEstimate;
-    maxFeePerGas = fees.maxFeePerGas;
-    maxPriorityFeePerGas = fees.maxPriorityFeePerGas ?? fees.maxFeePerGas;
-    nativeBalance = balance;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : '';
-    if (/gas required exceeds allowance|insufficient funds/i.test(message)) {
-      const symbol = walletClient.chain?.nativeCurrency?.symbol || 'the native coin';
-      throw new Error(`Insufficient ${symbol} for network fees. A token balance can't pay for gas — you need ${symbol} on this chain too.`);
-    }
-    throw err;
-  }
-  const arcUsdcSpend = arcUsdcSpendInNativeUnits(walletClient.chain?.id, originToken, originAmount);
-  const worstCaseCost = tx.value + gas * maxFeePerGas + arcUsdcSpend;
-  if (nativeBalance < worstCaseCost) {
-    if (arcUsdcSpend > 0n) throw new Error(ARC_INSUFFICIENT_MESSAGE);
-    const symbol = walletClient.chain?.nativeCurrency?.symbol || 'the native coin';
-    throw new Error(`Insufficient ${symbol} for network fees. A token balance can't pay for gas — you need ${symbol} on this chain too.`);
-  }
-
-  const hash = await walletClient.sendTransaction({account, to: tx.to, data: tx.data, value: tx.value, gas, maxFeePerGas, maxPriorityFeePerGas, chain: walletClient.chain});
-  await publicClient.waitForTransactionReceipt({hash});
-  return hash;
-}
-
 /**
  * Same shape as sendRelayEvmStep above (simulate first, check the
  * native balance actually covers value + worst-case gas, THEN send) but
@@ -334,77 +268,6 @@ async function sendRelayEvmStep(
  * zero risk of this new path changing behavior for the existing,
  * already-relied-on local-signing one.
  */
-async function sendRelayEvmStepViaParticle(
-  evmAddress: `0x${string}`,
-  publicClient: ReturnType<typeof createPublicClient>,
-  chainId: number,
-  item: RelayTransactionStepItem,
-  originToken?: `0x${string}`,
-  originAmount?: bigint,
-): Promise<string> {
-  const {to, data, value} = item.data ?? {};
-  if (!to) throw new Error('The routing service returned a transaction with no destination address.');
-  const tx = {to: to as `0x${string}`, data: (data || undefined) as `0x${string}` | undefined, value: value ? BigInt(value) : 0n};
-
-  try {
-    await publicClient.call({account: evmAddress, to: tx.to, data: tx.data, value: tx.value});
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (message && !/timeout|network|fetch|429|403/i.test(message)) {
-      const recovery = await toppedUpOriginAllowance(publicClient, evmAddress, tx.to, originToken, originAmount, async approveData => {
-        const {sendEvmTransactionViaParticle} = await import('../wallet/particleSigning.ts');
-        const hash = await sendEvmTransactionViaParticle(evmAddress, {chainId, to: originToken!, data: approveData, value: 0n});
-        await publicClient.waitForTransactionReceipt({hash});
-      });
-      if (!recovery.recovered) throw new Error(`This transaction would revert: ${revertMessageAfterFailedRecovery(message, recovery)}`);
-      try {
-        await publicClient.call({account: evmAddress, to: tx.to, data: tx.data, value: tx.value});
-      } catch (err2) {
-        const message2 = err2 instanceof Error ? err2.message : String(err2);
-        throw new Error(`This transaction would revert: (An allowance top-up was sent first, but the retry still reverted the same way.) ${message2}`);
-      }
-    }
-  }
-
-  let gas: bigint;
-  let maxFeePerGas: bigint;
-  let nativeBalance: bigint;
-  try {
-    const [gasEstimate, fees, balance] = await Promise.all([
-      publicClient.estimateGas({account: evmAddress, to: tx.to, data: tx.data, value: tx.value}),
-      publicClient.estimateFeesPerGas(),
-      publicClient.getBalance({address: evmAddress}),
-    ]);
-    gas = gasEstimate;
-    maxFeePerGas = fees.maxFeePerGas;
-    nativeBalance = balance;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : '';
-    if (/gas required exceeds allowance|insufficient funds/i.test(message)) {
-      const symbol = publicClient.chain?.nativeCurrency?.symbol || 'the native coin';
-      throw new Error(`Insufficient ${symbol} for network fees. A token balance can't pay for gas — you need ${symbol} on this chain too.`);
-    }
-    throw err;
-  }
-  const arcUsdcSpend = arcUsdcSpendInNativeUnits(chainId, originToken, originAmount);
-  const worstCaseCost = tx.value + gas * maxFeePerGas + arcUsdcSpend;
-  if (nativeBalance < worstCaseCost) {
-    if (arcUsdcSpend > 0n) throw new Error(ARC_INSUFFICIENT_MESSAGE);
-    const symbol = publicClient.chain?.nativeCurrency?.symbol || 'the native coin';
-    throw new Error(`Insufficient ${symbol} for network fees. A token balance can't pay for gas — you need ${symbol} on this chain too.`);
-  }
-
-  // Dynamic import, not a static one: particleSigning.ts pulls in
-  // @particle-network/rn-auth-core, which touches react-native's own
-  // NativeModules at module load — fine under Metro, but this file is
-  // also imported directly by scripts/verify-execute-relay-quote.mjs's
-  // plain-Node offline checks, which never exercises this branch.
-  const {sendEvmTransactionViaParticle} = await import('../wallet/particleSigning.ts');
-  const hash = await sendEvmTransactionViaParticle(evmAddress, {chainId, to: tx.to, data: tx.data, value: tx.value});
-  await publicClient.waitForTransactionReceipt({hash});
-  return hash;
-}
-
 /**
  * Signs and sends one Solana-side Relay step, with the two hardened
  * fallbacks mango-mobile's own relayBridge.js added after live
@@ -1130,19 +993,6 @@ export async function executeRelayQuote(
 
   onStep?.('signing');
   const isGoogleSession = session.authMethod === 'google';
-  // Relay is the only EVM gasless provider. There is deliberately no
-  // secondary bundler/paymaster: if Relay rejects before broadcast, we
-  // fall back to the normal signed transaction so the failure is explicit
-  // and never sends the quote through another paid provider.
-  // Mango Pro is a FOMO trading wallet: a Buy/Sell paid with USDC must never
-  // silently turn into a native-gas transaction. Relay sponsorship is mandatory
-  // for EVM execution. The option is retained for API compatibility, but it is
-  // intentionally ignored here so a stale/disabled local preference can never
-  // produce the ETH/BNB/MATIC "you need native gas" failure path.
-  // Fomo-style Mango trading is chain-abstracted: an EVM Buy/Sell must
-  // never fall back to a user-paid native-gas transaction. Relay is the
-  // execution/sponsorship provider, so this is intentionally unconditional.
-  const useGasless = true;
   const txHashes: string[] = [];
   let evmClients: {
     walletClient: ReturnType<typeof createWalletClient> | null;
@@ -1220,10 +1070,6 @@ export async function executeRelayQuote(
         value: item.data?.value ? BigInt(item.data.value) : 0n,
         data: (item.data?.data || '0x') as `0x${string}`,
       }));
-
-      const transport = transportFor(chainId);
-      const publicClient = createPublicClient({chain: viemChain, transport});
-      const walletClient = createWalletClient({account: owner, chain: viemChain, transport});
 
       const relayResult = await sendEvmCallsViaRelayGasless({
         chain: viemChain,
