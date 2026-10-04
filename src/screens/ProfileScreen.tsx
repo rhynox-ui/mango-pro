@@ -777,33 +777,11 @@ export function ProfileScreen({
                 </Text>
               </View>
               <View style={styles.closedTradeRight}>
-                <Text style={styles.closedTradeTitle}>{position.valueUsd != null ? `${formatUsd(position.valueUsd)}` : '—'}</Text>
-              </View>
-            </TouchableOpacity>
-          ))}
-
-            <TouchableOpacity
-              key={position.key}
-              style={styles.closedTradeRow}
-              activeOpacity={0.6}
-              disabled={!onOpenToken}
-              onPress={() => onOpenToken?.({chainKey: position.chainKey, address: position.tokenAddress, symbol: position.symbol, imageUrl: position.imageUrl})}>
-              <AssetIcon symbol={position.symbol} imageUrl={position.imageUrl} size={30} />
-              <View style={styles.closedTradeMain}>
-                <Text style={styles.closedTradeTitle} numberOfLines={1}>
-                  {position.symbol}
-                </Text>
-                <Text style={styles.closedTradeSubtitle} numberOfLines={1}>
-                  {formatTokenAmount(position.amountHeld)} {position.symbol} on {position.chainLabel}
-                </Text>
-              </View>
-              <View style={styles.closedTradeRight}>
                 <Text style={styles.closedTradeTitle}>{position.valueUsd != null ? `$${formatUsd(position.valueUsd)}` : '—'}</Text>
               </View>
             </TouchableOpacity>
           ))}
-        </View>
-      ) : positionTab === 'Closed' && assetFilter !== 'Perps' && closedPositions.length > 0 ? (
+        </View>) : positionTab === 'Closed' && assetFilter !== 'Perps' && closedPositions.length > 0 ? (
         <View style={styles.closedTradesList}>
           {/* One row per fully-exited TOKEN (computeClosedPositions
               aggregates every Buy/Sell down to a net ~0 amount), not one
