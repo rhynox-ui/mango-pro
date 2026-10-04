@@ -409,28 +409,40 @@ export async function executeNearTrade(
     rpc = nearRpc,
     ensureAccount = ensureNearAccount,
     requote,
+    fetchImpl = fetch,
     now = () => Date.now(),
-  }: {send?: Send; view?: View; rpc?: Rpc; ensureAccount?: typeof ensureNearAccount; requote?: () => Promise<NearTradeQuote>; now?: () => number} = {},
+  }: {send?: Send; view?: View; rpc?: Rpc; ensureAccount?: typeof ensureNearAccount; requote?: () => Promise<NearTradeQuote>; fetchImpl?: typeof fetch; now?: () => number} = {},
 ): Promise<NearTradeResult> {
   if (!session.near) throw new NearTradeError('This wallet has no NEAR account.');
   const accountId = session.near.address;
-  const fresh = requote ?? (() => quoteNearTrade({side: initial.side, token: initial.token, payUnits: initial.payUnits, accountId, slippageBps: initial.slippageBps}));
+  const fresh = requote ?? (() => quoteNearTrade({side: initial.side, token: initial.token, payUnits: initial.payUnits, accountId, slippageBps: initial.slippageBps, fetchImpl}));
   const quote = now() - initial.quotedAt > NEAR_QUOTE_MAX_AGE_MS ? await fresh() : initial;
   if (quote.side !== initial.side || quote.token !== initial.token || quote.payUnits !== initial.payUnits) throw new NearTradeError('The trade changed — try again.');
   // Never send for less than the minimum the user was shown.
   if (quote.minReceiveUnits < initial.minReceiveUnits) throw new NearTradeError('The price moved since your quote — check the new amount and try again.');
   const {route} = quote;
   const staged = quote.stages;
-  const stageRoutes = staged?.map(stage => stage.route) ?? [{...route, tokenIn: quote.tokenIn, tokenOut: quote.tokenOut} as NearTradeStage['route']];
-  for (const stage of stageRoutes) {
-    assertIntearRouteSafe(stage.txs, {
+  if (staged) {
+    for (let i = 0; i < staged.length; i++) {
+      const stage = staged[i];
+      assertIntearRouteSafe(stage.route.txs, {
+        accountId,
+        tokenIn: stage.tokenIn,
+        tokenOut: stage.tokenOut,
+        amountIn: i === 0 ? quote.swapIn : stage.route.minOut,
+        minOut: stage.route.minOut,
+      });
+    }
+  } else {
+    assertIntearRouteSafe(route.txs, {
       accountId,
-      tokenIn: staged ? staged[stageRoutes.indexOf(stage)].tokenIn : quote.tokenIn,
-      tokenOut: staged ? staged[stageRoutes.indexOf(stage)].tokenOut : quote.tokenOut,
-      amountIn: staged ? stage === stageRoutes[0] ? quote.swapIn : stage.minOut : quote.swapIn,
-      minOut: stage.minOut,
+      tokenIn: quote.tokenIn,
+      tokenOut: quote.tokenOut,
+      amountIn: quote.swapIn,
+      minOut: route.minOut,
     });
   }
+  const stageRoutes = staged?.map(stage => stage.route) ?? [route];
 
   const balanceIn = await fetchNearTokenBalance(quote.tokenIn, accountId, view);
   if (balanceIn < quote.payUnits) throw new NearTradeError(quote.side === 'buy' ? 'Not enough USDC on NEAR for this trade.' : "You don't hold that much of this token.");
@@ -467,7 +479,7 @@ export async function executeNearTrade(
       amountIn: acquired,
       slippageBps: quote.slippageBps,
       accountId,
-      fetchImpl: fetch,
+      fetchImpl,
     });
     const second = pickRelayableRoute(secondRoutes, {
       accountId,
