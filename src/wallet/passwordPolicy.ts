@@ -62,7 +62,7 @@ export function checkPasswordPolicy(password: string): PasswordPolicyResult {
   // Length alone is not enough: reject obvious repeated characters,
   // ascending/descending digit runs, and keyboard-style walks. This is a
   // local policy only — it does not claim to be a breach database.
-  const repeated = /^(.)\\1+$/.test(normalized);
+  const repeated = /^(.)\1+$/.test(normalized);
   const digitRun = /^(?:0123456789|1234567890|9876543210|0987654321)/.test(normalized);
   const keyboardWalk = /^(?:qwerty|asdfgh|zxcvbn|qazwsx|wsxedc)/.test(normalized);
   const notPredictable = !repeated && !digitRun && !keyboardWalk;
