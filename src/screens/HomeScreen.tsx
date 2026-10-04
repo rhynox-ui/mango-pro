@@ -690,6 +690,7 @@ function TokenRow({
   colors,
   onPress,
   starred,
+  entryMarketCapUsd,
 }: {
   token: DiscoveryToken;
   colors: Colors;
