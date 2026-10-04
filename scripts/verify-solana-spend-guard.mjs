@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import bs58 from 'bs58';
 import {Keypair} from '@solana/web3.js';
-import {MAX_CHECKED_ACCOUNTS, SOLANA_NATIVE_SPEND, SolanaSpendGuardError, assertSolanaSpendWithinIntent, isInsufficientSolSimulation} from '../src/core/solanaSpendGuard.ts';
+import {SOLANA_NATIVE_SPEND, SolanaSpendGuardError, assertSolanaSpendWithinIntent, isInsufficientSolSimulation} from '../src/core/solanaSpendGuard.ts';
 
 let checks = 0;
 const ok = name => console.log('ok', ++checks, `- ${name}`);
@@ -109,11 +109,11 @@ ok('a failing simulation is never signed; only a lack of SOL is routed to fee sp
 {
   const c = fakeConnection({after: {usdc: 40_000_000n}, extraAccounts: 150});
   await run(c, buyWithUsdc);
-  assert.equal(c.seen.addresses.length, MAX_CHECKED_ACCOUNTS);
+  assert.equal(c.seen.addresses.length, 154);
   assert.equal(c.seen.addresses[0], USER);
   const usdcAccount = (await c.getParsedTokenAccountsByOwner(USER, {programId: 'T'})).value.find(a => a.account.data.parsed.info.mint === USDC).pubkey.toBase58();
   assert.equal(c.seen.addresses[1], usdcAccount, 'the spent token account is always among those checked');
-  ok(`a crowded wallet checks the wallet + ${MAX_CHECKED_ACCOUNTS - 1} token accounts, the spent token's first`);
+  ok('a crowded wallet checks every non-empty token account, with the spent token account first');
 }
 
 console.log(`\n${checks} checks passed`);
