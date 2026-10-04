@@ -114,6 +114,7 @@ export const TOKEN_ADDRESSES: Record<string, Partial<Record<ChainKey, string>>> 
     hyperevm: '0xb88339cb7199b77e23db6e890353e22632ba630f',
     ink: '0x2d270e6886d130d724215a266106e6832161eaed',
     abstract: '0x84A71ccD554Cc1b02749b35d22F684CC8ec987e1',
+    xlayer: '0x74b7F16337b8972027F6196A17a631aC6dE26d22',
     arc: ARC_USDC,
   },
   USDT: {
@@ -121,6 +122,7 @@ export const TOKEN_ADDRESSES: Record<string, Partial<Record<ChainKey, string>>> 
     bnb: '0x55d398326f99059fF775485246999027B3197955',
     base: '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2',
     arbitrum: '0xFd086bc7CD5C481DCC9C85ebE478A1C0b69FCbb9',
+    xlayer: '0x1E4a5963aBFD975d8c9021ce480b42188849D41d',
     solana: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
   },
   WBTC: {
