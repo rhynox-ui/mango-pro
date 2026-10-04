@@ -43,6 +43,9 @@ import type {DerivedAccounts} from '../wallet/keys';
 
 const RELAY_STATUS_URL = 'https://api.relay.link/intents/status/v3';
 const SOLANA_RPC_URL = 'https://rpc.solanatracker.io/public';
+// Read-only fallback for the spend guard. Some public RPCs refuse
+// getTokenAccountsByOwner even though they support normal Solana execution.
+const SOLANA_TOKEN_ACCOUNT_READ_RPC_URL = 'https://api.mainnet-beta.solana.com';
 
 // Real fix for a structural Solana gap, confirmed via real research
 // (Solana's own cookbook, and how Alchemy/Privy's production wallet
@@ -509,7 +512,7 @@ export async function signAndSendSponsoredSolanaStep(
   if (spendIntent) {
     const usdcMintAddress = TOKEN_ADDRESSES.USDC?.solana;
     const extra = recoveryUnitsIncluded > 0n && usdcMintAddress ? [...(spendIntent.extra ?? []), {mint: usdcMintAddress, units: recoveryUnitsIncluded}] : spendIntent.extra;
-    await assertSolanaSpendWithinIntentWeb3(connection, unsignedTransaction, signer.publicKey.toBase58(), {...spendIntent, extra});
+    await assertSolanaSpendWithinIntentWeb3(connection, unsignedTransaction, signer.publicKey.toBase58(), {...spendIntent, extra}, tokenAccountConnection);
   }
 
   const transaction = await signer.sign(unsignedTransaction);
@@ -668,6 +671,7 @@ async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secret
 async function signAndSendRelaySolanaStepViaParticle(item: RelayTransactionStepItem, solanaAddress: string, spendIntent: SolanaSpendIntent): Promise<{signature: string; warnings: string[]}> {
   const {Connection, PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction} = await import('@solana/web3.js');
   const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
+  const tokenAccountConnection = new Connection(SOLANA_TOKEN_ACCOUNT_READ_RPC_URL, 'confirmed');
   const payerKey = new PublicKey(solanaAddress);
 
   const instructions = (item.data?.instructions ?? []).map(
@@ -698,7 +702,7 @@ async function signAndSendRelaySolanaStepViaParticle(item: RelayTransactionStepI
   // same check with the sponsor paying.
   let spendVerified = false;
   try {
-    await assertSolanaSpendWithinIntentWeb3(connection, transaction, solanaAddress, spendIntent);
+    await assertSolanaSpendWithinIntentWeb3(connection, transaction, solanaAddress, spendIntent, tokenAccountConnection);
     spendVerified = true;
   } catch (guardErr) {
     if (!isInsufficientSolSimulation(guardErr)) throw guardErr;
