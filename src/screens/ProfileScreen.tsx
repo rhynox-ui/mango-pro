@@ -28,7 +28,8 @@ import {
 } from '../components/icons';
 import {CHAIN_LABEL, NATIVE_SYMBOL, NEAR_ENABLED, NEAR_LABEL, assetDecimalsForChain, currencyAddress, type ChainKey} from '../core/chainData';
 import {fetchCashPortfolio, spendableCash, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
-import {fetchWalletNativeBalance, fetchWalletPrices, fetchWalletSolanaBalance} from '../wallet/walletRpc';
+import {fetchWalletNativeBalance, fetchWalletSolanaBalance} from '../wallet/walletRpc';
+import {fetchWalletPrices} from '../core/walletPrices';
 import {ConvertCashSheet} from '../components/ConvertCashSheet';
 import {NetworkIcon} from '../wallet/NetworkIcon';
 import {sendUsdc, isValidRecipientAddress} from '../wallet/sendUsdc';
