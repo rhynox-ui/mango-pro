@@ -1418,7 +1418,7 @@ const needsUnifiedRouting =
 
   const extremePriceImpact = quote?.priceImpactPct != null && Math.abs(quote.priceImpactPct) > EXTREME_PRICE_IMPACT_PCT;
   const canTrade =
-    (Boolean(rawQuoteRef.current) || Boolean(fallbackParamsRef.current) || multiSourcePlanRef.current.length > 0 || Boolean(nearQuoteRef.current)) &&
+    (Boolean(rawQuoteRef.current) || Boolean(fallbackParamsRef.current) || Boolean(crossChainQuoteRef.current) || multiSourcePlanRef.current.length > 0 || Boolean(nearQuoteRef.current)) &&
     Boolean(session) &&
     !insufficientBalance &&
     !extremePriceImpact &&
