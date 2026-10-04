@@ -47,6 +47,8 @@
 
 import {formatUnits} from 'viem';
 import {currencyAddress, MAINNET_CHAIN_IDS, type ChainKey} from './chainData.ts';
+import {getViemChain} from './chainRegistry.ts';
+import {assertRelayGaslessEvmAvailable} from './relayGaslessEvm.ts';
 import {appFeeBps, feeRecipientForQuote, isFeeExemptWallet, maxSubsidizationAmountUsdcUnits} from './fees.ts';
 import {buildTransactionIntent, type TransactionIntent} from './txIntentFirewall.ts';
 
@@ -59,6 +61,15 @@ const RELAY_QUOTE_URL = 'https://mangoprotocol.site/api/v1/pro/relay-quote';
 const RELAY_QUOTE_RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const RELAY_QUOTE_MAX_ATTEMPTS = 4;
 const RELAY_QUOTE_BACKOFF_MS = 500;
+
+async function assertQuoteOriginGaslessCapability(params: GetRelayQuoteParams): Promise<void> {
+  // Mango Fomo execution is gasless on EVM. Do not allow Relay to return a
+  // quote for an EVM source chain that this executor cannot actually sponsor.
+  // Solana has its separate sponsored executor and therefore skips this EVM
+  // Calibur check.
+  if (!params.originGasOverhead || params.fromChainKey === 'solana') return;
+  await assertRelayGaslessEvmAvailable(getViemChain(params.fromChainKey));
+}
 
 async function postRelayQuote(body: Record<string, unknown>): Promise<Response> {
   let lastNetworkError: unknown = null;
@@ -214,6 +225,7 @@ function isBetterExactInputQuote(candidate: RelayQuote, current: RelayQuote): bo
 }
 
 export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQuote> {
+  await assertQuoteOriginGaslessCapability(params);
   const {fromChainKey, toChainKey, fromAsset, toAsset, originCurrency, destinationCurrency, amountBaseUnits, userAddress, recipientAddress, originAmountUsd, slippageTolerance, originGasOverhead, waiveAppFee} = params;
 
   const resolvedOriginCurrency = originCurrency ?? (fromAsset ? currencyAddress(fromChainKey, fromAsset) : undefined);
