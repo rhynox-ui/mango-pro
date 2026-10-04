@@ -115,6 +115,8 @@ export type GetRelayQuoteParams = {
    * zero, only Mango's own cut is.
    */
   waiveAppFee?: boolean;
+  /** Additional origin gas budget used when the quote will be wrapped in Relay's EIP-7702 gasless executor. */
+  originGasOverhead?: number;
 };
 
 /** One transaction Relay needs signed — EVM-shaped (to/data/value/chainId) or Solana-shaped (instructions), per executeRelayQuote.ts's own dispatch. */
@@ -210,7 +212,7 @@ function isBetterExactInputQuote(candidate: RelayQuote, current: RelayQuote): bo
 }
 
 export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQuote> {
-  const {fromChainKey, toChainKey, fromAsset, toAsset, originCurrency, destinationCurrency, amountBaseUnits, userAddress, recipientAddress, originAmountUsd, slippageTolerance, waiveAppFee} = params;
+  const {fromChainKey, toChainKey, fromAsset, toAsset, originCurrency, destinationCurrency, amountBaseUnits, userAddress, recipientAddress, originAmountUsd, slippageTolerance, waiveAppFee, originGasOverhead} = params;
 
   const resolvedOriginCurrency = originCurrency ?? (fromAsset ? currencyAddress(fromChainKey, fromAsset) : undefined);
   const resolvedDestinationCurrency = destinationCurrency ?? (toAsset ? currencyAddress(toChainKey, toAsset) : undefined);
@@ -244,6 +246,7 @@ export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQ
     destinationCurrency: resolvedDestinationCurrency,
     amount: amountBaseUnits,
     tradeType: 'EXACT_INPUT',
+    ...(originGasOverhead !== undefined ? {originGasOverhead} : {}),
     // toChainKey, not fromChainKey — Relay's sponsorship (and the fee
     // floor protecting it) is priced against the chain whose fees
     // actually get sponsored: the destination, per Relay's own docs.
