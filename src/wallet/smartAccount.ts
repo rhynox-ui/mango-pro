@@ -147,7 +147,24 @@ export async function getSponsoredSmartAccountClient({chain, owner}: {chain: Cha
     bundlerTransport: http(pimlicoUrl(chain)),
     paymaster: pimlicoClient,
     userOperation: {
-      estimateFeesPerGas: async () => (await pimlicoClient.getUserOperationGasPrice()).fast,
+      // Pimlico's gas-price endpoint is useful but it is not a safe single
+      // point of failure. The proxy has returned Cloudflare 1101/500s in
+      // production, which previously killed the entire sponsored flow before
+      // the UserOperation was even built. Fall back to the chain's ordinary
+      // gas price so the bundler can still receive a valid EIP-1559 fee pair.
+      estimateFeesPerGas: async () => {
+        try {
+          return (await pimlicoClient.getUserOperationGasPrice()).fast;
+        } catch (error) {
+          console.warn('[smartAccount] Pimlico gas-price lookup failed; using public RPC gas price fallback:', error);
+          const gasPrice = await publicClient.getGasPrice();
+          const priority = gasPrice > 1_000_000_000n ? gasPrice / 4n : 1_000_000_000n;
+          return {
+            maxFeePerGas: gasPrice * 2n + priority,
+            maxPriorityFeePerGas: priority,
+          };
+        }
+      },
     },
   });
 }
