@@ -44,7 +44,8 @@
 // 1Click adds its own small fee on top, paid by the user — Mango keeps
 // its full 0.5%.
 //
-// Still open: where users receive on NEAR in this app. No UI wiring yet.
+// NEAR receive/deposit UI is wired through Profile and Convert; token trades use
+// the dedicated NEAR trade path, while cross-chain USDC moves use 1Click.
 
 import {ed25519} from '@noble/curves/ed25519.js';
 import {sha256} from '@noble/hashes/sha2.js';
