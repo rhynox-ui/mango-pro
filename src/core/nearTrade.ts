@@ -27,7 +27,6 @@ import type {DerivedAccounts} from '../wallet/keys';
 import {fetchUsdcPortfolio} from './usdcBalances.ts';
 import {fetchOneClickTokens, findOneClickAssetId, ONE_CLICK_PROXY_BASE_URL, type OneClickQuoteRequest, requestOneClickQuote, fetchOneClickStatus, submitOneClickDepositTx} from './oneClick.ts';
 import {fundOneClickQuote, type OneClickSwapStore} from './oneClickDeposits.ts';
-import {oneClickSwapStore} from '../wallet/oneClickSwapStore.ts';
 import {sendUsdc} from '../wallet/sendUsdc.ts';
 
 export type NearTradeSide = 'buy' | 'sell';
@@ -50,10 +49,9 @@ export async function fundNearUsdcForTrade(
   session: DerivedAccounts,
   neededUnits: bigint,
   {
-    store = oneClickSwapStore,
     now = () => Date.now(),
   }: {
-    store?: OneClickSwapStore;
+    store: OneClickSwapStore;
     now?: () => number;
   } = {},
 ): Promise<{sourceChain: ChainKey; sourceAmount: string; depositAddress: string; destinationTxHashes: string[]}> {
