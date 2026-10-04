@@ -51,7 +51,7 @@ import {CHAIN_LABEL, NATIVE_SYMBOL, assetDecimalsForChain, currencyAddress, trad
 import {DEV_FEE_PCT} from '../core/fees';
 import {resolveDexScreenerPair} from '../core/dexScreener';
 import {NEAR_USDC, NEAR_USDC_DECIMALS} from '../core/chainData';
-import {executeNearTrade, fetchNearTokenBalance, fetchNearTokenMeta, quoteNearTrade, NearSendError, type NearTradeQuote} from '../core/nearTrade';
+import {executeNearTrade, fetchNearTokenBalance, fetchNearTokenMeta, quoteNearTrade, fundNearUsdcForTrade, NearSendError, type NearTradeQuote} from '../core/nearTrade';
 import {getRelayQuote, summarizeQuote, type GetRelayQuoteParams, type QuoteSummary, type RelayQuote} from '../core/relayQuote';
 import {executeRelayQuote, getPartialTxHashes, preflightRelayQuoteExecution, type ExecuteStep} from '../core/executeRelayQuote';
 import {loadGaslessTradingEnabled} from '../settings/gaslessTradingPrefs';
@@ -308,6 +308,7 @@ export function TokenTradeScreen({
   // uses — reused here rather than re-derived, so this screen's own
   // portfolio figure can never quietly drift from the one on Profile.
   const [cashPortfolio, setCashPortfolio] = useState<CashPortfolio | null>(null);
+  const [usdcPortfolio, setUsdcPortfolio] = useState<UsdcPortfolio | null>(null);
   useEffect(() => {
     if (!session) {
       setCashPortfolio(null);
@@ -316,6 +317,22 @@ export function TokenTradeScreen({
     let cancelled = false;
     fetchCashPortfolio(session).then(portfolio => {
       if (!cancelled) setCashPortfolio(portfolio);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
+
+  useEffect(() => {
+    if (!session) {
+      setUsdcPortfolio(null);
+      return;
+    }
+    let cancelled = false;
+    fetchUsdcPortfolio(session).then(portfolio => {
+      if (!cancelled) setUsdcPortfolio(portfolio);
+    }).catch(() => {
+      if (!cancelled) setUsdcPortfolio(null);
     });
     return () => {
       cancelled = true;
@@ -474,7 +491,14 @@ export function TokenTradeScreen({
   // (session/side/token) change on a retry tap, so this is a dedicated one.
   const [balanceRetryToken, setBalanceRetryToken] = useState(0);
   const {balance, loading: balanceLoading} = useAvailableBalance(session ? fetchPayBalance : null, [session, isBuySide, solana, token, tokenDecimals, balanceRetryToken, cashPortfolio]);
+  const nearCrossChainFundingAvailable = Boolean(
+    token.chainKey === 'near' &&
+    isBuySide &&
+    usdcPortfolio &&
+    usdcPortfolio.results.some(r => r.status === 'ok' && r.balance > 0),
+  );
   const insufficientBalance = amtNum > 0 && balance !== null && amtNum > balance;
+  const effectiveInsufficientBalance = nearCrossChainFundingAvailable ? false : insufficientBalance;
   // Relay's quote API takes one concrete origin chain per call. The
   // aggregate cash balance is presented as one balance, while the planner
   // builds direct source -> destination legs underneath it. Build the
@@ -991,8 +1015,27 @@ export function TokenTradeScreen({
   }
 
   async function handleNearTrade() {
-    const nearQuote = nearQuoteRef.current;
-    if (!nearQuote || !session?.near) return;
+    if (!session?.near) return;
+    let nearQuote = nearQuoteRef.current;
+    if (isBuySide) {
+      const requestedUnits = parseUnits(amount, NEAR_USDC_DECIMALS);
+      const currentUnits = await fetchNearTokenBalance(NEAR_USDC, session.near.address);
+      if (currentUnits < requestedUnits) {
+        setExecuteState('filling');
+        await fundNearUsdcForTrade(session, requestedUnits - currentUnits);
+        setBalanceRetryToken(t => t + 1);
+        setUsdcPortfolio(null);
+        nearQuote = await quoteNearTrade({
+          side: 'buy',
+          token: token.address,
+          payUnits: requestedUnits,
+          accountId: session.near.address,
+          slippageBps: slippageBps != null ? Number(slippageBps) : null,
+        });
+        nearQuoteRef.current = nearQuote;
+      }
+    }
+    if (!nearQuote) return;
     setExecuteError(null);
     setExecuteWarnings([]);
     setExecuteTxHashes([]);
@@ -1205,7 +1248,7 @@ export function TokenTradeScreen({
   const canTrade =
     (Boolean(rawQuoteRef.current) || multiSourcePlanRef.current.length > 0 || Boolean(nearQuoteRef.current)) &&
     Boolean(session) &&
-    !insufficientBalance &&
+    !effectiveInsufficientBalance &&
     !extremePriceImpact &&
     (executeState === 'idle' || executeState === 'error');
   const isExecuting = executeState !== 'idle' && executeState !== 'error' && executeState !== 'success';
@@ -1225,7 +1268,7 @@ export function TokenTradeScreen({
   // never duplicates it.
   const pillHint = !session
     ? 'Unlock your wallet to trade'
-    : insufficientBalance
+    : effectiveInsufficientBalance
       ? null
       : amtNum <= 0
         ? `Enter an amount to ${isBuySide ? `buy ${token.symbol}` : `sell ${token.symbol}`}`
@@ -1478,7 +1521,7 @@ export function TokenTradeScreen({
 
       {!isBuySide && tokenDecimalsError && <Text style={styles.errorText}>{tokenDecimalsError}</Text>}
       {!isBuySide && !tokenDecimalsError && tokenDecimals === null && amtNum > 0 && <Text style={styles.noteText}>Verifying this token…</Text>}
-      {insufficientBalance && <Text style={styles.errorText}>{nearToken && isBuySide ? 'Not enough USDC on NEAR — move some there with Convert on Profile first.' : `Insufficient ${paySymbol} balance`}</Text>}
+      {effectiveInsufficientBalance && <Text style={styles.errorText}>{nearToken && isBuySide ? 'Not enough USDC available to fund this NEAR trade.' : `Insufficient ${paySymbol} balance`}</Text>}
       {needsUnifiedRouting && (
         <Text style={styles.noteText}>
           Your ${amtNum.toFixed(2)} buy will be split across available cash chains and routed directly to {CHAIN_LABEL[token.chainKey as ChainKey]} — no manual bridging or chain selection.
