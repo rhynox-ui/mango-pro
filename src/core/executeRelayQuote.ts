@@ -433,6 +433,7 @@ export async function signAndSendSponsoredSolanaStep(
     import('@solana/spl-token'),
   ]);
   const bs58 = bs58Module.default;
+  const tokenAccountConnection = new (await import('@solana/web3.js')).Connection(SOLANA_TOKEN_ACCOUNT_READ_RPC_URL, 'confirmed');
   const feePayerPubkey = new PublicKey(await getSolanaFeePayerPublicKey());
   const rewrittenInstructions = rewriteAccountCreationFundingInstructions(instructions, feePayerPubkey, TransactionInstruction);
 
