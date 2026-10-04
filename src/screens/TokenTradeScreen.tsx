@@ -146,8 +146,7 @@ function formatEta(seconds: number): string {
  * anonymous generic dollar badge.
  */
 function CashBadge({chainKey, size = 18}: {chainKey: ChainKey; size?: number}) {
-  const label = CASH_ASSET_BY_CHAIN[chainKey] === 'USDG' ? 'USDG' : 'USDC';
-  const scale = size / 250;
+  const label = 'USDC';
   return (
     <Svg
       width={size}
