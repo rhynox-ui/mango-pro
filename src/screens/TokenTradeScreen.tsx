@@ -440,7 +440,20 @@ export function TokenTradeScreen({
   // unified execution plan whenever the aggregate cash portfolio is
   // available, even if one chain alone can cover the trade, so Relay route
   // quality is compared instead of assuming the largest balance is best.
-  const needsUnifiedRouting = !nearToken && isBuySide && amtNum > 0 && !insufficientBalance && cashPortfolio !== null;
+  const unifiedCashSources = cashPortfolio?.results.filter(r => r.status === 'ok' && spendableCash(r.chainKey, r.balance) > 0).length ?? 0;
+// Keep the existing single-quote path when the only spendable cash is
+// already on the token's destination chain. That path owns the complete
+// same-chain fallback stack (Uniswap/Sushi/Pancake/1inch/0x, plus the
+// Solana pump.fun/PumpSwap fallback). The unified planner used to bypass
+// that stack and turn a perfectly executable same-chain trade into a
+// misleading "$0.00 safe direct route" error.
+const needsUnifiedRouting =
+  !nearToken &&
+  isBuySide &&
+  amtNum > 0 &&
+  !insufficientBalance &&
+  cashPortfolio !== null &&
+  !(unifiedCashSources === 1 && payOrigin.chainKey === token.chainKey);
   // A resolved balance of 0 is real (an empty wallet) and looks
   // identical to a null balance in `balance !== null` checks — this
   // specifically catches the OTHER case, where the fetch itself failed

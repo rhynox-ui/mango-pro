@@ -193,31 +193,20 @@ export const CASH_SUPPORTED_CHAINS = Object.keys(CASH_ASSET_BY_CHAIN) as ChainKe
 // robinhood: none confirmed, and Robinhood Chain/USDG are too new to be
 // listed at all) gets no logo attempt, falling through to CashBadge's
 // own honest "$" mark rather than guessing a slug that 404s.
-const TRUST_WALLET_CHAIN_SLUG: Partial<Record<ChainKey, string>> = {
-  ethereum: 'ethereum',
-  base: 'base',
-  bnb: 'smartchain',
-  arbitrum: 'arbitrum',
-  avalanche: 'avalanchec',
-  solana: 'solana',
-};
+// USDC uses one canonical, verified icon regardless of which supported
+// chain currently holds the user's cash. The old implementation depended
+// on every chain having a matching Trust Wallet slug/address directory;
+// newer supported chains therefore fell back to a plain "$" badge, which
+// made the product look as if the USDC asset had disappeared.
+// jsDelivr serves the same Trust Wallet asset without requiring a
+// chain-specific directory on every network.
+const CANONICAL_USDC_LOGO_URL =
+  'https://cdn.jsdelivr.net/gh/trustwallet/assets@master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48/logo.png';
 
-/** Real, verified logo URL for a chain's own cash asset (USDC everywhere confirmed above, USDG on Robinhood) — null, never a guess, when this file has no confirmed Trust Wallet slug for that chain. */
+/** Real USDC logo for the unified cash UI. Robinhood's internal cash asset is USDG, but the user-facing product deliberately labels the aggregate cash balance as USDC. */
 export function cashLogoUrl(chainKey: ChainKey): string | null {
-  const asset = CASH_ASSET_BY_CHAIN[chainKey];
-  const slug = TRUST_WALLET_CHAIN_SLUG[chainKey];
-  const address = asset ? TOKEN_ADDRESSES[asset]?.[chainKey] : undefined;
-  if (!asset || !slug || !address) return null;
-  return `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${slug}/assets/${address}/logo.png`;
+  return CASH_ASSET_BY_CHAIN[chainKey] ? CANONICAL_USDC_LOGO_URL : null;
 }
-
-// Arc pays gas in the same USDC the wallet holds, so a MAX that spends
-// all of it leaves nothing for the transaction doing the spending. At
-// Arc's pinned ~20 gwei base fee an approve + swap costs well under a
-// cent; 5 cents leaves room for a fee spike and a follow-up transaction.
-// Totals shown to the user stay the real balance. This only caps what
-// MAX, Withdraw, Convert and payment routing treat as spendable.
-export const ARC_GAS_RESERVE_USDC = 0.05;
 
 /** A chain's cash balance minus whatever must stay behind to pay that chain's gas, clamped to 0. */
 export function spendableCash(chainKey: ChainKey, balance: number): number {
