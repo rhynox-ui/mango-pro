@@ -123,7 +123,7 @@ export const UNISWAP_V3_ADDRESSES: Record<number, UniswapV3ChainAddresses> = {
   // right pools and makes a stray native execution fail in simulation.
   196: {
     factory: '0x4B2ab38DBF28D31D467aA8993f6c2585981D6804',
-    quoter: '0xd1b797d92b688193a2b976dc8d577d204343' as never,
+    quoter: '0xd1b797d92d87b688193a2b976efc8d577d204343,
     swapRouter02: '0x4f0c28f5926afda16bf2506d5d9e57ea190f9bca',
     wrappedNative: '0xe538905cf8410324e03A5A23C1c177a474D59b2b',
     v4PoolManager: '0x360e68faccca8ca495c1b759fd9eee466db9fb32',
