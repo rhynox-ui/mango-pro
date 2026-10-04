@@ -108,7 +108,8 @@ async function solanaOutputVerificationFor(quote: RelayQuote, intent: Transactio
   if (intent.destinationChainId !== 792703809) return {};
   const output = quote.details?.currencyOut;
   const mint = output?.currency?.address;
-  if (!mint || !output?.amount || !/^\\d+$/.test(output.amount)) return {};
+  const minimumAmount = output?.minimumAmount ?? output?.amount;
+  if (!mint || !minimumAmount || !/^\\d+$/.test(minimumAmount)) return {};
   if (mint === SYSTEM_PROGRAM_ID || mint === 'So11111111111111111111111111111111111111112') return {};
   try {
     const [{PublicKey}, splToken] = await Promise.all([import('@solana/web3.js'), import('@solana/spl-token')]);
@@ -118,7 +119,7 @@ async function solanaOutputVerificationFor(quote: RelayQuote, intent: Transactio
       splToken.getAssociatedTokenAddress(mintKey, owner, false, splToken.TOKEN_PROGRAM_ID, splToken.ASSOCIATED_TOKEN_PROGRAM_ID),
       splToken.getAssociatedTokenAddress(mintKey, owner, false, splToken.TOKEN_2022_PROGRAM_ID, splToken.ASSOCIATED_TOKEN_PROGRAM_ID),
     ]);
-    return {expectedOutputMint: mint, expectedOutputMinimum: BigInt(output.amount), expectedOutputAccounts: accounts.map(a => a.toBase58())};
+    return {expectedOutputMint: mint, expectedOutputMinimum: BigInt(minimumAmount), expectedOutputAccounts: accounts.map(a => a.toBase58())};
   } catch {
     throw new Error('The Solana output could not be verified safely — refusing to sign this trade.');
   }
