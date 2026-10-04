@@ -36,11 +36,9 @@ import {assertQuoteSafeToSign, type TransactionIntent} from './txIntentFirewall.
 import {assertSolanaTransactionMatchesIntent} from './solanaTxIntent.ts';
 import {SOLANA_NATIVE_SPEND, assertSolanaSpendWithinIntentWeb3, isInsufficientSolSimulation, type SolanaSpendIntent} from './solanaSpendGuard.ts';
 import {intentForQuote, type RelayQuote, type RelayTransactionStepItem} from './relayQuote.ts';
-import {getEip7702AuthorizationIfNeeded, getSponsoredSmartAccountClient, isGaslessSupportedOnChain, isSmartAccountSponsorshipConfigured} from '../wallet/smartAccount.ts';
-import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, ARC_USDC, MAINNET_CHAIN_IDS, assetDecimalsForChain, chainKeyForChainId} from './chainData.ts';
+import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, ARC_USDC, MAINNET_CHAIN_IDS, assetDecimalsForChain} from './chainData.ts';
 import {DEV_FEE_WALLET} from './fees.ts';
 import {sendEvmCallsViaRelayGasless, isPreBroadcastRelayError} from './relayGaslessEvm.ts';
-import {fetchWalletPrices} from './walletPrices.ts';
 import type {DerivedAccounts} from '../wallet/keys';
 
 const RELAY_STATUS_URL = 'https://api.relay.link/intents/status/v3';
@@ -325,34 +323,6 @@ async function sendRelayEvmStep(
 }
 
 /**
- * Runs the plain-transaction fallback for a sponsored EVM step that
- * couldn't go through Pimlico, and — if that fallback ALSO fails purely
- * on gas — makes the error honest about what actually happened. The user
- * turned gasless ON specifically so they wouldn't need native gas; if the
- * fallback then fails for exactly that reason, saying only "insufficient
- * ETH" (sendRelayEvmStep's own message) hides the real story: gasless was
- * tried first and rejected, THEN the fallback needed gas the wallet
- * doesn't hold by design.
- */
-async function fallBackToPlainTransaction(
-  walletClient: ReturnType<typeof createWalletClient>,
-  publicClient: ReturnType<typeof createPublicClient>,
-  item: RelayTransactionStepItem,
-  originToken?: `0x${string}`,
-  originAmount?: bigint,
-): Promise<string> {
-  try {
-    return await sendRelayEvmStep(walletClient, publicClient, item, originToken, originAmount);
-  } catch (fallbackErr) {
-    const fallbackMessage = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
-    if (/insufficient .* for network fees/i.test(fallbackMessage)) {
-      throw new Error(`Gasless trading isn't available for this route right now, so it fell back to a normal transaction — but ${fallbackMessage.charAt(0).toLowerCase()}${fallbackMessage.slice(1)}`);
-    }
-    throw fallbackErr;
-  }
-}
-
-/**
  * Same shape as sendRelayEvmStep above (simulate first, check the
  * native balance actually covers value + worst-case gas, THEN send) but
  * for a Google-login session: there's no local account to build a
@@ -432,200 +402,6 @@ async function sendRelayEvmStepViaParticle(
   const hash = await sendEvmTransactionViaParticle(evmAddress, {chainId, to: tx.to, data: tx.data, value: tx.value});
   await publicClient.waitForTransactionReceipt({hash});
   return hash;
-}
-
-// ---------------------------------------------------------------------
-// EVM half of sponsorship cost recovery — same design contract as the
-// Solana section above (this file's own header there has the full
-// precedent citations), adapted to what's actually available on this
-// side: Pimlico's own paymaster sponsors gas here (not a Mango-operated
-// native-gas wallet the way Solana's fee payer is), billed against a
-// real funded Pimlico balance — so this closes the exact same "pure
-// gift, never recovered" gap Relay's own subsidizeFees path already
-// closes via appFeeBpsForSponsoredTrade()'s quote-time bps, except
-// Pimlico's sponsorship was never wired into that bps decision at all
-// (it's a separate, independently-toggled opt-in — see smartAccount.ts).
-//
-// The atomic-in-the-same-operation shape survives the move to EVM
-// almost exactly: a 7702 smart account can batch multiple calls into
-// ONE UserOperation (permissionless's own sendTransaction wraps a
-// single {to,data,value} into exactly this `calls` array already — see
-// node_modules/permissionless/actions/smartAccount/sendTransaction.js),
-// so appending a second call (an ERC-20 USDC transfer to Mango's
-// existing DEV_FEE_WALLET — already the appFees recipient, no new
-// address to provision) is the direct EVM equivalent of Solana's second
-// SPL-transfer instruction. No sponsor-side account needs creating
-// here either: DEV_FEE_WALLET is a plain EOA, already set up to receive
-// USDC.
-//
-// What's genuinely different from Solana: there's no single "simulate,
-// read real units, done" call — viem/permissionless splits that into
-// `prepareUserOperation` (real gas-field estimation, no broadcast) and
-// `sendTransaction` (broadcasts). So the shape here is: prepare the
-// swap-only operation to measure its real worst-case native cost
-// (never guessed), decide whether to attempt recovery, then — if
-// attempting — prepare the COMBINED (swap + recovery) operation as the
-// actual pre-flight check. Nothing broadcasts during either prepare
-// call, so it's always safe to fall back to the swap-only calls if
-// EITHER prepare throws (paymaster policy rejects the extra call,
-// price feed missing, insufficient USDC, anything) — exactly one
-// `sendTransaction` (broadcast) ever happens, chosen upfront, never a
-// blind retry after a real broadcast attempt.
-
-const ERC20_TRANSFER_ABI = [
-  {type: 'function', name: 'transfer', inputs: [{name: 'to', type: 'address'}, {name: 'amount', type: 'uint256'}], outputs: [{type: 'bool'}], stateMutability: 'nonpayable'},
-] as const;
-const ERC20_BALANCE_OF_ABI = [
-  {type: 'function', name: 'balanceOf', inputs: [{name: 'account', type: 'address'}], outputs: [{type: 'uint256'}], stateMutability: 'view'},
-] as const;
-
-/**
- * Real native-gas cost (wei) -> USDC base units for this chain, live
- * priced and buffered exactly like the Solana side
- * (sponsorshipRecoveryUsdcUnits) — same non-profit buffer constant, same
- * "0 means skip, never guess" contract on a missing/invalid input. Takes
- * `usdcDecimals` explicitly rather than assuming 6, since BNB Chain's
- * own USDC deploy uses 18 (assetDecimalsForChain in chainData.ts already
- * carries this exception). Pure, independently testable.
- */
-export function evmSponsorshipRecoveryUsdcUnits(nativeCostWei: bigint, nativePriceUsd: number, usdcDecimals: number): bigint {
-  if (!(nativeCostWei > 0n) || !(nativePriceUsd > 0)) return 0n;
-  const nativeCost = Number(nativeCostWei) / 1e18;
-  const recoveryUsd = nativeCost * nativePriceUsd * (1 + SPONSORSHIP_RECOVERY_BUFFER_PCT);
-  return BigInt(Math.round(recoveryUsd * 10 ** usdcDecimals));
-}
-
-/**
- * Same shape as sendRelayEvmStep above (simulate first, then broadcast)
- * but through a Pimlico-sponsored EIP-7702 smart-account client
- * (smartAccount.ts) instead of a plain wallet transaction — origin-chain
- * gas comes from Pimlico's paymaster, not this wallet's native balance,
- * so there's no balance-covers-gas check to run here at all; removing
- * that requirement is the entire point of this path (ARCHITECTURE.md
- * §1's gasless-trading opt-in).
- */
-async function sendRelayEvmStepSponsored(
-  client: Awaited<ReturnType<typeof getSponsoredSmartAccountClient>>,
-  publicClient: ReturnType<typeof createPublicClient>,
-  item: RelayTransactionStepItem,
-  originToken?: `0x${string}`,
-  originAmount?: bigint,
-): Promise<string> {
-  const {to, data, value} = item.data ?? {};
-  if (!to) throw new Error('The routing service returned a transaction with no destination address.');
-  const tx = {to: to as `0x${string}`, data: (data || undefined) as `0x${string}` | undefined, value: value ? BigInt(value) : 0n};
-
-  // See smartAccount.ts's own header for the real bug this closes: the
-  // installed viem's automatic path only ever attaches a STUB (fake)
-  // EIP-7702 authorization, which Pimlico's bundler rejects outright —
-  // a real one has to be signed and passed explicitly here. Computed up
-  // front (not only right before the final send, as before this recovery
-  // path existed) so a standalone approve UserOperation below can also
-  // carry it on a not-yet-delegated EOA.
-  const authorization = await getEip7702AuthorizationIfNeeded(client, publicClient);
-
-  try {
-    await publicClient.call({account: client.account.address, to: tx.to, data: tx.data, value: tx.value});
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (message && !/timeout|network|fetch|429|403/i.test(message)) {
-      const recovery = await toppedUpOriginAllowance(publicClient, client.account.address, tx.to, originToken, originAmount, async approveData => {
-        const hash = await client.sendTransaction({calls: [{to: originToken!, data: approveData, value: 0n}], authorization});
-        await publicClient.waitForTransactionReceipt({hash});
-      });
-      if (!recovery.recovered) throw new Error(`This transaction would revert: ${revertMessageAfterFailedRecovery(message, recovery)}`);
-      try {
-        await publicClient.call({account: client.account.address, to: tx.to, data: tx.data, value: tx.value});
-      } catch (err2) {
-        const message2 = err2 instanceof Error ? err2.message : String(err2);
-        throw new Error(`This transaction would revert: (An allowance top-up was sent first, but the retry still reverted the same way.) ${message2}`);
-      }
-    }
-  }
-
-  const swapCall = {to: tx.to, data: tx.data ?? ('0x' as const), value: tx.value};
-
-  // Cost recovery — strictly opportunistic, per this section's own
-  // header above. Any failure anywhere in this block just means the
-  // single swapCall below goes out exactly as it always has.
-  let calls: {to: `0x${string}`; data: `0x${string}`; value: bigint}[] = [swapCall];
-  try {
-    const chainId = publicClient.chain?.id;
-    const chainKey = typeof chainId === 'number' ? chainKeyForChainId(chainId) : undefined;
-    const usdcAddress = chainKey ? TOKEN_ADDRESSES.USDC?.[chainKey] : undefined;
-    if (chainKey && usdcAddress) {
-      const basePrepared = await client.prepareUserOperation({calls: [swapCall], authorization});
-      const totalGas =
-        basePrepared.callGasLimit +
-        basePrepared.verificationGasLimit +
-        basePrepared.preVerificationGas +
-        (basePrepared.paymasterVerificationGasLimit ?? 0n) +
-        (basePrepared.paymasterPostOpGasLimit ?? 0n);
-      const worstCaseNativeCost = totalGas * basePrepared.maxFeePerGas;
-
-      const nativeSymbol = publicClient.chain?.nativeCurrency?.symbol;
-      const prices = await fetchWalletPrices().catch(() => ({}) as Record<string, number>);
-      const nativePriceUsd = (nativeSymbol && prices[nativeSymbol]) || 0;
-      const usdcDecimals = assetDecimalsForChain(chainKey, 'USDC') ?? ASSET_ONCHAIN_DECIMALS.USDC;
-      const recoveryUnits = evmSponsorshipRecoveryUsdcUnits(worstCaseNativeCost, nativePriceUsd, usdcDecimals);
-
-      if (recoveryUnits > 0n) {
-        const usdcBalance = await publicClient
-          .readContract({address: usdcAddress as `0x${string}`, abi: ERC20_BALANCE_OF_ABI, functionName: 'balanceOf', args: [client.account.address]})
-          .catch(() => null);
-        if (typeof usdcBalance === 'bigint' && usdcBalance >= recoveryUnits) {
-          const recoveryCall = {
-            to: usdcAddress as `0x${string}`,
-            data: encodeFunctionData({abi: ERC20_TRANSFER_ABI, functionName: 'transfer', args: [DEV_FEE_WALLET as `0x${string}`, recoveryUnits]}),
-            value: 0n,
-          };
-          // The real pre-flight: nothing broadcasts on a failed prepare
-          // (a paymaster policy rejection, a gas-estimation revert on
-          // the recovery call itself, anything), so it's always safe to
-          // fall back to swap-only if this throws.
-          await client.prepareUserOperation({calls: [swapCall, recoveryCall], authorization});
-          calls = [swapCall, recoveryCall];
-        }
-      }
-    }
-  } catch (err) {
-    console.warn('[sponsorshipRecovery] Skipping EVM cost recovery for this trade:', err instanceof Error ? err.message : String(err));
-  }
-
-  try {
-    const hash = await client.sendTransaction({calls, authorization});
-    await publicClient.waitForTransactionReceipt({hash});
-    return hash;
-  } catch (err) {
-    // Real gap this closes, live-reproduced (a BNB Convert reverting with
-    // the exact TransferFromFailed() this function's own pre-flight
-    // simulate above is meant to catch and recover from — but didn't).
-    // Pimlico's bundler runs its OWN simulation as part of actually
-    // broadcasting the UserOperation, a separate check from this
-    // function's own `publicClient.call()` pre-flight above — a route
-    // that simulates clean via a plain eth_call can still be rejected
-    // here, and until now a revert caught ONLY at this later point never
-    // got a chance at allowance-recovery at all, surfacing instead as
-    // whatever raw error shape the bundler SDK happens to produce
-    // (unrecovered AND un-narrated — exactly what a live failure showed).
-    // Same guard, same recovery call, same retry-once shape as the
-    // pre-flight block above, just applied to this later checkpoint too.
-    const message = err instanceof Error ? err.message : String(err);
-    if (!message || /timeout|network|fetch|429|403/i.test(message)) throw err;
-    const recovery = await toppedUpOriginAllowance(publicClient, client.account.address, swapCall.to, originToken, originAmount, async approveData => {
-      const approveHash = await client.sendTransaction({calls: [{to: originToken!, data: approveData, value: 0n}], authorization});
-      await publicClient.waitForTransactionReceipt({hash: approveHash});
-    });
-    if (!recovery.recovered) throw new Error(`This transaction would revert: ${revertMessageAfterFailedRecovery(message, recovery)}`);
-    try {
-      const hash = await client.sendTransaction({calls, authorization});
-      await publicClient.waitForTransactionReceipt({hash});
-      return hash;
-    } catch (err2) {
-      const message2 = err2 instanceof Error ? err2.message : String(err2);
-      throw new Error(`This transaction would revert: (An allowance top-up was sent first, but the retry still reverted the same way.) ${message2}`);
-    }
-  }
 }
 
 /**
@@ -1358,17 +1134,15 @@ export async function executeRelayQuote(
 
   onStep?.('signing');
   const isGoogleSession = session.authMethod === 'google';
-  // A Google session has no local key to sign a 7702 delegation with
-  // yet (smartAccount.ts isn't wired to Particle signing) — silently
-  // falls back to the existing Particle path rather than erroring, so a
-  // stale "on" preference from a since-switched-to-Google session can
-  // never break trading.
-  const useGasless = Boolean(options?.useGaslessTrading) && !isGoogleSession && isSmartAccountSponsorshipConfigured();
+  // Relay is the only EVM gasless provider. There is deliberately no
+  // secondary bundler/paymaster: if Relay rejects before broadcast, we
+  // fall back to the normal signed transaction so the failure is explicit
+  // and never sends the quote through another paid provider.
+  const useGasless = Boolean(options?.useGaslessTrading);
   const txHashes: string[] = [];
   let evmClients: {
     walletClient: ReturnType<typeof createWalletClient> | null;
     publicClient: ReturnType<typeof createPublicClient>;
-    sponsoredClient: Awaited<ReturnType<typeof getSponsoredSmartAccountClient>> | null;
   } | null = null;
 
   try {
@@ -1385,6 +1159,7 @@ export async function executeRelayQuote(
         warnings.push(...solanaStepWarnings);
         continue;
       }
+
       const chainId = item.data?.chainId;
       if (!chainId) throw new Error('The routing service returned a transaction with no chain.');
       if (!evmClients || evmClients.publicClient.chain?.id !== chainId) {
@@ -1393,35 +1168,31 @@ export async function executeRelayQuote(
         const transport = transportFor(chainId);
         const publicClient = createPublicClient({chain: viemChain, transport});
         const owner = isGoogleSession ? null : privateKeyToAccount(session.evm.privateKey as `0x${string}`);
-        // Built unconditionally, not just when gasless trading is off — the
-        // sponsored path below always needs a plain-transaction fallback to
-        // drop back to. Gasless trading is still an opt-in beta
-        // (ARCHITECTURE.md §1, never end-to-end proven before this shipped)
-        // and a bundler/paymaster rejection must never strand an otherwise-
-        // tradeable quote.
         const walletClient = owner ? createWalletClient({account: owner, chain: viemChain, transport}) : null;
-        // Do NOT initialize Pimlico here. Relay must be the first gasless
-        // choice, so a Pimlico outage/configuration error can never prevent
-        // the primary Relay attempt from running.
-        evmClients = {walletClient, publicClient, sponsoredClient: null};
+        evmClients = {walletClient, publicClient};
       }
+
       let hash: string;
       if (isGoogleSession) {
-        hash = await sendRelayEvmStepViaParticle(session.evm.address as `0x${string}`, evmClients.publicClient, chainId, item, originToken, originAmount);
-      } else if (useGasless && evmClients.walletClient && isGaslessSupportedOnChain(chainId)) {
-        // Relay is the PRIMARY EVM gasless executor. Pimlico is initialized
-        // only after Relay has rejected before broadcast, making the order
-        // real rather than merely conceptual.
+        hash = await sendRelayEvmStepViaParticle(
+          session.evm.address as `0x${string}`,
+          evmClients.publicClient,
+          chainId,
+          item,
+          originToken,
+          originAmount,
+        );
+      } else if (useGasless && evmClients.walletClient) {
         try {
           const relayResult = await sendEvmCallsViaRelayGasless({
-              chain: evmClients.publicClient.chain!,
-              fromAddress: evmClients.walletClient!.account!.address,
-              privateKey: session.evm.privateKey as `0x${string}`,
-              calls: [{
-                to: item.data?.to as `0x${string}`,
-                value: item.data?.value ? BigInt(item.data.value) : 0n,
-                data: (item.data?.data || '0x') as `0x${string}`,
-              }],
+            chain: evmClients.publicClient.chain!,
+            fromAddress: evmClients.walletClient.account!.address,
+            privateKey: session.evm.privateKey as `0x${string}`,
+            calls: [{
+              to: item.data?.to as `0x${string}`,
+              value: item.data?.value ? BigInt(item.data.value) : 0n,
+              data: (item.data?.data || '0x') as `0x${string}`,
+            }],
           });
           hash = relayResult.hash;
           txHashes.push(hash);
@@ -1429,74 +1200,17 @@ export async function executeRelayQuote(
         } catch (relayErr) {
           const relayMessage = relayErr instanceof Error ? relayErr.message : String(relayErr);
           if (!isPreBroadcastRelayError(relayMessage)) throw relayErr;
-          console.warn('[relayGasless] Primary Relay execution rejected before broadcast; trying Pimlico second:', relayMessage);
-        }
 
-        // Pimlico is the SECOND gasless choice and is constructed lazily,
-        // only after Relay's pre-broadcast rejection.
-        const sponsoredClient = await getSponsoredSmartAccountClient({
-          chain: evmClients.publicClient.chain!,
-          owner: privateKeyToAccount(session.evm.privateKey as `0x${string}`),
-        });
-        evmClients.sponsoredClient = sponsoredClient;
-        try {
-          hash = await sendRelayEvmStepSponsored(sponsoredClient, evmClients.publicClient, item, originToken, originAmount);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          // Only fall back on a rejection that happened BEFORE anything was
-          // broadcast (the bundler's own field validation, or our own
-          // pre-flight simulate) — never on an ambiguous failure after the
-          // UserOperation may already have been accepted, where retrying
-          // with a plain transaction could double-execute it.
-          const isPreBroadcastRejection = /invalid fields set on user operation|invalid useroperation|\baa[0-9]{2}\b|this transaction would revert|error code:\s*1101|cloudflare.*1101|worker threw.*exception|http request failed/i.test(message);
-          if (!isPreBroadcastRejection) throw err;
-
-          // "This transaction would revert" is OUR OWN pre-flight simulate
-          // (sendRelayEvmStepSponsored above) catching an on-chain revert —
-          // on a thin/fast-moving pool this is usually ordinary slippage
-          // drift between quote and sign, not a real incompatibility. Real,
-          // decoded case: a live trade's Pimlico log showed the router's
-          // own "Return amount is not enough" revert; the identical calldata
-          // simulated clean moments later with nothing else changed. Retry
-          // the SAME sponsored path once before giving up on it — a plain
-          // fallback can't actually save a gasless trade anyway, since a
-          // gasless-mode wallet holds no native gas to pay for one by
-          // design. A hard bundler rejection (invalid fields/an AA-code)
-          // means real incompatibility, not drift, so that skips straight
-          // to the fallback below instead of wasting a retry on it.
-          const isTransientRevert = /this transaction would revert/i.test(message);
-          if (isTransientRevert) {
-            console.warn('[smartAccount] Sponsored UserOperation reverted in simulation, retrying once before falling back:', message);
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            try {
-              hash = await sendRelayEvmStepSponsored(evmClients.sponsoredClient, evmClients.publicClient, item, originToken, originAmount);
-            } catch {
-              // The same calldata reverted twice a moment apart — the pool
-              // moved and STAYED moved, not just a momentary blip the first
-              // retry could ride out. Nothing has broadcast anywhere yet
-              // (txHashes is still empty at this point, since this is
-              // necessarily the first pendingItem — every earlier one would
-              // already have pushed its hash), so it's still safe to throw
-              // this quote away and get a fresh one with an up-to-date
-              // minimum-output bound, rather than downgrade to a plain
-              // transaction the wallet holds no gas to pay for by design.
-              // options.requote is cleared on the recursive call so a route
-              // that keeps reverting can re-quote at most once, not forever.
-              if (txHashes.length === 0 && options?.requote) {
-                console.warn('[smartAccount] Still reverting after retry — fetching a fresh quote and starting over.');
-                const freshQuote = await options.requote();
-                return executeRelayQuote(freshQuote, session, onStep, {...options, requote: undefined});
-              }
-              hash = await fallBackToPlainTransaction(evmClients.walletClient!, evmClients.publicClient, item, originToken, originAmount);
-            }
-          } else {
-            console.warn('[smartAccount] Sponsored UserOperation rejected before broadcast, falling back to a plain transaction:', message);
-            hash = await fallBackToPlainTransaction(evmClients.walletClient!, evmClients.publicClient, item, originToken, originAmount);
-          }
+          // Relay rejected before accepting/broadcasting the request.
+          // Only now do we fall back to a normal user-signed transaction.
+          // No second gasless provider is ever contacted.
+          console.warn('[relayGasless] Relay gasless execution rejected before broadcast; falling back to normal transaction:', relayMessage);
+          hash = await sendRelayEvmStep(evmClients.walletClient, evmClients.publicClient, item, originToken, originAmount);
         }
       } else {
         hash = await sendRelayEvmStep(evmClients.walletClient!, evmClients.publicClient, item, originToken, originAmount);
       }
+
       txHashes.push(hash);
     }
   } catch (err) {
