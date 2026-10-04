@@ -26,7 +26,7 @@ import {
   RepeatIcon,
   UploadIcon,
 } from '../components/icons';
-import {CHAIN_LABEL, NATIVE_SYMBOL, NEAR_ENABLED, NEAR_LABEL, assetDecimalsForChain, currencyAddress, type ChainKey} from '../core/chainData';
+import {CHAIN_LABEL, MAINNET_CHAIN_IDS, NATIVE_SYMBOL, NEAR_ENABLED, NEAR_LABEL, assetDecimalsForChain, currencyAddress, type ChainKey} from '../core/chainData';
 import {fetchCashPortfolio, spendableCash, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
 import {fetchWalletNativeBalance, fetchWalletSolanaBalance} from '../wallet/walletRpc';
 import {fetchWalletPrices} from '../core/walletPrices';
@@ -337,7 +337,7 @@ export function ProfileScreen({
       return;
     }
     let cancelled = false;
-    const chains = CASH_SUPPORTED_CHAINS.filter(chain => chain !== 'arc');
+    const chains = (Object.keys(MAINNET_CHAIN_IDS) as ChainKey[]).filter(chain => chain !== 'arc');
     Promise.all([
       fetchWalletPrices().catch(() => ({} as Record<string, number>)),
       Promise.allSettled(chains.map(async chainKey => {
@@ -353,7 +353,6 @@ export function ProfileScreen({
         if (result.status !== 'fulfilled' || result.value.balance <= 0) continue;
         const {chainKey, balance} = result.value;
         const symbol = NATIVE_SYMBOL[chainKey];
-        const decimals = assetDecimalsForChain(chainKey, symbol) ?? 18;
         const address = currencyAddress(chainKey, symbol);
         const price = prices[symbol];
         native.push({
@@ -367,7 +366,6 @@ export function ProfileScreen({
           lastTradeAt: Date.now(),
           valueUsd: typeof price === 'number' && Number.isFinite(price) ? balance * price : null,
         });
-        void decimals;
       }
       setNativePositions(native);
     });
