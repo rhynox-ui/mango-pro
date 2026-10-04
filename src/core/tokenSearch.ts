@@ -46,11 +46,27 @@ export function fmtCompactUsd(n: number | null): string | null {
  * results disappearing is a normal, recoverable UI state, not an error
  * screen.
  */
-export async function searchTokens(query: string): Promise<TokenSearchResult[]> {
-  const trimmed = query.trim();
-  if (!trimmed) return [];
+const MANGO_API_AVE_XLAYER_SEARCH = 'https://mangoprotocol.site/api/v1/search/ave-xlayer';
+
+async function searchAveXlayer(query: string): Promise<TokenSearchResult[]> {
   try {
-    const response = await fetch(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(trimmed)}`);
+    const response = await fetch(`${MANGO_API_AVE_XLAYER_SEARCH}?q=${encodeURIComponent(query)}`);
+    if (!response.ok) return [];
+    const body = (await response.json()) as {data?: TokenSearchResult[]};
+    const data = Array.isArray(body?.data) ? body.data : [];
+    return data.filter(item =>
+      item?.chainKey === 'xlayer' &&
+      typeof item?.tokenAddress === 'string' &&
+      typeof item?.symbol === 'string',
+    );
+  } catch {
+    return [];
+  }
+}
+
+async function searchDexScreener(query: string): Promise<TokenSearchResult[]> {
+  try {
+    const response = await fetch(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(query)}`);
     if (!response.ok) return [];
     const body = (await response.json()) as {pairs?: DexScreenerPair[]};
     const pairs = Array.isArray(body?.pairs) ? body.pairs : [];
@@ -63,23 +79,13 @@ export async function searchTokens(query: string): Promise<TokenSearchResult[]> 
 
       const liquidityUsd = Number(pair?.liquidity?.usd);
       const rankedLiquidity = Number.isFinite(liquidityUsd) ? liquidityUsd : 0;
-
       const dedupeKey = `${chainKey}:${tokenAddress.toLowerCase()}`;
       const existing = bestByKey.get(dedupeKey);
 
-      // Same field discoveryFeed.ts's own hydrateBoostedToken already
-      // reads off a DexScreener pair — not part of DexScreenerPair's
-      // typed shape (only Trending's own boost-hydration path declared
-      // it before), so read the same way: an inline cast, never fabricated.
       const info = (pair as {info?: {imageUrl?: string}})?.info;
       const imageUrl = typeof info?.imageUrl === 'string' ? info.imageUrl : null;
 
       if (existing && existing.liquidityUsd >= rankedLiquidity) {
-        // This pair loses on liquidity so it won't supply price/mcap
-        // data, but a token can have several pools and DexScreener
-        // often attaches image metadata to only one of them — never
-        // drop a real image just because a different pool for the same
-        // token happens to have more liquidity.
         if (!existing.imageUrl && imageUrl) {
           bestByKey.set(dedupeKey, {...existing, imageUrl});
         }
@@ -107,4 +113,35 @@ export async function searchTokens(query: string): Promise<TokenSearchResult[]> 
   } catch {
     return [];
   }
+}
+
+/**
+ * Searches DexScreener exactly as before, then augments the result set with
+ * AVE's X Layer discovery feed. AVE is deliberately discovery-only here:
+ * selecting a result still enters the existing trade screen and its existing
+ * DexScreener chart resolver, so the chart/UI path is not replaced.
+ */
+export async function searchTokens(query: string): Promise<TokenSearchResult[]> {
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+
+  const [dexResults, aveXlayerResults] = await Promise.all([
+    searchDexScreener(trimmed),
+    searchAveXlayer(trimmed),
+  ]);
+
+  const merged = new Map<string, TokenSearchResult>();
+  for (const result of dexResults) {
+    merged.set(`${result.chainKey}:${result.tokenAddress.toLowerCase()}`, result);
+  }
+  for (const result of aveXlayerResults) {
+    const key = `${result.chainKey}:${result.tokenAddress.toLowerCase()}`;
+    const existing = merged.get(key);
+    // AVE is the dedicated X Layer discovery source. If DexScreener already
+    // knows the same token, keep DexScreener's row because it preserves the
+    // current result semantics; otherwise add AVE's richer X Layer discovery.
+    if (!existing) merged.set(key, result);
+  }
+
+  return Array.from(merged.values()).sort((a, b) => b.liquidityUsd - a.liquidityUsd);
 }
