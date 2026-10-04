@@ -18,6 +18,8 @@ import {isValidRecipientAddress} from '../src/wallet/sendUsdc.ts';
 let n = 0;
 const SEND_USDC_SOURCE = await import('node:fs/promises').then(fs => fs.readFile(new URL('../src/wallet/sendUsdc.ts', import.meta.url), 'utf8'));
 
+
+
 check('withdrawal execution has no stale Pimlico/permissionless gas endpoint', () => {
   assert.equal(/pimlico|getUserOperationGasPrice|permissionless|api\\/v1\\/pro\\/pimlico/i.test(SEND_USDC_SOURCE), false);
 });
