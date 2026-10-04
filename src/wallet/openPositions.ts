@@ -35,7 +35,7 @@ export type OpenPosition = {
   entryMarketCapUsd: number | null;
 };
 
-export type OpenPositionWithValue = OpenPosition & {valueUsd: number | null};
+export type OpenPositionWithValue = OpenPosition & {valueUsd: number | null; currentMarketCapUsd: number | null};
 
 /** A token that was bought and is now fully sold back out — net amount at/near zero. Shows in the Positions "Closed" tab, one row per token exited, not one row per trade. */
 export type ClosedPosition = {
@@ -176,7 +176,7 @@ export async function withLiveValues(positions: OpenPosition[]): Promise<OpenPos
     positions.map(async position => {
       const pair = await resolveDexScreenerPair({chainKey: position.chainKey, tokenAddress: position.tokenAddress});
       const valueUsd = pair?.priceUsd != null ? pair.priceUsd * position.amountHeld : null;
-      return {...position, valueUsd};
+      return {...position, valueUsd, currentMarketCapUsd: pair?.marketCapUsd ?? null};
     }),
   );
 }
