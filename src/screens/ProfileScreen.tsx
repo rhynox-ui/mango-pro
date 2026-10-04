@@ -926,7 +926,7 @@ export function ProfileScreen({
               activeOpacity={0.6}
               disabled={!onOpenToken}
               onPress={() => onOpenToken?.({chainKey: position.chainKey, address: position.tokenAddress, symbol: position.symbol, imageUrl: position.imageUrl})}>
-              <AssetIcon symbol={position.symbol} imageUrl={position.imageUrl} size={30} />
+              <AssetIcon symbol={position.symbol} imageUrl={position.imageUrl} chainKey={position.chainKey} address={position.tokenAddress} size={30} />
               <View style={styles.closedTradeMain}>
                 <Text style={styles.closedTradeTitle} numberOfLines={1}>
                   {position.symbol}
