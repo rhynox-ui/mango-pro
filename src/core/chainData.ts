@@ -114,7 +114,7 @@ export const TOKEN_ADDRESSES: Record<string, Partial<Record<ChainKey, string>>> 
     hyperevm: '0xb88339cb7199b77e23db6e890353e22632ba630f',
     ink: '0x2d270e6886d130d724215a266106e6832161eaed',
     abstract: '0x84A71ccD554Cc1b02749b35d22F684CC8ec987e1',
-    xlayer: '0x74b7F16337b8972027F6196A17a631aC6dE26d22',
+    xlayer: '0xB6CEceAB302E2E4948951eE7843FC24E92933061',
     arc: ARC_USDC,
   },
   USDT: {

@@ -121,6 +121,15 @@ export const UNISWAP_V3_ADDRESSES: Record<number, UniswapV3ChainAddresses> = {
   // ARC_USDC), so the wrap/unwrap paths are never taken on Arc; pointing
   // wrappedNative at the same ERC-20 keeps a stray native quote on the
   // right pools and makes a stray native execution fail in simulation.
+  196: {
+    factory: '0x4B2ab38DBF28D31D467aA8993f6c2585981D6804',
+    quoter: '0xd1b797d92d87b688193a2b976efc8d577d204343',
+    swapRouter02: '0x4f0c28f5926afda16bf2506d5d9e57ea190f9bca',
+    wrappedNative: '0xe538905cf8410324e03A5A23C1c177a474D59b2b',
+    v4PoolManager: '0x360e68faccca8ca495c1b759fd9eee466db9fb32',
+    v4Quoter: '0x8928074ca1b241d8ec02815881c1af11e8bc5219',
+    v4StateView: '0x76fd297e2d437cd7f76d50f01afe6160f86e9990',
+  },
   5042: {
     factory: '0xf0db7b58379503491d857db50ac9ece64c653918',
     quoter: '0x7dfd4f31be6814d2906bde155c3e1b146eac1468',
@@ -152,6 +161,31 @@ const QUOTER_ABI = [
       {name: 'sqrtPriceLimitX96', type: 'uint160'},
     ],
     outputs: [{name: 'amountOut', type: 'uint256'}],
+  },
+] as const;
+
+// X Layer publishes Uniswap V3 QuoterV2, whose quoteExactInputSingle
+// takes the packed parameter tuple and returns the richer V2 result tuple.
+const QUOTER_V2_ABI = [
+  {
+    type: 'function',
+    name: 'quoteExactInputSingle',
+    stateMutability: 'nonpayable',
+    inputs: [{
+      name: 'params', type: 'tuple', components: [
+        {name: 'tokenIn', type: 'address'},
+        {name: 'tokenOut', type: 'address'},
+        {name: 'amountIn', type: 'uint256'},
+        {name: 'fee', type: 'uint24'},
+        {name: 'sqrtPriceLimitX96', type: 'uint160'},
+      ],
+    }],
+    outputs: [
+      {name: 'amountOut', type: 'uint256'},
+      {name: 'sqrtPriceX96After', type: 'uint160'},
+      {name: 'initializedTicksCrossed', type: 'uint32'},
+      {name: 'gasEstimate', type: 'uint256'},
+    ],
   },
 ] as const;
 
@@ -231,8 +265,16 @@ export async function quoteUniswapV3({chainId, tokenIn, tokenOut, amountIn}: {ch
   const attempts = await Promise.allSettled(
     FEE_TIERS.map(fee =>
       publicClient
-        .simulateContract({address: addresses.quoter, abi: QUOTER_ABI, functionName: 'quoteExactInputSingle', args: [poolTokenIn, poolTokenOut, fee, amountIn, 0n]})
-        .then(({result}) => ({fee, amountOut: result})),
+        .simulateContract({
+          address: addresses.quoter,
+          abi: chainId === 196 ? QUOTER_V2_ABI : QUOTER_ABI,
+          functionName: 'quoteExactInputSingle',
+          args:
+            chainId === 196
+              ? [{tokenIn: poolTokenIn, tokenOut: poolTokenOut, amountIn, fee, sqrtPriceLimitX96: 0n}]
+              : [poolTokenIn, poolTokenOut, fee, amountIn, 0n],
+        })
+        .then(({result}) => ({fee, amountOut: typeof result === 'bigint' ? result : result[0]})),
     ),
   );
 

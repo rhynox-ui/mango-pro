@@ -47,6 +47,8 @@ export const UNIVERSAL_ROUTER_ADDRESSES: Record<number, `0x${string}`> = {
   8453: '0xfdf682f51fe81aa4898f0ae2163d8a55c127fbc7',
   56: '0x8B844f885672f333Bc0042cB669255f93a4C1E6b',
   43114: '0x8B844f885672f333Bc0042cB669255f93a4C1E6b',
+  // X Layer — Uniswap V4 Universal Router 2.1.2.
+  196: '0x1cd182C94fcF42277B80DBB9060F88024809E61E',
   // Robinhood — the whole reason this file exists, same as uniswapV3.ts.
   4663: '0x8876789976decbfcbbbe364623c63652db8c0904',
   // Arc — V2.1.1, from @uniswap/universal-router-sdk 5.14.0 (chain 5042).
