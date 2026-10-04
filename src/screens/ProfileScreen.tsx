@@ -427,7 +427,7 @@ export function ProfileScreen({
       address: position.tokenAddress,
       symbol: position.symbol,
       name: position.symbol,
-      decimals: assetDecimalsForChain(position.chainKey, position.symbol) ?? 18,
+      decimals: assetDecimalsForChain(position.chainKey as ChainKey, position.symbol) ?? 18,
       amount: position.amountHeld,
       valueUsd: position.valueUsd,
       priceUsd: position.valueUsd != null && position.amountHeld > 0 ? position.valueUsd / position.amountHeld : null,
