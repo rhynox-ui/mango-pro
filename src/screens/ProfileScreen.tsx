@@ -977,9 +977,9 @@ export function ProfileScreen({
                 <AddressQRCode
                   value={
                     depositChain === 'near'
-                      ? `near:${session?.near?.address ?? ''}`
+                      ? session?.near?.address ?? ''
                       : depositChain === 'solana'
-                      ? `solana:${session?.solana.address ?? ''}`
+                      ? session?.solana.address ?? ''
                       : session?.evm.address ?? ''
                   }
                   size={210}
