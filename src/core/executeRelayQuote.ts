@@ -1127,7 +1127,12 @@ export async function executeRelayQuote(
   // secondary bundler/paymaster: if Relay rejects before broadcast, we
   // fall back to the normal signed transaction so the failure is explicit
   // and never sends the quote through another paid provider.
-  const useGasless = Boolean(options?.useGaslessTrading);
+  // Mango Pro is a FOMO trading wallet: a Buy/Sell paid with USDC must never
+  // silently turn into a native-gas transaction. Relay sponsorship is mandatory
+  // for EVM execution. The option is retained for API compatibility, but it is
+  // intentionally ignored here so a stale/disabled local preference can never
+  // produce the ETH/BNB/MATIC "you need native gas" failure path.
+  const useGasless = true;
   const txHashes: string[] = [];
   let evmClients: {
     walletClient: ReturnType<typeof createWalletClient> | null;
@@ -1163,14 +1168,11 @@ export async function executeRelayQuote(
 
       let hash: string;
       if (isGoogleSession) {
-        hash = await sendRelayEvmStepViaParticle(
-          session.evm.address as `0x${string}`,
-          evmClients.publicClient,
-          chainId,
-          item,
-          originToken,
-          originAmount,
-        );
+        // Particle's current EVM signing seam exposes broadcast transactions,
+        // not the EIP-7702 authorization + EIP-712 Calibur signature needed by
+        // Mango's Relay-only sponsor path. Do not fall back to a user-paid
+        // native-gas transaction here: that would violate Mango's core model.
+        throw new Error('Mango requires Relay gas sponsorship for EVM trading. Google/Particle signing cannot use the Relay gasless EIP-7702 path yet.');
       } else if (useGasless && evmClients.walletClient) {
         try {
           const relayResult = await sendEvmCallsViaRelayGasless({
@@ -1191,11 +1193,12 @@ export async function executeRelayQuote(
           const relayMessage = relayErr instanceof Error ? relayErr.message : String(relayErr);
           if (!isPreBroadcastRelayError(relayMessage)) throw relayErr;
 
-          // Relay rejected before accepting/broadcasting the request.
-          // Only now do we fall back to a normal user-signed transaction.
-          // No second gasless provider is ever contacted.
-          console.warn('[relayGasless] Relay gasless execution rejected before broadcast; falling back to normal transaction:', relayMessage);
-          hash = await sendRelayEvmStep(evmClients.walletClient, evmClients.publicClient, item, originToken, originAmount);
+          // NEVER fall back to a user-paid native-gas transaction. Mango is
+          // USDC-first and cross-chain: if Relay cannot sponsor this EVM leg,
+          // continuing would turn a gasless FOMO buy into "bring ETH/BNB/etc"
+          // and can also create a partial multi-leg trade. Stop before this
+          // item is broadcast and surface the real Relay failure.
+          throw new Error('Relay gasless execution is unavailable for this EVM leg: ' + relayMessage);
         }
       } else {
         hash = await sendRelayEvmStep(evmClients.walletClient!, evmClients.publicClient, item, originToken, originAmount);
