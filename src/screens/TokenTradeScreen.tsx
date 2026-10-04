@@ -475,12 +475,13 @@ export function TokenTradeScreen({
     !nearToken && (CASH_SUPPORTED_CHAINS as readonly string[]).includes(token.chainKey)
       ? (token.chainKey as ChainKey)
       : null;
-  const destinationSpendableForRouting = routingTokenChain
-    ? spendableCash(
-        routingTokenChain,
-        cashPortfolio?.results.find(r => r.status === 'ok' && r.chainKey === routingTokenChain)?.balance ?? 0,
-      )
-    : 0;
+  const destinationCashForRouting = routingTokenChain
+    ? cashPortfolio?.results.find(r => r.status === 'ok' && r.chainKey === routingTokenChain)
+    : undefined;
+  const destinationSpendableForRouting =
+    routingTokenChain && destinationCashForRouting?.status === 'ok'
+      ? spendableCash(routingTokenChain, destinationCashForRouting.balance)
+      : 0;
   // Never force a destination-chain buy through the multi-source planner.
   // If Solana/Base/etc. already has enough USDC for the whole amount, use
   // the normal single quote so the chain's same-chain fallback stack remains
