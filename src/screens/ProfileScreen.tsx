@@ -72,6 +72,14 @@ function formatTokenAmount(n: number): string {
   return n.toFixed(decimals).replace(/\.?0+$/, '');
 }
 
+function formatEntryPriceUsd(n: number | null): string {
+  if (n == null || !Number.isFinite(n) || n <= 0) return '—';
+  if (n >= 1) return `${n.toLocaleString('en-US', {maximumFractionDigits: 4})}`;
+  if (n >= 0.01) return `${n.toFixed(4)}`;
+  if (n >= 0.000001) return `${n.toFixed(8).replace(/0+$/, '')}`;
+  return `${n.toExponential(2)}`;
+}
+
 // Every cash chain except Solana shares the SAME EVM address — this is
 // what "deposit on whichever chain works for you" actually reduces to
 // for a user: one address, valid everywhere in this list, plus a
@@ -880,13 +888,27 @@ export function ProfileScreen({
                   </Text>
                   {(() => {
                     const position = positionMetricsByKey.get(`${asset.chainKey}:${asset.chainKey === 'solana' ? asset.address : asset.address.toLowerCase()}`);
-                    if (!position?.entryMarketCapUsd || position.entryMarketCapUsd <= 0) return null;
-                    const currentMc = position.currentMarketCapUsd;
-                    const returnPct = currentMc != null && currentMc > 0 ? ((currentMc / position.entryMarketCapUsd) - 1) * 100 : null;
+                    if (!position) return null;
+                    // Older persisted buys did not store entry market cap, but they did store
+                    // payAmount + receivedAmountFormatted. openPositions.ts backfills the
+                    // weighted entry token price from those durable fields, so historical
+                    // positions get the same return indicator instead of waiting for a new buy.
+                    const currentPriceUsd = position.valueUsd != null && position.amountHeld > 0
+                      ? position.valueUsd / position.amountHeld
+                      : null;
+                    const returnPct = position.entryPriceUsd != null && position.entryPriceUsd > 0 && currentPriceUsd != null && currentPriceUsd > 0
+                      ? ((currentPriceUsd / position.entryPriceUsd) - 1) * 100
+                      : null;
                     const positive = (returnPct ?? 0) >= 0;
+                    const entryLabel = position.entryMarketCapUsd && position.entryMarketCapUsd > 0
+                      ? `Entry MC ${formatMarketCapCompact(position.entryMarketCapUsd)}`
+                      : position.entryPriceUsd && position.entryPriceUsd > 0
+                        ? `Entry ${formatEntryPriceUsd(position.entryPriceUsd)}`
+                        : null;
+                    if (!entryLabel && returnPct == null) return null;
                     return (
                       <View style={styles.positionPerformanceRow}>
-                        <Text style={styles.positionEntryText}>Entry MC {formatMarketCapCompact(position.entryMarketCapUsd)}</Text>
+                        {entryLabel ? <Text style={styles.positionEntryText}>{entryLabel}</Text> : <View />}
                         {returnPct != null && (
                           <Text style={[styles.positionReturnText, {color: positive ? colors.gain : colors.danger}]}>
                             {positive ? '▲' : '▼'} {Math.abs(returnPct).toFixed(2)}%
