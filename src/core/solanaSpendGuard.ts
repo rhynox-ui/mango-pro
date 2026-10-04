@@ -29,7 +29,6 @@ export const SOLANA_NATIVE_SPEND = 'SOL';
 /** Network fees plus rent for a handful of new token accounts (~0.002 SOL each). */
 export const SOLANA_OVERHEAD_LAMPORTS = 30_000_000n; // 0.03 SOL
 /** simulateTransaction returns at most this many accounts in one call (the wallet itself + its token accounts). */
-export const MAX_CHECKED_ACCOUNTS = 100;
 const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 
@@ -52,6 +51,9 @@ export type SolanaSpendIntent = {
   maxSpend: bigint;
   /** Further spends Mango itself adds (sponsorship cost recovery in USDC). */
   extra?: {mint: string; units: bigint}[];
+  expectedOutputMint?: string;
+  expectedOutputMinimum?: bigint;
+  expectedOutputAccounts?: string[];
 };
 
 type Key = {toBase58(): string};
@@ -105,6 +107,9 @@ export async function assertSolanaSpendWithinIntent(
     tokenProgramIds,
     encodeBase58,
     overheadLamports = SOLANA_OVERHEAD_LAMPORTS,
+    expectedOutputMint,
+    expectedOutputMinimum = 0n,
+    expectedOutputAccounts = [],
   }: {owner: unknown; ownerAddress: string; intent: SolanaSpendIntent; tokenProgramIds: [unknown, unknown]; encodeBase58: (b: Uint8Array) => string; overheadLamports?: bigint},
 ): Promise<void> {
   const spendsSol = intent.spend === SOLANA_NATIVE_SPEND;
@@ -128,12 +133,12 @@ export async function assertSolanaSpendWithinIntent(
   const tracked = held
     .filter(h => h.amount > 0n)
     .sort((a, b) => Number(allowance(b.mint) > 0n) - Number(allowance(a.mint) > 0n))
-    .slice(0, MAX_CHECKED_ACCOUNTS - 1);
+    .filter(h => h.amount > 0n);
 
   const sim = await connection.simulateTransaction(transaction, {
     sigVerify: false,
     replaceRecentBlockhash: true,
-    accounts: {encoding: 'base64', addresses: [ownerAddress, ...tracked.map(t => t.address)]},
+    accounts: {encoding: 'base64', addresses: [ownerAddress, ...tracked.map(t => t.address), ...expectedOutputAccounts.filter(a => !tracked.some(t => eq(t.address, a)))]},
   });
   if (sim.value.err) {
     throw new SolanaSpendGuardError(`This transaction couldn't be verified before signing — it fails in simulation (${JSON.stringify(sim.value.err)}). Nothing was sent.`, {
@@ -142,7 +147,7 @@ export async function assertSolanaSpendWithinIntent(
     });
   }
   const post = sim.value.accounts;
-  if (!Array.isArray(post) || post.length !== tracked.length + 1) {
+  if (!Array.isArray(post) || post.length !== tracked.length + 1 + expectedOutputAccounts.filter(a => !tracked.some(t => eq(t.address, a))).length) {
     throw new SolanaSpendGuardError("This transaction couldn't be verified before signing (the simulation didn't return the wallet's balances). Nothing was sent.");
   }
 
@@ -172,6 +177,23 @@ export async function assertSolanaSpendWithinIntent(
           : 'This transaction would spend more of your token than the amount you entered. It was stopped before signing; nothing was sent.',
       );
     }
+  }
+
+  if (expectedOutputMint && expectedOutputMinimum && expectedOutputMinimum > 0n) {
+    let received = 0n;
+    const extraOutputAccounts = expectedOutputAccounts.filter(a => !tracked.some(t => eq(t.address, a)));
+    for (let i = 0; i < tracked.length; i++) {
+      if (!eq(tracked[i].mint, expectedOutputMint)) continue;
+      const raw = post[i + 1]?.data?.[0];
+      const parsed = typeof raw === 'string' ? parseTokenAccount(Uint8Array.from(Buffer.from(raw, 'base64')), encodeBase58) : null;
+      if (parsed && parsed.owner === ownerAddress && eq(parsed.mint, expectedOutputMint) && parsed.amount > tracked[i].amount) received += parsed.amount - tracked[i].amount;
+    }
+    for (let i = 0; i < extraOutputAccounts.length; i++) {
+      const raw = post[tracked.length + 1 + i]?.data?.[0];
+      const parsed = typeof raw === 'string' ? parseTokenAccount(Uint8Array.from(Buffer.from(raw, 'base64')), encodeBase58) : null;
+      if (parsed && parsed.owner === ownerAddress && eq(parsed.mint, expectedOutputMint)) received += parsed.amount;
+    }
+    if (received < expectedOutputMinimum) throw new SolanaSpendGuardError('This transaction did not deliver the expected output token to your wallet. It was stopped before signing; nothing was sent and nothing was spent.');
   }
 
   const postLamports = BigInt(post[0]?.lamports ?? 0);
