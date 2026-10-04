@@ -17,7 +17,7 @@ let checks = 0;
 const ok = name => console.log('ok', ++checks, `- ${name}`);
 const USER = 'mango-test.near';
 const session = {near: {address: USER}};
-const MEME = 'rust-334.meme-cooking.near';
+const MEME = 'rust-334.nearlytrade.near';
 const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64');
 const fc = (method_name, args, deposit = '0', gas = 30_000_000_000_000) => ({FunctionCall: {method_name, args: b64(args), gas, deposit}});
 const tx = (receiver_id, ...actions) => ({NearTransaction: {receiver_id, actions}});
