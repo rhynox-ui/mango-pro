@@ -21,7 +21,7 @@ const SEND_USDC_SOURCE = await import('node:fs/promises').then(fs => fs.readFile
 
 
 check('withdrawal execution has no stale Pimlico/permissionless gas endpoint', () => {
-  assert.equal(/pimlico|getUserOperationGasPrice|permissionless|api\\/v1\\/pro\\/pimlico/i.test(SEND_USDC_SOURCE), false);
+  assert.equal(/pimlico|getUserOperationGasPrice|permissionless/i.test(SEND_USDC_SOURCE), false);
 });
 
 function check(label, fn) {
