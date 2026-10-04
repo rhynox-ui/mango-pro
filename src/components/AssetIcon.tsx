@@ -46,10 +46,20 @@ async function resolveTokenLogo(chainKey: TradeChain, address: string): Promise<
       if (response.ok) {
         const body = await response.json() as {pairs?: Array<{chainId?: string; liquidity?: {usd?: number}; info?: {imageUrl?: string}}>};
         const dexChain = dexScreenerChainForChain(chainKey);
-        const pairs = (body.pairs ?? []).filter(p => p.chainId === dexChain && typeof p?.info?.imageUrl === 'string' && p.info.imageUrl);
-        pairs.sort((a, b) => Number(b.liquidity?.usd ?? 0) - Number(a.liquidity?.usd ?? 0));
-        const image = pairs[0]?.info?.imageUrl;
-        if (image) return image;
+        const pairs = (body.pairs ?? []).filter(p => p.chainId === dexChain);
+        let bestImage: string | null = null;
+        let bestLiquidity = -1;
+        for (const pair of pairs) {
+          const candidate = typeof pair?.info?.imageUrl === 'string' && pair.info.imageUrl ? pair.info.imageUrl : null;
+          if (!candidate) continue;
+          const liquidity = Number(pair?.liquidity?.usd ?? 0);
+          const rankedLiquidity = Number.isFinite(liquidity) ? liquidity : 0;
+          if (!bestImage || rankedLiquidity > bestLiquidity) {
+            bestImage = candidate;
+            bestLiquidity = rankedLiquidity;
+          }
+        }
+        if (bestImage) return bestImage;
       }
     } catch {}
     const trustChain = trustWalletChain(chainKey);
