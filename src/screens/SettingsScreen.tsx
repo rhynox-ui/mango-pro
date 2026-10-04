@@ -179,14 +179,6 @@ export function SettingsScreen({
     ...(session?.authMethod === 'google'
       ? [{key: 'solana-devnet-test', label: 'Solana signing test (devnet)', Icon: RepeatIcon, onPress: () => setShowSolanaDevnetTest(true)}]
       : []),
-    // Diagnostic only — proves the EIP-7702/Pimlico gasless-trading path
-    // (smartAccount.ts) on Base Sepolia before it's trusted with real
-    // trades. Seed-phrase sessions only for now: the test signs a real
-    // 7702 authorization, which smartAccount.ts doesn't yet support for
-    // Google/Particle sessions. Same not-__DEV__-gated reasoning as the
-    // Solana test row above.
-    ...(session && session.evm.privateKey.length > 0
-        : []),
     {key: 'legal', label: t('settings.legalAndPrivacy'), Icon: ScaleIcon, onPress: () => Linking.openURL(PRIVACY_POLICY_URL)},
     // Real export of this account's own trade history as CSV — no
     // fabricated cost-basis/gain-loss math (this app tracks neither), so
