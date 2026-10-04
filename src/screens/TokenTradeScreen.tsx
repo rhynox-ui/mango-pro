@@ -43,12 +43,12 @@ import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {ActivityIndicator, Image, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import Svg, {Circle, Path} from 'react-native-svg';
 import {formatUnits, parseUnits} from 'viem';
-import {getCrossChain0xQuote, executeCrossChain0xQuote, type CrossChain0xQuote} from '../core/crossChain0x.ts';
+import {getCrossChain0xQuote, executeCrossChain0xQuote, crossChainQuoteSummary, type CrossChain0xQuote} from '../core/crossChain0x.ts';
 import {TokenChartPanel} from '../components/TokenChartPanel';
 import {AssetIcon} from '../components/AssetIcon';
 import {ChevronLeftIcon} from '../components/icons';
 import {NetworkIcon} from '../wallet/NetworkIcon';
-import {CHAIN_LABEL, NATIVE_SYMBOL, assetDecimalsForChain, currencyAddress, tradeChainLabel, type ChainKey, type TradeChain} from '../core/chainData';
+import {CHAIN_LABEL, MAINNET_CHAIN_IDS, NATIVE_SYMBOL, assetDecimalsForChain, currencyAddress, tradeChainLabel, type ChainKey, type TradeChain} from '../core/chainData';
 import {DEV_FEE_PCT} from '../core/fees';
 import {resolveDexScreenerPair} from '../core/dexScreener';
 import {NEAR_USDC, NEAR_USDC_DECIMALS} from '../core/chainData';
@@ -665,7 +665,9 @@ const needsUnifiedRouting =
             contributor: typeof contributors[number];
             legUsd: number;
             legParams: GetRelayQuoteParams;
-            legQuote: RelayQuote;
+            legQuote: RelayQuote | CrossChain0xQuote;
+            provider: 'relay' | '0x';
+            sellAmount: string;
             impact: number | null;
             outputScore: number;
             totalFeeUsd: number;
@@ -1193,10 +1195,12 @@ const needsUnifiedRouting =
           // the same token/chain, so their raw output amounts can be summed
           // exactly before formatting.
           const totalReceivedRaw = multiSourcePlan.reduce((sum, leg) => {
-            const raw = leg.quote?.details?.currencyOut?.amount;
+            const raw = leg.provider === 'relay'
+              ? leg.quote?.details?.currencyOut?.amount
+              : leg.quote?.quotes?.[0]?.buyAmount;
             return sum + (typeof raw === 'string' && /^\\d+$/.test(raw) ? BigInt(raw) : 0n);
           }, 0n);
-          const outputDecimals = multiSourcePlan[0]?.quote?.details?.currencyOut?.currency?.decimals ?? 18;
+          const outputDecimals = tokenDecimals ?? 18;
           receivedAmountFormatted = totalReceivedRaw > 0n
             ? formatUnits(totalReceivedRaw, outputDecimals)
             : null;
