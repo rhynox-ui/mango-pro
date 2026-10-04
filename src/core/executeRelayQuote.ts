@@ -37,7 +37,7 @@ import {assertSolanaTransactionMatchesIntent} from './solanaTxIntent.ts';
 import {SOLANA_NATIVE_SPEND, assertSolanaSpendWithinIntentWeb3, isInsufficientSolSimulation, type SolanaSpendIntent} from './solanaSpendGuard.ts';
 import {intentForQuote, type RelayQuote, type RelayTransactionStepItem} from './relayQuote.ts';
 import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, ARC_USDC, MAINNET_CHAIN_IDS} from './chainData.ts';
-import {sendEvmCallsViaRelayGasless} from './relayGaslessEvm.ts';
+import {preflightRelayGaslessEvm, sendEvmCallsViaRelayGasless} from './relayGaslessEvm.ts';
 import {fetchWalletPrices} from './walletPrices.ts';
 import type {DerivedAccounts} from '../wallet/keys';
 
@@ -801,6 +801,46 @@ export function getPartialTxHashes(err: unknown): string[] {
   return Array.isArray(value) ? value.filter((h): h is string => typeof h === 'string') : [];
 }
 
+/**
+ * Validates a Relay quote without signing or broadcasting anything.
+ * Multi-source Fomo buys call this for EVERY leg before the first leg is
+ * allowed to broadcast. That turns a per-leg safety check into a whole
+ * trade preflight: one unsupported chain, unsafe Solana cleanup instruction,
+ * or unavailable Relay gasless deployment cannot appear only after an
+ * earlier source leg has already landed on-chain.
+ */
+export async function preflightRelayQuoteExecution(quote: RelayQuote, session: DerivedAccounts): Promise<void> {
+  const tagged = intentForQuote(quote);
+  if (!tagged) throw new Error('This quote has no recorded intent to check against — refusing to sign.');
+  if (Date.now() - tagged.quotedAt > RELAY_QUOTE_MAX_AGE_MS) throw new Error('This quote is too old to sign safely — get a fresh quote and try again.');
+
+  const pendingItems: RelayTransactionStepItem[] = [];
+  for (const step of quote.steps ?? []) {
+    if (step.kind !== 'transaction') {
+      throw new Error(`Unsupported Relay step kind "${step.kind}" — only transaction steps are handled by this app.`);
+    }
+    for (const item of step.items) if (item.status !== 'complete') pendingItems.push(item);
+  }
+  assertQuoteSafeToSign(quote, tagged.intent, pendingItems);
+
+  if (session.authMethod === 'google' && pendingItems.some(item => !isSolanaShaped(item))) {
+    throw new Error('Relay gasless EVM trading is not available for this Google/Particle wallet on this route yet.');
+  }
+
+  for (const item of pendingItems) {
+    if (isSolanaShaped(item)) continue;
+    const chainId = item.data?.chainId;
+    if (!chainId) throw new Error('The routing service returned a transaction with no chain.');
+    const viemChain = viemChainForChainId(chainId);
+    if (!viemChain) throw new Error(`No EVM chain configured for chain id ${chainId}.`);
+    const owner = privateKeyToAccount(session.evm.privateKey as `0x${string}`);
+    await preflightRelayGaslessEvm({
+      chain: viemChain,
+      fromAddress: owner.address,
+      privateKey: session.evm.privateKey as `0x${string}`,
+    });
+  }
+}
 /**
  * Executes a quote from getRelayQuote(): checks the pre-sign firewall
  * against every still-pending item BEFORE signing the first one (so a
