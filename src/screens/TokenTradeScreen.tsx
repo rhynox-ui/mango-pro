@@ -464,19 +464,27 @@ export function TokenTradeScreen({
   // available, even if one chain alone can cover the trade, so Relay route
   // quality is compared instead of assuming the largest balance is best.
   const unifiedCashSources = cashPortfolio?.results.filter(r => r.status === 'ok' && spendableCash(r.chainKey, r.balance) > 0).length ?? 0;
-// Keep the existing single-quote path when the only spendable cash is
-// already on the token's destination chain. That path owns the complete
-// same-chain fallback stack (Uniswap/Sushi/Pancake/1inch/0x, plus the
-// Solana pump.fun/PumpSwap fallback). The unified planner used to bypass
-// that stack and turn a perfectly executable same-chain trade into a
-// misleading "$0.00 safe direct route" error.
-const needsUnifiedRouting =
-  !nearToken &&
-  isBuySide &&
-  amtNum > 0 &&
-  !insufficientBalance &&
-  cashPortfolio !== null &&
-  !(unifiedCashSources === 1 && payOrigin.chainKey === token.chainKey);
+  const destinationSpendableForRouting =
+    !nearToken && CASH_SUPPORTED_CHAINS.includes(token.chainKey)
+      ? spendableCash(
+          token.chainKey,
+          cashPortfolio?.results.find(r => r.status === 'ok' && r.chainKey === token.chainKey)?.balance ?? 0,
+        )
+      : 0;
+  // Never force a destination-chain buy through the multi-source planner.
+  // If Solana/Base/etc. already has enough USDC for the whole amount, use
+  // the normal single quote so the chain's same-chain fallback stack remains
+  // available. The old planner entered split-routing whenever the wallet had
+  // more than one cash source, even when the destination source could pay
+  // the entire trade, producing a false "$0.00 safe direct route" warning.
+  const needsUnifiedRouting =
+    !nearToken &&
+    isBuySide &&
+    amtNum > 0 &&
+    !insufficientBalance &&
+    cashPortfolio !== null &&
+    destinationSpendableForRouting + 0.000001 < amtNum &&
+    !(unifiedCashSources === 1 && payOrigin.chainKey === token.chainKey);
   // A resolved balance of 0 is real (an empty wallet) and looks
   // identical to a null balance in `balance !== null` checks — this
   // specifically catches the OTHER case, where the fetch itself failed
