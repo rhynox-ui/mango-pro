@@ -726,7 +726,7 @@ function TokenRow({
         <Text style={styles.tokenPrice}>{formatPrice(token.priceUsd)}</Text>
         {mcReturnPct != null ? (
           <Text style={[styles.tokenChange, {color: positionPositive ? colors.gain : colors.danger}]}>
-            {positionPositive ? '▲' : '▼'} {Math.abs(mcReturnPct).toFixed(2)}%
+            {positionPositive ? '🟢 ▲ +' : '🔴 ▼ -'}{Math.abs(mcReturnPct).toFixed(2)}%
           </Text>
         ) : token.change24h != null && (
           <Text style={[styles.tokenChange, {color: positive ? colors.gain : colors.danger}]}>
