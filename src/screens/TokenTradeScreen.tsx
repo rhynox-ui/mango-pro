@@ -856,8 +856,8 @@ const needsUnifiedRouting =
             // origin transaction, which is exactly the missing capability
             // in the old planner.
             const candidates = remainingContributors
-              .filter(c => c.balanceUsd + 0.000001 >= amtNum)
-              .sort((a, b) => b.balanceUsd - a.balanceUsd);
+              .filter(c => c.balance + 0.000001 >= amtNum)
+              .sort((a, b) => b.balance - a.balance);
             for (const candidate of candidates) {
               if (await tryCrossChainBuy(candidate.chainKey)) return [];
             }
