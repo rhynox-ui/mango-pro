@@ -89,7 +89,9 @@ type VersionedLikeTransaction = {
 export type SolanaLikeTransaction = {
   feePayer?: Base58Key;
   instructions?: LegacyLikeTransaction['instructions'];
-  message?: VersionedLikeTransaction['message'];
+  // Deliberately duck-typed: web3.js MessageV0 has readonly/internal
+  // fields whose exact TypeScript shape changes between SDK releases.
+  message?: any;
 };
 
 function keyToBase58(key: Base58Key): string | null {
