@@ -29,7 +29,6 @@ import type {DerivedAccounts} from '../wallet/keys';
 import {fetchUsdcPortfolio} from './usdcBalances.ts';
 import {fetchOneClickTokens, findOneClickAssetId, ONE_CLICK_PROXY_BASE_URL, type OneClickQuoteRequest, requestOneClickQuote, fetchOneClickStatus, submitOneClickDepositTx} from './oneClick.ts';
 import {fundOneClickQuote, type OneClickSwapStore} from './oneClickDeposits.ts';
-import {oneClickSwapStore} from '../wallet/oneClickSwapStore.ts';
 
 export type NearTradeSide = 'buy' | 'sell';
 
