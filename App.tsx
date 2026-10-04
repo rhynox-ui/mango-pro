@@ -551,12 +551,12 @@ function AppInner(): React.JSX.Element {
   };
 
   function selectSearchResult(result: TokenSearchResult) {
-    setSelectedToken({chainKey: result.chainKey, address: result.tokenAddress, symbol: result.symbol, imageUrl: result.imageUrl});
+    setSelectedToken({chainKey: result.chainKey, address: result.tokenAddress, symbol: result.symbol, imageUrl: result.imageUrl, marketCapUsd: result.marketCapUsd});
     setTab('swap');
   }
 
   function selectDiscoveryToken(token: DiscoveryToken) {
-    setSelectedToken({chainKey: token.chainKey, address: token.tokenAddress, symbol: token.symbol, imageUrl: token.imageUrl});
+    setSelectedToken({chainKey: token.chainKey, address: token.tokenAddress, symbol: token.symbol, imageUrl: token.imageUrl, marketCapUsd: token.marketCapUsd});
     setTab('swap');
   }
 
