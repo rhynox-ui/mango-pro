@@ -29,9 +29,8 @@
 // so there's nothing left to unwrap (see mobile's own long comment on
 // why that fix made the whole cleanup path unnecessary going forward).
 
-import {createPublicClient, createWalletClient, encodeFunctionData} from 'viem';
 import {privateKeyToAccount} from 'viem/accounts';
-import {transportFor, viemChainForChainId} from './chainRegistry.ts';
+import {viemChainForChainId} from './chainRegistry.ts';
 import {assertQuoteSafeToSign, type TransactionIntent} from './txIntentFirewall.ts';
 import {assertSolanaTransactionMatchesIntent} from './solanaTxIntent.ts';
 import {SOLANA_NATIVE_SPEND, assertSolanaSpendWithinIntentWeb3, isInsufficientSolSimulation, type SolanaSpendIntent} from './solanaSpendGuard.ts';
@@ -136,99 +135,6 @@ async function pollRelayStatus(requestId: string, {intervalMs = 2000, timeoutMs 
     await new Promise(r => setTimeout(r, intervalMs));
   }
   throw new Error('Timed out waiting for Relay to confirm completion. Your transaction was broadcast — check status manually using the requestId before retrying.');
-}
-
-const ERC20_ALLOWANCE_ABI = [
-  {type: 'function', name: 'allowance', inputs: [{name: 'owner', type: 'address'}, {name: 'spender', type: 'address'}], outputs: [{type: 'uint256'}], stateMutability: 'view'},
-] as const;
-const EVM_APPROVE_ABI = [
-  {type: 'function', name: 'approve', inputs: [{name: 'spender', type: 'address'}, {name: 'amount', type: 'uint256'}], outputs: [{type: 'bool'}], stateMutability: 'nonpayable'},
-] as const;
-
-/**
- * Defensive recovery for a real, reproduced failure: a BNB Chain Convert
- * reverting on Relay's own Depository contract with Solady's
- * TransferFromFailed() (0x7939f424) — the Depository trying to pull the
- * origin token out of this wallet without (or without enough) prior
- * approval. Checked first, before adding this: BNB's own 18-decimal USDC
- * deploy (unlike the usual 6) is already correctly special-cased
- * everywhere this file and chainData.ts compute amounts, so this isn't
- * papering over a decimals bug on our side — it's a real fallback for
- * Relay's own quote omitting (or under-sizing) the approve step it
- * should have included for this route.
- *
- * Deliberately narrow: only ever runs as a RECOVERY after the original
- * call's own pre-flight simulate already reverted, only approves the
- * EXACT origin currency for the EXACT amount this quote is spending, and
- * only to the exact address the reverting call already targets — never a
- * blanket/unlimited approval, and never invoked on a route that already
- * works (the live allowance check below returns false immediately if
- * it's already sufficient, meaning this revert wasn't an allowance
- * problem at all).
- *
- * Returns WHY it didn't recover, not just whether it did — a Base Convert
- * failure surfaced the gap this closes: every "didn't recover" case used
- * to collapse into the same silent `false`, so a revert that survived
- * recovery and one that was never an allowance problem at all were
- * indistinguishable from the error the user saw. That made a second,
- * different-chain failure with the same generic message undiagnosable
- * without a live RPC trace this sandbox can't make. The reason is folded
- * into the final error text below so the NEXT occurrence is self-
- * explaining instead of needing another round of guessing.
- */
-type AllowanceRecoveryResult =
-  | {recovered: true}
-  | {recovered: false; reason: string};
-
-async function toppedUpOriginAllowance(
-  publicClient: ReturnType<typeof createPublicClient>,
-  owner: `0x${string}`,
-  spender: `0x${string}`,
-  originToken: `0x${string}` | undefined,
-  originAmount: bigint | undefined,
-  sendApproveTx: (data: `0x${string}`) => Promise<void>,
-): Promise<AllowanceRecoveryResult> {
-  if (!originToken || !originAmount || originAmount <= 0n) {
-    return {recovered: false, reason: 'the origin currency for this quote is native, not an ERC-20 — an allowance can\'t be the cause'};
-  }
-  if (originToken.toLowerCase() === spender.toLowerCase()) {
-    return {recovered: false, reason: 'the reverting call already targets the origin token itself, not a spender that could need an allowance'};
-  }
-  let currentAllowance: bigint;
-  try {
-    currentAllowance = await publicClient.readContract({address: originToken, abi: ERC20_ALLOWANCE_ABI, functionName: 'allowance', args: [owner, spender]});
-  } catch (err) {
-    return {recovered: false, reason: `could not read the live allowance to check: ${err instanceof Error ? err.message : String(err)}`};
-  }
-  if (currentAllowance >= originAmount) {
-    return {recovered: false, reason: 'the allowance is already sufficient for this amount — not an approval problem'};
-  }
-  try {
-    const data = encodeFunctionData({abi: EVM_APPROVE_ABI, functionName: 'approve', args: [spender, originAmount]});
-    await sendApproveTx(data);
-    return {recovered: true};
-  } catch (err) {
-    return {recovered: false, reason: `the approval transaction itself failed: ${err instanceof Error ? err.message : String(err)}`};
-  }
-}
-
-/**
- * Prepends WHY the allowance-recovery attempt didn't save this call, so the
- * final error is self-explaining instead of a bare repeat of the same
- * revert. Real, confirmed bug this closes: viem's own `err.message` for a
- * failed `.call()` is itself multi-line (a one-line summary, then a blank
- * line, then "Raw Call Arguments:", "Docs:", "Version:", etc.) —
- * describeTradeError's own `firstLine()` exists specifically to avoid
- * dumping that block on screen, so it keeps only the text before the
- * FIRST newline. Putting this note AFTER `message` (as this used to) means
- * it lands past that first newline and gets silently discarded — a live
- * BNB Chain Convert failure showed exactly the bare revert reason with
- * none of this context, even though the recovery logic below had already
- * run and recorded why it didn't help. Putting the note first keeps it on
- * the same line firstLine() actually keeps.
- */
-function revertMessageAfterFailedRecovery(message: string, recovery: {recovered: false; reason: string}): string {
-  return `(Checked for a missing allowance first: ${recovery.reason}.) ${message}`;
 }
 
 /**
@@ -994,11 +900,6 @@ export async function executeRelayQuote(
   onStep?.('signing');
   const isGoogleSession = session.authMethod === 'google';
   const txHashes: string[] = [];
-  let evmClients: {
-    walletClient: ReturnType<typeof createWalletClient> | null;
-    publicClient: ReturnType<typeof createPublicClient>;
-  } | null = null;
-
   try {
     // Relay's official Calibur/EIP-7702 flow batches the quote's origin-chain
     // transaction items (typically approve + deposit) into ONE atomic
