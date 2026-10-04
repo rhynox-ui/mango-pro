@@ -39,6 +39,7 @@ import {intentForQuote, type RelayQuote, type RelayTransactionStepItem} from './
 import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, ARC_USDC, MAINNET_CHAIN_IDS, assetDecimalsForChain} from './chainData.ts';
 import {DEV_FEE_WALLET} from './fees.ts';
 import {sendEvmCallsViaRelayGasless, isPreBroadcastRelayError} from './relayGaslessEvm.ts';
+import {fetchWalletPrices} from './walletPrices.ts';
 import type {DerivedAccounts} from '../wallet/keys';
 
 const RELAY_STATUS_URL = 'https://api.relay.link/intents/status/v3';
@@ -1103,20 +1104,9 @@ export async function executeRelayQuote(
     }
   }
 
-  // Diagnostic only, no effect on execution — kept from when a Base
-  // Convert reverted on the Depository with no decodable reason. Since
-  // resolved: Relay's own EVM Depository Reference (its real Solidity
-  // API docs) confirms depositErc20 does a plain, direct
-  // transferFrom(msg.sender, address(this), amount) — no Permit2
-  // anywhere in it, ruling out the "different spender" guess this
-  // comment used to make. The actual gap (see sendRelayEvmStepSponsored's
-  // own header on its broadcast-time recovery) was that Pimlico's
-  // bundler runs its own separate simulation during the real broadcast,
-  // which can catch a revert this function's own pre-flight simulate
-  // missed — and until that broadcast-time recovery was added, such a
-  // revert never got a chance at allowance-recovery at all. Left in
-  // place since it costs nothing and is still useful for diagnosing
-  // anything else pendingItems might reveal in the future.
+  // Diagnostic only, no effect on execution — useful when a Relay quote
+  // contains multiple transaction items and one later item is the source of
+  // an execution failure.
   console.warn(
     '[executeRelayQuote] pendingItems:',
     pendingItems.map(item => ({
