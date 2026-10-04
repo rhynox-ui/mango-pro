@@ -33,14 +33,12 @@
 //   own signature, on the actual swap/transfer instructions, still has
 //   to be there.
 //
-//   WARN — an spl-token Approve, which hands a delegate standing
-//   authority over the user's token account (Solana's equivalent of an
-//   unlimited ERC-20 approval), and SetAuthority/CloseAccount, which
-//   change or dissolve an account the user owns. None of the three
-//   belongs in a swap route. They warn rather than block only because
-//   this could not be checked against a live Relay Solana quote from
-//   the environment it was written in; promoting them is a one-line
-//   change once a real route is observed not to use them.
+//   BLOCK — an spl-token Approve or SetAuthority, because they grant or
+//   change standing authority over the user's token account.
+//   CloseAccount is different: Relay/Jupiter routes can legitimately use
+//   it to clean up an emptied token account or WSOL account. It is allowed
+//   only when the user's own signer is both the close authority and the
+//   destination for the recovered lamports.
 //
 // Parsing is deliberately structural — compiled instruction program IDs
 // and the first byte of each instruction's data — so it works on both a
@@ -71,7 +69,7 @@ export type DescribedSolanaTransaction = {
   // it is not the ONLY one: the user's own account has to be here too,
   // via whichever swap/transfer instruction actually moves their funds.
   requiredSigners: string[];
-  instructions: {programId: string | null; firstDataByte: number | null}[];
+  instructions: {programId: string | null; firstDataByte: number | null; accounts: string[]}[];
 };
 
 // Duck-typed against @solana/web3.js's real Transaction/
@@ -84,7 +82,8 @@ type VersionedLikeTransaction = {
   message?: {
     header?: {numRequiredSignatures?: number};
     staticAccountKeys?: Base58Key[];
-    compiledInstructions?: {programIdIndex: number; data?: Uint8Array}[];
+    compiledInstructions?: {programIdIndex: number; accountKeyIndexes?: number[]; data?: Uint8Array}[];
+    getAccountKeys?: (args?: {addressLookupTableAccounts?: unknown[]}) => {get: (index: number) => Base58Key | undefined};
   };
 };
 export type SolanaLikeTransaction = LegacyLikeTransaction & VersionedLikeTransaction;
@@ -102,7 +101,10 @@ function keyToBase58(key: Base58Key): string | null {
  * Returns null when the transaction isn't a shape we recognise —
  * callers treat that as "cannot check", not as "safe", and say so.
  */
-export function describeSolanaTransaction(transaction: SolanaLikeTransaction | null | undefined): DescribedSolanaTransaction | null {
+export function describeSolanaTransaction(
+  transaction: SolanaLikeTransaction | null | undefined,
+  options?: {addressLookupTableAccounts?: unknown[]},
+): DescribedSolanaTransaction | null {
   if (!transaction || typeof transaction !== 'object') return null;
 
   // VersionedTransaction: a compiled message with a static key table.
@@ -113,12 +115,23 @@ export function describeSolanaTransaction(transaction: SolanaLikeTransaction | n
   if (message && Array.isArray(message.staticAccountKeys) && Array.isArray(message.compiledInstructions)) {
     const keys = message.staticAccountKeys.map(k => keyToBase58(k) ?? String(k));
     const numRequiredSignatures = message.header?.numRequiredSignatures ?? 1;
+    let resolvedKeys: {get: (index: number) => Base58Key | undefined} | null = null;
+    try {
+      resolvedKeys = message.getAccountKeys?.({
+        addressLookupTableAccounts: options?.addressLookupTableAccounts,
+      }) ?? null;
+    } catch {
+      resolvedKeys = null;
+    }
     return {
       feePayer: keys[0] ?? null,
       requiredSigners: keys.slice(0, numRequiredSignatures),
       instructions: message.compiledInstructions.map(ix => ({
         programId: keys[ix.programIdIndex] ?? null,
         firstDataByte: ix.data?.length ? ix.data[0] : null,
+        accounts: (ix.accountKeyIndexes ?? []).map(index =>
+          keyToBase58(resolvedKeys?.get(index) ?? keys[index]) ?? '',
+        ),
       })),
     };
   }
@@ -145,6 +158,7 @@ export function describeSolanaTransaction(transaction: SolanaLikeTransaction | n
       instructions: transaction.instructions.map(ix => ({
         programId: keyToBase58(ix.programId),
         firstDataByte: ix.data?.length ? ix.data[0] : null,
+        accounts: (ix.keys ?? []).map(key => keyToBase58(key.pubkey) ?? ''),
       })),
     };
   }
@@ -169,9 +183,13 @@ export function describeSolanaTransaction(transaction: SolanaLikeTransaction | n
  */
 export function assertSolanaTransactionMatchesIntent(
   transaction: SolanaLikeTransaction | null | undefined,
-  {expectedSigner, expectedFeePayer}: {expectedSigner?: string | null; expectedFeePayer?: string | null},
+  {expectedSigner, expectedFeePayer, addressLookupTableAccounts}: {
+    expectedSigner?: string | null;
+    expectedFeePayer?: string | null;
+    addressLookupTableAccounts?: unknown[];
+  },
 ): string[] {
-  const described = describeSolanaTransaction(transaction);
+  const described = describeSolanaTransaction(transaction, {addressLookupTableAccounts});
   if (!described) {
     // Promoted from a warning to a hard block (real, confirmed finding
     // from an uploaded audit's MANGO-H02, verified against this exact
@@ -239,10 +257,27 @@ export function assertSolanaTransactionMatchesIntent(
           'It was stopped before signing; nothing was sent and nothing was spent.',
       );
     } else if (ix.firstDataByte === SPL_CLOSE_ACCOUNT) {
-      throw new SolanaIntentError(
-        'This route closes one of your token accounts, which a swap does not normally need. ' +
-          'It was stopped before signing; nothing was sent and nothing was spent.',
-      );
+      // Verified against Relay's real Solana routes: Jupiter/dflow swap
+      // payloads can legitimately CloseAccount after a swap (for example
+      // when an emptied token account or WSOL account is cleaned up).
+      // Do not blanket-block the instruction. Instead require the two
+      // security properties that matter for a wallet: the close authority
+      // must be the user's signer and the reclaimed lamports must return
+      // to that same signer. A route cannot use this as a hidden rent drain.
+      const closeSource = ix.accounts[0];
+      const closeDestination = ix.accounts[1];
+      const closeAuthority = ix.accounts[2];
+      if (
+        !expectedSigner ||
+        !closeSource ||
+        closeDestination !== expectedSigner ||
+        closeAuthority !== expectedSigner
+      ) {
+        throw new SolanaIntentError(
+          'This route tries to close a token account without returning its recovered funds to your wallet. ' +
+            'It was stopped before signing; nothing was sent and nothing was spent.',
+        );
+      }
     }
   }
   return warnings;
