@@ -94,10 +94,10 @@ function isCaliburDelegated(code: string | undefined): boolean {
 }
 
 /**
- * Relay is Mango's primary EVM gasless executor. This function accepts the
- * already-quoted transaction calls, so the primary path never re-quotes or
- * changes routing. Pimlico is deliberately outside this function and is
- * invoked by the caller only when this attempt fails before Relay accepts it.
+ * Relay is Mango's sole EVM gasless executor. This function accepts the
+ * already-quoted transaction calls, so the gasless path never re-quotes or
+ * changes routing. If Relay rejects before broadcast, the caller may fall
+ * back to a normal user-signed transaction; there is no alternate gasless provider.
  */
 export async function sendEvmCallsViaRelayGasless(params: {
   chain: Chain;
