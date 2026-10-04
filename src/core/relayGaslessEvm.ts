@@ -89,6 +89,47 @@ function isCaliburDelegated(code: string | undefined): boolean {
   return Boolean(code && code.toLowerCase() === `0xef0100${CALIBUR_ADDRESS.slice(2).toLowerCase()}`);
 }
 
+export async function preflightRelayGaslessEvm(params: {
+  chain: Chain;
+  fromAddress: Address;
+  privateKey: Hex;
+}): Promise<void> {
+  const {chain, fromAddress, privateKey} = params;
+  const publicClient = createPublicClient({chain, transport: transportFor(chain.id)});
+  const owner = privateKeyToAccount(privateKey);
+  if (owner.address.toLowerCase() !== fromAddress.toLowerCase()) {
+    throw new Error('Relay gasless signer does not match the selected wallet.');
+  }
+
+  // Do this check BEFORE asking the user to sign anything. Calibur is the
+  // implementation Mango delegates the EOA to for Relay sponsorship; if
+  // that implementation is not deployed on a chain, a quote must not get
+  // as far as an authorization/signature prompt only to fail afterwards.
+  const caliburCode = await publicClient.getCode({address: CALIBUR_ADDRESS});
+  if (!caliburCode || caliburCode === '0x') {
+    throw new Error('Relay gasless execution is not available on ' + (chain.name ?? ('chain ' + chain.id)) + ' yet — no Calibur deployment was found on this chain.');
+  }
+
+  const accountCode = await publicClient.getCode({address: fromAddress});
+  const delegated = isCaliburDelegated(accountCode);
+  if (!delegated) {
+    const walletClient = createWalletClient({account: owner, chain, transport: transportFor(chain.id)});
+    if (typeof walletClient.signAuthorization !== 'function') {
+      throw new Error('This wallet cannot sign the EIP-7702 authorization required for Relay gasless execution.');
+    }
+    return;
+  }
+
+  // A delegated account must expose the Calibur sequence state used by the
+  // exact execution path below. Read it now so a stale/foreign delegation
+  // is rejected before any other leg of a multi-source trade broadcasts.
+  await publicClient.readContract({
+    address: fromAddress,
+    abi: [{name: 'getSeq', type: 'function', stateMutability: 'view', inputs: [{name: 'key', type: 'uint256'}], outputs: [{name: '', type: 'uint256'}]}] as const,
+    functionName: 'getSeq',
+    args: [0n],
+  });
+}
 /**
  * Relay is Mango's sole EVM gasless executor. This function accepts the
  * already-quoted transaction calls, so the gasless path never re-quotes or
@@ -108,11 +149,10 @@ export async function sendEvmCallsViaRelayGasless(params: {
   if (!calls.length) throw new Error('Relay gasless execution requires at least one call.');
   if (calls.some(call => call.value < 0n)) throw new Error('Invalid Relay gasless call value.');
 
+  await preflightRelayGaslessEvm({chain, fromAddress, privateKey});
+
   const publicClient = createPublicClient({chain, transport: transportFor(chain.id)});
   const owner = privateKeyToAccount(privateKey);
-  if (owner.address.toLowerCase() !== fromAddress.toLowerCase()) {
-    throw new Error('Relay gasless signer does not match the selected wallet.');
-  }
   const walletClient = createWalletClient({account: owner, chain, transport: transportFor(chain.id)});
 
   const code = await publicClient.getCode({address: fromAddress});
