@@ -55,10 +55,6 @@ const CALIBUR_EIP712_TYPES = {
 
 type RelayExecuteResponse = {requestId?: string; error?: string; message?: string};
 
-function isPreBroadcastRelayError(message: string): boolean {
-  return /relay gasless execution failed|relay cannot|http \d{3}|invalid|unsupported|quote failed|no transaction step|execution isn't configured/i.test(message);
-}
-
 async function postRelayExecute(body: Record<string, unknown>): Promise<RelayExecuteResponse> {
   const res = await fetch(RELAY_EXECUTE_PROXY_URL, {
     method: 'POST',
@@ -96,8 +92,10 @@ function isCaliburDelegated(code: string | undefined): boolean {
 /**
  * Relay is Mango's sole EVM gasless executor. This function accepts the
  * already-quoted transaction calls, so the gasless path never re-quotes or
- * changes routing. If Relay rejects before broadcast, the caller may fall
- * back to a normal user-signed transaction; there is no alternate gasless provider.
+ * changes routing. A Relay rejection is terminal for this execution:
+ * callers must not fall back to a native-gas transaction, because that
+ * changes Mango's Fomo execution contract and can strand a user who holds
+ * USDC but no ETH/BNB/other native gas token.
  */
 export async function sendEvmCallsViaRelayGasless(params: {
   chain: Chain;
@@ -198,5 +196,3 @@ export async function sendEvmCallsViaRelayGasless(params: {
 
   return {hash: await pollRelayStatus(response.requestId!)};
 }
-
-export {isPreBroadcastRelayError};
