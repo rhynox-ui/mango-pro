@@ -366,6 +366,8 @@ export function ProfileScreen({
     const byKey = new Map<string, WalletAsset>();
     for (const asset of walletAssets) byKey.set(asset.key, asset);
     for (const position of openPositions) {
+      // NEAR uses a separate trade path and is not part of the indexed EVM/Solana asset set yet.
+      if (position.chainKey === 'near') continue;
       const key = `${position.chainKey}:${position.tokenAddress}`;
       if (!byKey.has(key)) {
         byKey.set(key, {
