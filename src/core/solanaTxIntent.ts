@@ -86,7 +86,11 @@ type VersionedLikeTransaction = {
     getAccountKeys?: (args?: {addressLookupTableAccounts?: unknown[]}) => {get: (index: number) => Base58Key | undefined};
   };
 };
-export type SolanaLikeTransaction = LegacyLikeTransaction | VersionedLikeTransaction;
+export type SolanaLikeTransaction = {
+  feePayer?: Base58Key;
+  instructions?: LegacyLikeTransaction['instructions'];
+  message?: VersionedLikeTransaction['message'];
+};
 
 function keyToBase58(key: Base58Key): string | null {
   if (!key) return null;
