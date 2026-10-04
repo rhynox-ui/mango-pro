@@ -463,11 +463,14 @@ export function TokenTradeScreen({
   const fetchPayBalance = useCallback((): Promise<number> => {
     if (!session) return Promise.resolve(0);
     if (token.chainKey === 'near') {
-      // A NEAR trade spends from the wallet's NEAR account only: USDC on
-      // NEAR to buy, the token itself to sell.
+      // A NEAR Buy spends the wallet's unified USDC balance. If the NEAR
+      // account does not already hold enough USDC, handleNearTrade() moves
+      // the missing amount there through NEAR Intents before the Rhea/Intear
+      // swap. Never report the local NEAR-USDC balance as the user's
+      // spendable Buy balance.
       const nearAccount = session.near;
       if (!nearAccount) return Promise.resolve(0);
-      if (isBuySide) return fetchNearTokenBalance(NEAR_USDC, nearAccount.address).then(units => Number(formatUnits(units, NEAR_USDC_DECIMALS)));
+      if (isBuySide) return Promise.resolve(spendableTotalUsd(cashPortfolio));
       if (tokenDecimals === null) return Promise.resolve(0);
       return fetchNearTokenBalance(token.address, nearAccount.address).then(units => Number(formatUnits(units, tokenDecimals)));
     }
