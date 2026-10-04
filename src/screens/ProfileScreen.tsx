@@ -26,8 +26,9 @@ import {
   RepeatIcon,
   UploadIcon,
 } from '../components/icons';
-import {CHAIN_LABEL, NEAR_ENABLED, NEAR_LABEL, type ChainKey} from '../core/chainData';
+import {CHAIN_LABEL, NATIVE_SYMBOL, NEAR_ENABLED, NEAR_LABEL, assetDecimalsForChain, currencyAddress, type ChainKey} from '../core/chainData';
 import {fetchCashPortfolio, spendableCash, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
+import {fetchWalletNativeBalance, fetchWalletPrices, fetchWalletSolanaBalance} from '../wallet/walletRpc';
 import {ConvertCashSheet} from '../components/ConvertCashSheet';
 import {NetworkIcon} from '../wallet/NetworkIcon';
 import {sendUsdc, isValidRecipientAddress} from '../wallet/sendUsdc';
@@ -324,7 +325,57 @@ export function ProfileScreen({
   // DexScreener.
   const [tradeCount, setTradeCount] = useState(0);
   const [closedPositions, setClosedPositions] = useState<ClosedPosition[]>([]);
+  // Native coins are real wallet assets too. They were previously absent
+  // because openPositions is intentionally trade-history based. Scan every
+  // supported native balance independently and merge only non-zero assets
+  // into the Open positions view; no token list/indexer is needed for native
+  // coins, and the existing trade-history positions remain unchanged.
+  useEffect(() => {
+    if (!session) {
+      setNativePositions([]);
+      return;
+    }
+    let cancelled = false;
+    const chains = CASH_SUPPORTED_CHAINS.filter(chain => chain !== 'arc');
+    Promise.all([
+      fetchWalletPrices().catch(() => ({} as Record<string, number>)),
+      Promise.allSettled(chains.map(async chainKey => {
+        const balance = chainKey === 'solana'
+          ? await fetchWalletSolanaBalance(session.solana.address)
+          : await fetchWalletNativeBalance(chainKey, session.evm.address);
+        return {chainKey, balance};
+      })),
+    ]).then(([prices, results]) => {
+      if (cancelled) return;
+      const native: OpenPositionWithValue[] = [];
+      for (const result of results) {
+        if (result.status !== 'fulfilled' || result.value.balance <= 0) continue;
+        const {chainKey, balance} = result.value;
+        const symbol = NATIVE_SYMBOL[chainKey];
+        const decimals = assetDecimalsForChain(chainKey, symbol) ?? 18;
+        const address = currencyAddress(chainKey, symbol);
+        const price = prices[symbol];
+        native.push({
+          key: `native:${chainKey}`,
+          chainKey,
+          chainLabel: CHAIN_LABEL[chainKey],
+          tokenAddress: address,
+          symbol,
+          imageUrl: null,
+          amountHeld: balance,
+          lastTradeAt: Date.now(),
+          valueUsd: typeof price === 'number' && Number.isFinite(price) ? balance * price : null,
+        });
+        void decimals;
+      }
+      setNativePositions(native);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
   const [openPositions, setOpenPositions] = useState<OpenPositionWithValue[]>([]);
+  const [nativePositions, setNativePositions] = useState<OpenPositionWithValue[]>([]);
   useEffect(() => {
     function recount(entries: ReturnType<typeof getTxHistory>) {
       const scoped = session ? filterTxHistoryForAccount(entries, {evmAddress: session.evm.address, solanaAddress: session.solana.address, nearAddress: session.near?.address}) : entries;
@@ -705,9 +756,32 @@ export function ProfileScreen({
       {/* This app has nothing that's actually a Perp yet, so the Perps
           filter always reads as empty here — an honest reflection of
           what exists, not a bug. */}
-      {positionTab === 'Open' && assetFilter !== 'Perps' && openPositions.length > 0 ? (
+      {positionTab === 'Open' && assetFilter !== 'Perps' && (openPositions.length > 0 || nativePositions.length > 0) ? (
         <View style={styles.closedTradesList}>
-          {openPositions.map(position => (
+          {[...nativePositions, ...openPositions].map(position => (
+            <TouchableOpacity
+              key={position.key}
+              style={styles.closedTradeRow}
+              activeOpacity={0.6}
+              disabled={!onOpenToken}
+              onPress={() => onOpenToken?.({chainKey: position.chainKey, address: position.tokenAddress, symbol: position.symbol, imageUrl: position.imageUrl})}>
+              {position.key.startsWith('native:') ? (
+                <NetworkIcon chainKey={position.chainKey as ChainKey} size={30} />
+              ) : (
+                <AssetIcon symbol={position.symbol} imageUrl={position.imageUrl} size={30} />
+              )}
+              <View style={styles.closedTradeMain}>
+                <Text style={styles.closedTradeTitle} numberOfLines={1}>{position.symbol}</Text>
+                <Text style={styles.closedTradeSubtitle} numberOfLines={1}>
+                  {formatTokenAmount(position.amountHeld)} {position.symbol} on {position.chainLabel}
+                </Text>
+              </View>
+              <View style={styles.closedTradeRight}>
+                <Text style={styles.closedTradeTitle}>{position.valueUsd != null ? `${formatUsd(position.valueUsd)}` : '—'}</Text>
+              </View>
+            </TouchableOpacity>
+          ))}
+
             <TouchableOpacity
               key={position.key}
               style={styles.closedTradeRow}
