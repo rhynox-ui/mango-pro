@@ -289,9 +289,9 @@ export function TokenTradeScreen({
   // Sell always delivers proceeds as cash too — same reasoning as Buy
   // above, no user-facing toggle. The one real, disclosed gap: a chain
   // with no verified cash address at all (CASH_SUPPORTED_CHAINS doesn't
-  // cover every chain this app can chart a token on, e.g. Plasma/X
-  // Layer) has nothing to convert proceeds INTO, so those still land as
-  // the chain's own native asset — an honest limitation, not a choice
+  // cover every chain this app can chart a token on, e.g. Plasma)
+  // has nothing to convert proceeds INTO, so those still land as the
+  // chain's own native asset — an honest limitation, not a choice
   // offered to the user.
   const receiveAsset: 'native' | 'cash' = token.chainKey === 'near' || CASH_SUPPORTED_CHAINS.includes(token.chainKey) ? 'cash' : 'native';
 
