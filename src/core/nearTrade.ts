@@ -17,13 +17,18 @@
 // swap pays no fee; a partly filled one pays the same share. NEAR gas is
 // covered by Mango (it costs a fraction of a cent per swap).
 
-import {NATIVE_NEAR, NEAR_USDC, NEAR_USDC_DECIMALS} from './chainData.ts';
+import {NATIVE_NEAR, NEAR_USDC, NEAR_USDC_DECIMALS, TOKEN_ADDRESSES, assetDecimalsForChain, type ChainKey} from './chainData.ts';
 import {DEV_FEE_WALLET_NEAR, appFeeBps} from './fees.ts';
 import {IntearRouteError, assertIntearRouteSafe, feeTransaction, fetchIntearRoutes, pickSafeRoute, type IntearRoute, type SafeRoute} from './intearRouter.ts';
 import {classifySwapOutcomes, type SwapOutcomeStatus} from './nearOutcome.ts';
 import {nearRpc, nearView} from './nearRpc.ts';
 import {NearSendError, ensureNearAccount, sendSponsoredNearCalls, type NearCall, type NearRelayOutcome} from './nearSigning.ts';
 import type {DerivedAccounts} from '../wallet/keys';
+import {fetchUsdcPortfolio} from './usdcBalances.ts';
+import {fetchOneClickTokens, findOneClickAssetId, ONE_CLICK_PROXY_BASE_URL, type OneClickQuoteRequest, requestOneClickQuote, fetchOneClickStatus, submitOneClickDepositTx} from './oneClick.ts';
+import {fundOneClickQuote, type OneClickSwapStore} from './oneClickDeposits.ts';
+import {oneClickSwapStore} from '../wallet/oneClickSwapStore.ts';
+import {sendUsdc} from '../wallet/sendUsdc.ts';
 
 export type NearTradeSide = 'buy' | 'sell';
 
@@ -33,6 +38,124 @@ export const NEAR_TRADE_DEFAULT_SLIPPAGE_BPS = 100;
 export const NEAR_QUOTE_MAX_AGE_MS = 20_000;
 /** Mango's relayer refuses a delegate above this (near-relayer.js MAX_DELEGATE_GAS). */
 export const RELAY_MAX_GAS = 300_000_000_000_000n;
+
+/**
+ * Moves only the missing USDC to the user's NEAR account before a NEAR Buy.
+ * NEAR is not a Relay chain, so this uses the app's already-integrated
+ * NEAR Intents 1Click path for the cross-chain cash leg, then the existing
+ * Intear/Rhea path for the actual token trade. The funding leg deliberately
+ * has a 0 Mango app fee; the trade itself charges the normal Mango fee once.
+ */
+export async function fundNearUsdcForTrade(
+  session: DerivedAccounts,
+  neededUnits: bigint,
+  {
+    store = oneClickSwapStore,
+    now = () => Date.now(),
+    fetchImpl = fetch,
+  }: {
+    store?: OneClickSwapStore;
+    now?: () => number;
+    fetchImpl?: typeof fetch;
+  } = {},
+): Promise<{sourceChain: ChainKey; sourceAmount: string; depositAddress: string; destinationTxHashes: string[]}> {
+  if (!session.near) throw new NearTradeError('This wallet has no NEAR account.');
+  if (neededUnits <= 0n) return {sourceChain: 'ethereum', sourceAmount: '0', depositAddress: '', destinationTxHashes: []};
+
+  const portfolio = await fetchUsdcPortfolio(session, {forceFresh: true});
+  const candidates = portfolio.results
+    .filter(r => r.status === 'ok' && r.balance > 0 && TOKEN_ADDRESSES.USDC[r.chainKey] && r.chainKey !== 'arc')
+    .sort((a, b) => (b.status === 'ok' ? b.balance : 0) - (a.status === 'ok' ? a.balance : 0));
+  if (candidates.length === 0) throw new NearTradeError('There is no USDC available on a supported source chain to fund this NEAR trade.');
+
+  const tokens = await fetchOneClickTokens({baseUrl: ONE_CLICK_PROXY_BASE_URL, timeoutMs: 20_000});
+  const destinationAsset = findOneClickAssetId(tokens, 'near', NEAR_USDC);
+  if (!destinationAsset) throw new NearTradeError('NEAR USDC is not currently available through NEAR Intents.');
+
+  const factors = [102, 105, 110, 125];
+  const nowMs = now();
+  const deadline = new Date(nowMs + 20 * 60 * 1000).toISOString();
+
+  for (const source of candidates) {
+    const sourceChain = source.chainKey;
+    const blockchain = ({ethereum: 'eth', base: 'base', arbitrum: 'arb', bnb: 'bsc', avalanche: 'avax', solana: 'sol', plasma: 'plasma', xlayer: 'xlayer'} as Partial<Record<ChainKey, string>>)[sourceChain];
+    const sourceContract = TOKEN_ADDRESSES.USDC[sourceChain];
+    if (!blockchain || !sourceContract) continue;
+    const sourceAsset = findOneClickAssetId(tokens, blockchain, sourceContract);
+    if (!sourceAsset) continue;
+    const decimals = assetDecimalsForChain(sourceChain, 'USDC') ?? NEAR_USDC_DECIMALS;
+    const availableUnits = BigInt(Math.floor(source.balance * 10 ** decimals));
+    if (availableUnits <= 0n) continue;
+
+    for (const factor of factors) {
+      const desired = (neededUnits * BigInt(factor) + 99n) / 100n;
+      const amount = desired < availableUnits ? desired : availableUnits;
+      if (amount < neededUnits) continue;
+      const request: OneClickQuoteRequest = {
+        dry: false,
+        swapType: 'EXACT_INPUT',
+        slippageTolerance: 100,
+        originAsset: sourceAsset,
+        depositType: 'ORIGIN_CHAIN',
+        destinationAsset,
+        amount: amount.toString(),
+        refundTo: sourceChain === 'solana' ? session.solana.address : session.evm.address,
+        refundType: 'ORIGIN_CHAIN',
+        recipient: session.near.address,
+        recipientType: 'DESTINATION_CHAIN',
+        deadline,
+        depositMode: 'SIMPLE',
+        appFees: [{recipient: 'widekingdom6862.near', fee: 0}],
+      };
+      let quoteResponse;
+      try {
+        quoteResponse = await requestOneClickQuote(request, {baseUrl: ONE_CLICK_PROXY_BASE_URL, timeoutMs: 20_000});
+      } catch {
+        continue;
+      }
+      const minOut = BigInt(quoteResponse.quote?.minAmountOut || '0');
+      if (minOut < neededUnits) continue;
+
+      const record = await fundOneClickQuote({
+        response: quoteResponse,
+        expected: {
+          originAsset: sourceAsset,
+          destinationAsset,
+          amount: quoteResponse.quote.amountIn,
+          recipient: session.near.address,
+          recipientType: 'DESTINATION_CHAIN',
+          refundTo: sourceChain === 'solana' ? session.solana.address : session.evm.address,
+          maxSlippageBps: 100,
+          appFees: [{recipient: 'widekingdom6862.near', fee: 0}],
+        },
+        originChainKey: sourceChain,
+        originSymbol: 'USDC',
+        originDecimals: decimals,
+        fromAddress: sourceChain === 'solana' ? session.solana.address : session.evm.address,
+        send: async (to, sendAmount) => (await sendUsdc(sourceChain, session, to, sendAmount, 'USDC', true)).txId,
+        store,
+        submitDepositTx: (txHash, depositAddress) => submitOneClickDepositTx(txHash, depositAddress, {baseUrl: ONE_CLICK_PROXY_BASE_URL}),
+        now,
+      });
+
+      const pollDeadline = now() + 4 * 60 * 1000;
+      let status = record.status;
+      let destinationTxHashes: string[] = [];
+      while (now() < pollDeadline) {
+        const current = await fetchOneClickStatus(record.depositAddress, {baseUrl: ONE_CLICK_PROXY_BASE_URL, timeoutMs: 20_000});
+        status = current.status;
+        destinationTxHashes = current.swapDetails?.destinationChainTxHashes?.map(t => t.hash) ?? destinationTxHashes;
+        if (status === 'SUCCESS') return {sourceChain, sourceAmount: record.payAmount, depositAddress: record.depositAddress, destinationTxHashes};
+        if (status === 'FAILED' || status === 'REFUNDED') {
+          throw new NearTradeError(current.swapDetails?.refundReason || 'NEAR Intents could not deliver USDC to your NEAR account.');
+        }
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+      throw new NearTradeError('USDC is still moving to NEAR. Wait a moment and try the trade again — the transfer is being tracked in History.');
+    }
+  }
+  throw new NearTradeError('No supported USDC source could currently fund the NEAR trade.');
+}
 /** NEAR's storage price: 10^19 yoctoNEAR per byte. */
 const YOCTO_PER_BYTE = 10_000_000_000_000_000_000n;
 /** NEP-145 minimum when a token contract doesn't answer storage_balance_bounds (0.00125 NEAR). */
