@@ -61,6 +61,7 @@ import {describeTradeError} from '../core/tradeErrors';
 import {fetchErc20TokenMetadata, fetchSplMintDecimals, fetchWalletNativeBalance, fetchWalletSolanaBalance, fetchWalletSplTokenBalance, fetchWalletTokenBalance} from '../wallet/walletRpc';
 import {formatAmountForInput, useAvailableBalance} from '../wallet/useAvailableBalance';
 import {addTxHistoryEntry} from '../wallet/txHistory';
+import {oneClickSwapStore} from '../wallet/oneClickSwapStore';
 import {markOwnAction} from '../wallet/depositWatcher';
 import {useSession} from '../wallet/SessionContext';
 import {useTheme, type Colors} from '../theme/ThemeContext';
@@ -1025,7 +1026,7 @@ export function TokenTradeScreen({
       const currentUnits = await fetchNearTokenBalance(NEAR_USDC, session.near.address);
       if (currentUnits < requestedUnits) {
         setExecuteState('filling');
-        await fundNearUsdcForTrade(session, requestedUnits - currentUnits);
+        await fundNearUsdcForTrade(session, requestedUnits - currentUnits, {store: oneClickSwapStore});
         setBalanceRetryToken(t => t + 1);
         setUsdcPortfolio(null);
         nearQuote = await quoteNearTrade({
