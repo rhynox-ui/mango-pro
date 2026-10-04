@@ -114,6 +114,10 @@ const PROFILE_ASSET_HIDE_PREF_KEY = 'mango_pro_hide_small_profile_assets_v1';
 function shouldHideProfileAsset(asset: WalletAsset): boolean {
   const symbol = asset.symbol.trim().toUpperCase();
   if (symbol === 'UNKNOWN') return true;
+  // Native gas assets are first-class wallet balances. Do not hide them
+  // behind the small-balance preference — users must always be able to
+  // see their ETH/BNB/SOL/etc. gas balance.
+  if (asset.isNative) return false;
   if (asset.valueUsd == null) return false;
   return Number.isFinite(asset.valueUsd) && asset.valueUsd < PROFILE_ASSET_HIDE_THRESHOLD_USD;
 }
@@ -412,6 +416,26 @@ export function ProfileScreen({
   const displayWalletAssets = useMemo(() => {
     const byKey = new Map<string, WalletAsset>();
     for (const asset of walletAssets) byKey.set(asset.key, asset);
+
+    // The wallet-assets index is token-focused and may omit native gas
+    // balances. Read the actual native balance for every supported mainnet
+    // chain here so Profile always shows ETH/BNB/AVAX/OKB/etc. as real
+    // wallet holdings, independent of whether the wallet has traded them.
+    const nativeChains = (Object.keys(MAINNET_CHAIN_IDS) as ChainKey[]);
+    const nativeAssets: WalletAsset[] = nativePositions.map(position => ({
+      key: `${position.chainKey}:native`,
+      chainKey: position.chainKey,
+      address: position.tokenAddress,
+      symbol: position.symbol,
+      name: position.symbol,
+      decimals: assetDecimalsForChain(position.chainKey, position.symbol) ?? 18,
+      amount: position.amountHeld,
+      valueUsd: position.valueUsd,
+      priceUsd: position.valueUsd != null && position.amountHeld > 0 ? position.valueUsd / position.amountHeld : null,
+      imageUrl: null,
+      isNative: true,
+    }));
+    for (const asset of nativeAssets) byKey.set(asset.key, asset);
     for (const position of openPositions) {
       const key = `${position.chainKey}:${position.tokenAddress}`;
       if (!byKey.has(key)) {
@@ -431,7 +455,56 @@ export function ProfileScreen({
       }
     }
     return [...byKey.values()].sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0));
-  }, [walletAssets, openPositions]);
+  }, [walletAssets, openPositions, nativePositions]);
+
+  useEffect(() => {
+    if (!session) {
+      setNativePositions([]);
+      return;
+    }
+    let cancelled = false;
+    const chains = Object.keys(MAINNET_CHAIN_IDS) as ChainKey[];
+    const load = async () => {
+      let prices: Record<string, number> = {};
+      try {
+        prices = await fetchWalletPrices();
+      } catch {
+        // A missing price must not hide the native on-chain balance.
+      }
+      const results = await Promise.allSettled(
+        chains.map(async chainKey => {
+          let amount: number;
+          if (chainKey === 'solana') {
+            amount = await fetchWalletSolanaBalance(session.solana.address);
+          } else {
+            amount = await fetchWalletNativeBalance(chainKey, session.evm.address);
+          }
+          const symbol = NATIVE_SYMBOL[chainKey];
+          const priceUsd = prices[symbol] ?? null;
+          return {
+            chainKey,
+            tokenAddress: currencyAddress(chainKey, symbol),
+            symbol,
+            amountHeld: amount,
+            valueUsd: priceUsd != null ? amount * priceUsd : null,
+            currentMarketCapUsd: null,
+            imageUrl: null,
+          } as OpenPositionWithValue;
+        }),
+      );
+      if (cancelled) return;
+      setNativePositions(results
+        .filter((r): r is PromiseFulfilledResult<OpenPositionWithValue> => r.status === 'fulfilled')
+        .map(r => r.value)
+        .filter(p => p.amountHeld > 0));
+    };
+    load().catch(() => {
+      if (!cancelled) setNativePositions([]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
 
   const hiddenWalletAssets = useMemo(
     () => displayWalletAssets.filter(shouldHideProfileAsset),
