@@ -40,6 +40,8 @@ import type {DerivedAccounts} from '../wallet/keys';
 // bypass for the two places that need a truly current number right now
 // (ProfileScreen's pull-to-refresh and its post-Convert refresh).
 const PORTFOLIO_CACHE_TTL_MS = 30_000;
+// Arc pays transaction gas from its native USDC balance; keep a small reserve so Max/Buy never drains the wallet completely.
+export const ARC_GAS_RESERVE_USDC = 0.01;
 
 function sessionCacheKey(session: DerivedAccounts): string {
   return `${session.evm.address.toLowerCase()}:${session.solana.address}`;
