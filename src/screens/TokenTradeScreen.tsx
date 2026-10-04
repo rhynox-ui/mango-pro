@@ -138,12 +138,12 @@ function formatEta(seconds: number): string {
 }
 
 /**
- * The cash asset's own real logo (USDC/USDG, via cashLogoUrl's verified
- * Trust Wallet address) — NetworkIcon renders the CHAIN's icon, which
- * would be wrong for a stablecoin riding on top of it, so this needed
- * its own source. Falls back to a small USDC-branded blue mark if the
- * remote logo cannot load, so the cash asset never renders as an
- * anonymous generic dollar badge.
+ * The cash asset uses the actual Circle USDC token mark — blue disc,
+ * white dollar sign and the two surrounding white arcs. It is embedded
+ * as SVG instead of loaded from a remote URL, so the icon cannot silently
+ * degrade into the old plain "$" fallback when an image CDN is slow or
+ * unavailable. Circle's published brand material identifies this as the
+ * USDC logo and its digital minimum is 24px; Mango renders it at 24px.
  */
 function CashBadge({chainKey, size = 18}: {chainKey: ChainKey; size?: number}) {
   const label = 'USDC';
@@ -1388,7 +1388,7 @@ export function TokenTradeScreen({
           <View style={styles.prMainRow}>
             {isBuySide ? (
               <View style={styles.assetSelector}>
-                <CashBadge chainKey={payOrigin.chainKey} size={16} />
+                <CashBadge chainKey={payOrigin.chainKey} size={24} />
                 <Text style={styles.assetSelectorText}>{paySymbol}</Text>
               </View>
             ) : (
@@ -1457,7 +1457,7 @@ export function TokenTradeScreen({
               // cash address at all (receiveAsset's own declaration)
               // still lands as native, honestly, not offered as a choice.
               <View style={styles.assetSelector}>
-                {token.chainKey === 'near' ? <CashBadge chainKey={payOrigin.chainKey} size={16} /> : receiveAsset === 'cash' ? <CashBadge chainKey={token.chainKey} size={16} /> : <NetworkIcon chainKey={token.chainKey} size={16} />}
+                {token.chainKey === 'near' ? <CashBadge chainKey={payOrigin.chainKey} size={24} /> : receiveAsset === 'cash' ? <CashBadge chainKey={token.chainKey} size={24} /> : <NetworkIcon chainKey={token.chainKey} size={16} />}
                 <Text style={styles.assetSelectorText}>{receiveSymbol}</Text>
               </View>
             )}
@@ -2242,7 +2242,7 @@ function makeStyles(colors: Colors) {
           <View style={styles.prMainRow}>
             {isBuySide ? (
               <View style={styles.assetSelector}>
-                <CashBadge chainKey={payOrigin.chainKey} size={16} />
+                <CashBadge chainKey={payOrigin.chainKey} size={24} />
                 <Text style={styles.assetSelectorText}>{paySymbol}</Text>
               </View>
             ) : (
@@ -2311,7 +2311,7 @@ function makeStyles(colors: Colors) {
               // cash address at all (receiveAsset's own declaration)
               // still lands as native, honestly, not offered as a choice.
               <View style={styles.assetSelector}>
-                {token.chainKey === 'near' ? <CashBadge chainKey={payOrigin.chainKey} size={16} /> : receiveAsset === 'cash' ? <CashBadge chainKey={token.chainKey} size={16} /> : <NetworkIcon chainKey={token.chainKey} size={16} />}
+                {token.chainKey === 'near' ? <CashBadge chainKey={payOrigin.chainKey} size={24} /> : receiveAsset === 'cash' ? <CashBadge chainKey={token.chainKey} size={24} /> : <NetworkIcon chainKey={token.chainKey} size={16} />}
                 <Text style={styles.assetSelectorText}>{receiveSymbol}</Text>
               </View>
             )}
