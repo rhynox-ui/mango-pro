@@ -421,8 +421,7 @@ export function ProfileScreen({
     // balances. Read the actual native balance for every supported mainnet
     // chain here so Profile always shows ETH/BNB/AVAX/OKB/etc. as real
     // wallet holdings, independent of whether the wallet has traded them.
-    const nativeChains = (Object.keys(MAINNET_CHAIN_IDS) as ChainKey[]);
-    const nativeAssets: WalletAsset[] = nativePositions.map(position => ({
+      const nativeAssets: WalletAsset[] = nativePositions.map(position => ({
       key: `${position.chainKey}:native`,
       chainKey: position.chainKey,
       address: position.tokenAddress,
