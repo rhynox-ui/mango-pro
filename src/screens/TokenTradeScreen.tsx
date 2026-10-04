@@ -494,8 +494,11 @@ export function TokenTradeScreen({
     amtNum > 0 &&
     !insufficientBalance &&
     cashPortfolio !== null &&
+    // Let a single Relay quote own the trade whenever one source can cover
+    // it. The multi-source planner is only for a genuinely aggregate buy.
+    spendableTotalUsd(cashPortfolio) + 0.000001 >= amtNum &&
     destinationSpendableForRouting + 0.000001 < amtNum &&
-    !(unifiedCashSources === 1 && payOrigin.chainKey === token.chainKey);
+    unifiedCashSources > 1;
   // A resolved balance of 0 is real (an empty wallet) and looks
   // identical to a null balance in `balance !== null` checks — this
   // specifically catches the OTHER case, where the fetch itself failed
@@ -850,14 +853,24 @@ export function TokenTradeScreen({
           }
           let receivedAmountFormatted: string | null = null;
           try { receivedAmountFormatted = formatUnits(totalReceivedBaseUnits, receiveDecimalsFallback); } catch {}
-          setQuote({
-            totalFeeUsd,
-            etaSeconds: maxEtaSeconds,
-            receivedAmountFormatted,
-            payAmountUsd: amtNum,
-            receiveAmountUsd: totalReceiveUsd > 0 ? totalReceiveUsd : null,
-            priceImpactPct: weightedInput > 0 ? weightedImpact / weightedInput : null,
-          });
+          // Defensive normalization: if the planner produced one full-size
+          // leg, keep it as the ordinary single-quote execution so same-chain
+          // fallback providers remain available.
+          if (plan.length === 1 && plan[0].amountUsd + 0.000001 >= amtNum) {
+            multiSourcePlanRef.current = [];
+            lastQuoteParamsRef.current = plan[0].params;
+            rawQuoteRef.current = plan[0].quote;
+            setQuote(summarizeQuote(plan[0].quote, tokenDecimals ?? 18));
+          } else {
+            setQuote({
+              totalFeeUsd,
+              etaSeconds: maxEtaSeconds,
+              receivedAmountFormatted,
+              payAmountUsd: amtNum,
+              receiveAmountUsd: totalReceiveUsd > 0 ? totalReceiveUsd : null,
+              priceImpactPct: weightedInput > 0 ? weightedImpact / weightedInput : null,
+            });
+          }
           setQuoteError(null);
           setQuoteLoading(false);
         }).catch(err => {
