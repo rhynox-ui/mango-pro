@@ -47,7 +47,7 @@
 
 import {formatUnits} from 'viem';
 import {currencyAddress, MAINNET_CHAIN_IDS, type ChainKey} from './chainData.ts';
-import {appFeeBps, feeRecipientForQuote, isFeeExemptWallet, maxSubsidizationAmountUsdcUnits, shouldPreferPayGasInToken} from './fees.ts';
+import {appFeeBps, feeRecipientForQuote, isFeeExemptWallet, maxSubsidizationAmountUsdcUnits} from './fees.ts';
 import {buildTransactionIntent, type TransactionIntent} from './txIntentFirewall.ts';
 
 // Sponsorship is requested on every fee-carrying quote; the proxy drops
@@ -237,7 +237,11 @@ export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQ
   // more than the user's 0.5% app fee. Keep the gasless UX where it is
   // economically sane; otherwise let Relay quote the normal user-paid
   // execution cost instead of silently turning Mango into the gas payer.
-  const sponsorshipActive = sponsorshipRequested && !shouldPreferPayGasInToken(toChainKey, originAmountUsd);
+  // Mango's trading contract is the Fomo-style UX: Relay sponsorship is
+  // part of the trade, not an optional optimization based on trade size.
+  // Never silently quote a normal native-gas transaction because a small
+  // or expensive-chain trade is economically inconvenient for the protocol.
+  const sponsorshipActive = sponsorshipRequested;
 
   const body = {
     user: userAddress,
