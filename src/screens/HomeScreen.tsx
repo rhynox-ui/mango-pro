@@ -38,6 +38,8 @@ import {fetchGraduatedTokens, fetchBondingTokens, fetchTrendingTokens, type Disc
 import {CHAIN_LABEL, type ChainKey} from '../core/chainData';
 import {fetchUsdcPortfolio, type UsdcPortfolio} from '../core/usdcBalances';
 import {getWatchlist, subscribeWatchlist, toggleWatchlist} from '../wallet/watchlist';
+import {computeOpenPositions} from '../wallet/openPositions';
+import {filterTxHistoryForAccount, getTxHistory, subscribeTxHistory, type TxHistoryEntry} from '../wallet/txHistory';
 import {useSession} from '../wallet/SessionContext';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 
@@ -200,6 +202,14 @@ function formatPrice(n: number | null): string {
   return `$${n.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')}`;
 }
 
+function formatEntryMarketCap(n: number | null): string {
+  if (n == null || !Number.isFinite(n)) return 'Entry MC —';
+  if (n >= 1_000_000_000) return `Entry ${(n / 1_000_000_000).toFixed(2)}B`;
+  if (n >= 1_000_000) return `Entry ${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `Entry ${(n / 1_000).toFixed(1)}K`;
+  return `Entry ${n.toFixed(0)}`;
+}
+
 function formatMarketCap(n: number | null): string {
   if (n == null) return 'MC —';
   if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(2)}B MC`;
@@ -223,6 +233,7 @@ export function HomeScreen({
   const styles = makeStyles(colors);
   const {session} = useSession();
   const [usdcPortfolio, setUsdcPortfolio] = useState<UsdcPortfolio | null>(null);
+  const [txHistory, setTxHistory] = useState<TxHistoryEntry[]>(getTxHistory());
   const [tab, setTab] = useState<DiscoveryTab>('tokens');
   const [filter, setFilter] = useState<TokenFilter>('Trending');
   const [tokens, setTokens] = useState<DiscoveryToken[]>([]);
@@ -258,6 +269,7 @@ export function HomeScreen({
   const prevFilterRef = useRef<TokenFilter | null>(null);
 
   useEffect(() => subscribeWatchlist(setWatchlist), []);
+  useEffect(() => subscribeTxHistory(setTxHistory), []);
 
   useEffect(() => {
     loadHomeFilterPrefs().then(prefs => {
@@ -377,6 +389,23 @@ export function HomeScreen({
   // `data`). Deriving the starred set here and passing `extraData` below
   // makes every row's star a live reflection of the real store, not a
   // one-time snapshot.
+  const accountHistory = useMemo(
+    () => filterTxHistoryForAccount(txHistory, {
+      evmAddress: session?.evm.address,
+      solanaAddress: session?.solana?.address,
+      nearAddress: session?.near?.address,
+    }),
+    [txHistory, session?.evm.address, session?.solana?.address, session?.near?.address],
+  );
+  const entryMarketCaps = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const position of computeOpenPositions(accountHistory)) {
+      if (position.entryMarketCapUsd != null && Number.isFinite(position.entryMarketCapUsd) && position.entryMarketCapUsd > 0) {
+        map.set(`${position.chainKey}:${position.chainKey === 'solana' ? position.tokenAddress : position.tokenAddress.toLowerCase()}`, position.entryMarketCapUsd);
+      }
+    }
+    return map;
+  }, [accountHistory]);
   const watchlistKeys = useMemo(() => new Set(watchlist.map(t => `${t.chainKey}:${t.tokenAddress.toLowerCase()}`)), [watchlist]);
 
   return (
@@ -388,7 +417,13 @@ export function HomeScreen({
       extraData={watchlistKeys}
       keyExtractor={item => `${item.chainKey}:${item.tokenAddress}`}
       renderItem={({item}) => (
-        <TokenRow token={item} colors={colors} onPress={onSelectToken} starred={watchlistKeys.has(`${item.chainKey}:${item.tokenAddress.toLowerCase()}`)} />
+        <TokenRow
+          token={item}
+          colors={colors}
+          onPress={onSelectToken}
+          starred={watchlistKeys.has(`${item.chainKey}:${item.tokenAddress.toLowerCase()}`)}
+          entryMarketCapUsd={entryMarketCaps.get(`${item.chainKey}:${item.chainKey === 'solana' ? item.tokenAddress : item.tokenAddress.toLowerCase()}`) ?? null}
+        />
       )}
       ListHeaderComponent={
         <>
@@ -655,15 +690,23 @@ function TokenRow({
   colors,
   onPress,
   starred,
+  entryMarketCapUsd,
 }: {
   token: DiscoveryToken;
   colors: Colors;
   onPress?: (token: DiscoveryToken) => void;
   starred: boolean;
+  // Entry MC is display-only position analytics.
+  entryMarketCapUsd: number | null;
 }) {
   const styles = makeStyles(colors);
   const [imageFailed, setImageFailed] = useState(false);
   const positive = (token.change24h ?? 0) >= 0;
+  const hasPosition = entryMarketCapUsd != null && entryMarketCapUsd > 0;
+  const mcReturnPct = hasPosition && token.marketCapUsd != null && token.marketCapUsd > 0
+    ? ((token.marketCapUsd / entryMarketCapUsd) - 1) * 100
+    : null;
+  const positionPositive = (mcReturnPct ?? 0) >= 0;
 
   return (
     <TouchableOpacity style={styles.tokenRow} activeOpacity={onPress ? 0.6 : 1} onPress={() => onPress?.(token)} disabled={!onPress}>
@@ -679,10 +722,15 @@ function TokenRow({
           {token.symbol}
         </Text>
         <Text style={styles.tokenMarketCap}>{formatMarketCap(token.marketCapUsd)}</Text>
+        {hasPosition && <Text style={styles.tokenEntryMarketCap}>{formatEntryMarketCap(entryMarketCapUsd)}</Text>}
       </View>
       <View style={styles.tokenPriceCol}>
         <Text style={styles.tokenPrice}>{formatPrice(token.priceUsd)}</Text>
-        {token.change24h != null && (
+        {mcReturnPct != null ? (
+          <Text style={[styles.tokenChange, {color: positionPositive ? colors.gain : colors.danger}]}>
+            {positionPositive ? '🟢 ▲ +' : '🔴 ▼ -'}{Math.abs(mcReturnPct).toFixed(2)}%
+          </Text>
+        ) : token.change24h != null && (
           <Text style={[styles.tokenChange, {color: positive ? colors.gain : colors.danger}]}>
             {positive ? '▲' : '▼'} {Math.abs(token.change24h).toFixed(2)}%
           </Text>
@@ -816,6 +864,7 @@ function makeStyles(colors: Colors) {
     tokenInfo: {flex: 1, minWidth: 0, gap: 3},
     tokenSymbol: {color: colors.textPrimary, fontSize: 17, fontWeight: '700'},
     tokenMarketCap: {color: colors.textMuted, fontSize: 12.5},
+    tokenEntryMarketCap: {color: colors.textSecondary, fontSize: 10.5, fontWeight: '600'},
     tokenPriceCol: {alignItems: 'flex-end', gap: 3},
     tokenPrice: {color: colors.textPrimary, fontSize: 15.5, fontWeight: '700'},
     tokenChange: {fontSize: 12.5, fontWeight: '700'},

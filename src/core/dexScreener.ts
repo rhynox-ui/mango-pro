@@ -56,7 +56,7 @@ export function tradeChainForDexScreenerChainId(dexScreenerChainId: string): Tra
   return chainKeyForDexScreenerChainId(dexScreenerChainId);
 }
 
-export type ResolvedPair = {chainId: string; pairAddress: string; socialLinks: TokenSocialLink[]; priceUsd: number | null};
+export type ResolvedPair = {chainId: string; pairAddress: string; socialLinks: TokenSocialLink[]; priceUsd: number | null; marketCapUsd: number | null};
 
 // The handful of fields this app actually reads off a DexScreener API
 // pair object — not the full response shape, just enough to type-check
@@ -173,7 +173,8 @@ async function resolveDexScreenerPairUncached(chainId: string, tokenAddress: str
     // token in $$$.
     if (!best) return null;
     const priceUsd = Number(best.priceUsd);
-    return {chainId, pairAddress: best.pairAddress as string, socialLinks: extractSocialLinks(best), priceUsd: Number.isFinite(priceUsd) ? priceUsd : null};
+    const marketCapUsd = Number(best.marketCap ?? best.fdv);
+    return {chainId, pairAddress: best.pairAddress as string, socialLinks: extractSocialLinks(best), priceUsd: Number.isFinite(priceUsd) ? priceUsd : null, marketCapUsd: Number.isFinite(marketCapUsd) ? marketCapUsd : null};
   } catch {
     return null;
   }

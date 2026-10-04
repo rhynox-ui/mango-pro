@@ -57,6 +57,14 @@ function formatUsd(n: number): string {
 }
 
 /** A held token amount, not a $ amount — more decimals for a sub-$1 meme-token balance, trimmed trailing zeros so "5.2000" reads as "5.2". */
+function formatMarketCapCompact(n: number | null): string {
+  if (n == null || !Number.isFinite(n)) return '—';
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return `${n.toFixed(0)}`;
+}
+
 function formatTokenAmount(n: number): string {
   if (n === 0) return '0';
   const decimals = Math.abs(n) >= 1 ? 4 : 6;
@@ -389,6 +397,15 @@ export function ProfileScreen({
     return [...byKey.values()].sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0));
   }, [walletAssets, openPositions]);
 
+  const positionMetricsByKey = useMemo(() => {
+    const map = new Map<string, OpenPositionWithValue>();
+    for (const position of openPositions) {
+      const key = `${position.chainKey}:${position.chainKey === 'solana' ? position.tokenAddress : position.tokenAddress.toLowerCase()}`;
+      map.set(key, position);
+    }
+    return map;
+  }, [openPositions]);
+
 
   useEffect(() => {
     function recount(entries: ReturnType<typeof getTxHistory>) {
@@ -405,7 +422,7 @@ export function ProfileScreen({
       // live $ values once DexScreener resolves — never blocks showing
       // what's actually held on a price lookup.
       const positions = computeOpenPositions(successful);
-      setOpenPositions(positions.map(p => ({...p, valueUsd: null})));
+      setOpenPositions(positions.map(p => ({...p, valueUsd: null, currentMarketCapUsd: null})));
       withLiveValues(positions).then(setOpenPositions);
     }
     recount(getTxHistory());
@@ -823,10 +840,27 @@ export function ProfileScreen({
                   <Text style={styles.closedTradeSubtitle} numberOfLines={1}>
                     {formatTokenAmount(asset.amount)} {asset.symbol} · {asset.chainKey === 'near' ? NEAR_LABEL : CHAIN_LABEL[asset.chainKey]}
                   </Text>
+                  {(() => {
+                    const position = positionMetricsByKey.get(`${asset.chainKey}:${asset.chainKey === 'solana' ? asset.address : asset.address.toLowerCase()}`);
+                    if (!position?.entryMarketCapUsd || position.entryMarketCapUsd <= 0) return null;
+                    const currentMc = position.currentMarketCapUsd;
+                    const returnPct = currentMc != null && currentMc > 0 ? ((currentMc / position.entryMarketCapUsd) - 1) * 100 : null;
+                    const positive = (returnPct ?? 0) >= 0;
+                    return (
+                      <View style={styles.positionPerformanceRow}>
+                        <Text style={styles.positionEntryText}>Entry MC {formatMarketCapCompact(position.entryMarketCapUsd)}</Text>
+                        {returnPct != null && (
+                          <Text style={[styles.positionReturnText, {color: positive ? colors.gain : colors.danger}]}>
+                            {positive ? '▲' : '▼'} {Math.abs(returnPct).toFixed(2)}%
+                          </Text>
+                        )}
+                      </View>
+                    );
+                  })()}
                 </View>
                 <View style={styles.closedTradeRight}>
                   <Text style={styles.closedTradeTitle}>
-                    {asset.valueUsd != null ? `$${formatUsd(asset.valueUsd)}` : '—'}
+                    {asset.valueUsd != null ? `${formatUsd(asset.valueUsd)}` : '—'}
                   </Text>
                 </View>
               </TouchableOpacity>
@@ -1455,6 +1489,9 @@ function makeStyles(colors: Colors) {
     assetFilterText: {color: colors.textSecondary, fontSize: 13, fontWeight: '600'},
     assetFilterTextActive: {color: colors.ctaText},
 
+    positionPerformanceRow: {flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2, flexWrap: 'wrap'},
+    positionEntryText: {color: colors.textMuted, fontSize: 10.5, fontWeight: '600'},
+    positionReturnText: {fontSize: 10.5, fontWeight: '800'},
     emptyPositions: {color: colors.textMuted, fontSize: 13, textAlign: 'center', marginTop: 28},
     emptyPositionsBox: {alignItems: 'center', justifyContent: 'center', paddingVertical: 28, paddingHorizontal: 20},
     emptyPositionsText: {color: colors.textMuted, fontSize: 13, textAlign: 'center', marginTop: 8},
