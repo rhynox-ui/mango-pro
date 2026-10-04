@@ -110,7 +110,7 @@ export async function assertSolanaSpendWithinIntent(
     expectedOutputMint,
     expectedOutputMinimum = 0n,
     expectedOutputAccounts = [],
-  }: {owner: unknown; ownerAddress: string; intent: SolanaSpendIntent; tokenProgramIds: [unknown, unknown]; encodeBase58: (b: Uint8Array) => string; overheadLamports?: bigint},
+  }: {owner: unknown; ownerAddress: string; intent: SolanaSpendIntent; tokenProgramIds: [unknown, unknown]; encodeBase58: (b: Uint8Array) => string; overheadLamports?: bigint; expectedOutputMint?: string; expectedOutputMinimum?: bigint; expectedOutputAccounts?: string[]},
 ): Promise<void> {
   const spendsSol = intent.spend === SOLANA_NATIVE_SPEND;
   const allowance = (mint: string): bigint =>
