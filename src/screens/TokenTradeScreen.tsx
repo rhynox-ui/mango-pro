@@ -713,7 +713,6 @@ const needsUnifiedRouting =
                   recipientAddress: legRecipientAddress,
                   originAmountUsd: legUsd,
                   slippageTolerance: slippageBps ?? undefined,
-        originGasOverhead: gaslessTradingEnabled ? '80000' : undefined,
                   originGasOverhead: gaslessTradingEnabled ? '80000' : undefined,
                 };
                 const legQuote = await getRelayQuote(legParams);
