@@ -47,6 +47,7 @@ import {signMessageViaParticle} from '../wallet/particleSigning';
 import {loadGaslessTradingEnabled} from '../settings/gaslessTradingPrefs';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {useSession} from '../wallet/SessionContext';
+import {fetchWalletAssets, type WalletAsset} from '../wallet/walletAssets';
 import type {DemoToken} from './TokenTradeScreen';
 
 function formatUsd(n: number): string {
