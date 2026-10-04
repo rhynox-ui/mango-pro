@@ -66,7 +66,7 @@ import {useSession} from '../wallet/SessionContext';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {TradeSettingsSheet} from '../components/TradeSettingsSheet';
 import {TradeResultModal, type TradeResultSummary} from '../components/TradeResultModal';
-import {cashLogoUrl, fetchCashPortfolio, spendableCash, spendableTotalUsd, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
+import {fetchCashPortfolio, spendableCash, spendableTotalUsd, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
 
 /**
  * Buy-side only — which chain the user's cash actually gets spent from.
@@ -1681,15 +1681,7 @@ function makeStyles(colors: Colors) {
     priceImpactValueDanger: {color: colors.danger, fontWeight: '700'},
   });
 }
- + (amtNum - remainingUsd).toFixed(2) +
-              ' of this buy can currently be routed through Relay to ' + CHAIN_LABEL[chainKey] +
-              ' from your available USDC; try a smaller amount or try again.',
-            );
-          }
-          return plan;
-        };
 
-        buildPlan().then(plan => {
           if (requestId !== quoteRequestIdRef.current) return;
           multiSourcePlanRef.current = plan;
           rawQuoteRef.current = null;
