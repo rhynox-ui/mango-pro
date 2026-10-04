@@ -20,12 +20,12 @@
 // receives the signed transaction, let alone the key — see that file's
 // header for the fuller reasoning, which applies here unchanged.
 
-import {createPublicClient, createWalletClient, encodeFunctionData, parseUnits, isAddress} from 'viem';
+import {createPublicClient, encodeFunctionData, parseUnits, isAddress} from 'viem';
 import {privateKeyToAccount} from 'viem/accounts';
 import bs58 from 'bs58';
 import {getViemChain, transportFor} from '../core/chainRegistry.ts';
 import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, assetDecimalsForChain, type ChainKey} from '../core/chainData.ts';
-import {sendEvmCallsViaRelayGasless, isPreBroadcastRelayError} from '../core/relayGaslessEvm.ts';
+import {sendEvmCallsViaRelayGasless} from '../core/relayGaslessEvm.ts';
 import {signAndSendSponsoredSolanaStep, type SolanaTransactionSigner} from '../core/executeRelayQuote.ts';
 import type {DerivedAccounts} from './keys';
 
@@ -91,50 +91,24 @@ async function sendEvmCashAsset(chainKey: ChainKey, asset: CashAsset, session: D
 
   const account = privateKeyToAccount(session.evm.privateKey as `0x${string}`);
 
-  // Relay is the only EVM gasless provider. If Relay rejects before
-  // broadcast, fall back to the normal user-signed ERC-20 transfer.
-  if (useGaslessTrading) {
-    try {
-      const relay = await sendEvmCallsViaRelayGasless({
-        chain,
-        fromAddress,
-        privateKey: session.evm.privateKey as `0x${string}`,
-        calls: [{to: tokenAddress as `0x${string}`, data, value: 0n}],
-      });
-      return {hash: relay.hash};
-    } catch (relayErr) {
-      const message = relayErr instanceof Error ? relayErr.message : String(relayErr);
-      if (!isPreBroadcastRelayError(message)) throw relayErr;
-      console.warn('[sendUsdc] Relay gasless withdrawal rejected before broadcast; falling back to normal gas:', message);
-    }
-  }
-
-  const walletClient = createWalletClient({account, chain, transport});
-  const [gasLimit, {maxFeePerGas, maxPriorityFeePerGas}] = await Promise.all([
-    publicClient.estimateGas({account: account.address, to: tokenAddress as `0x${string}`, data}),
-    publicClient.estimateFeesPerGas(),
-  ]);
-
-  // On Arc the USDC being sent and the gas paying for it are one balance
-  // (native reads it with 18 decimals, the token with 6). Check both fit
-  // before broadcasting, rather than reverting after the gas is taken.
-  if (chainKey === 'arc') {
-    const nativeBalance = await publicClient.getBalance({address: account.address});
-    if (nativeBalance < amountRaw * 10n ** 12n + gasLimit * maxFeePerGas) {
-      throw new Error("Insufficient USDC for network fees on Arc. Gas there is paid in the same USDC you're sending — try a slightly smaller amount.");
-    }
-  }
-
-  const hash = await walletClient.writeContract({
-    address: tokenAddress as `0x${string}`,
-    abi: ERC20_TRANSFER_ABI,
-    functionName: 'transfer',
-    args: [toAddress as `0x${string}`, amountRaw],
-    gas: gasLimit,
-    maxFeePerGas,
-    maxPriorityFeePerGas,
+  // Relay is the ONLY EVM execution provider for Mango's gasless cash
+  // movement. A Relay rejection is a real execution failure — it is
+  // never permission to silently switch to a user-paid native-gas
+  // transfer. That fallback caused the "insufficient ETH for gas"
+  // withdrawal failure: the wallet held USDC but no ETH, so viem tried
+  // to execute transfer() directly and failed.
+  //
+  // Keep the old option in the signature for caller compatibility, but
+  // it cannot disable Relay for cash movement. A withdrawal must not
+  // unexpectedly become dependent on the chain's native gas token.
+  void useGaslessTrading;
+  const relay = await sendEvmCallsViaRelayGasless({
+    chain,
+    fromAddress,
+    privateKey: session.evm.privateKey as `0x${string}`,
+    calls: [{to: tokenAddress as `0x${string}`, data, value: 0n}],
   });
-  return {hash};
+  return {hash: relay.hash};
 }
 
 async function sendSolanaUsdc(session: DerivedAccounts, toAddress: string, amountUsdc: string): Promise<{signature: string}> {
