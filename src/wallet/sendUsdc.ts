@@ -25,7 +25,6 @@ import {privateKeyToAccount} from 'viem/accounts';
 import bs58 from 'bs58';
 import {getViemChain, transportFor} from '../core/chainRegistry.ts';
 import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, assetDecimalsForChain, type ChainKey} from '../core/chainData.ts';
-import {getEip7702AuthorizationIfNeeded, getSponsoredSmartAccountClient, isGaslessSupportedOnChain, isSmartAccountSponsorshipConfigured} from './smartAccount.ts';
 import {sendEvmCallsViaRelayGasless, isPreBroadcastRelayError} from '../core/relayGaslessEvm.ts';
 import {signAndSendSponsoredSolanaStep, type SolanaTransactionSigner} from '../core/executeRelayQuote.ts';
 import type {DerivedAccounts} from './keys';
@@ -92,10 +91,9 @@ async function sendEvmCashAsset(chainKey: ChainKey, asset: CashAsset, session: D
 
   const account = privateKeyToAccount(session.evm.privateKey as `0x${string}`);
 
-  // EVM gasless policy is global: Relay is PRIMARY, Pimlico is SECOND.
-  // Relay receives the exact ERC-20 transfer call already built above, so
-  // this path never changes the withdrawal asset, amount, or recipient.
-  if (useGaslessTrading && isSmartAccountSponsorshipConfigured() && isGaslessSupportedOnChain(chain.id)) {
+  // Relay is the only EVM gasless provider. If Relay rejects before
+  // broadcast, fall back to the normal user-signed ERC-20 transfer.
+  if (useGaslessTrading) {
     try {
       const relay = await sendEvmCallsViaRelayGasless({
         chain,
@@ -107,38 +105,7 @@ async function sendEvmCashAsset(chainKey: ChainKey, asset: CashAsset, session: D
     } catch (relayErr) {
       const message = relayErr instanceof Error ? relayErr.message : String(relayErr);
       if (!isPreBroadcastRelayError(message)) throw relayErr;
-      console.warn('[sendUsdc] Primary Relay gasless withdrawal rejected before broadcast; trying Pimlico second:', message);
-    }
-
-    // Pimlico remains the second-choice EIP-7702 sponsor. Never downgrade
-    // to a plain transaction from an ambiguous post-broadcast failure.
-    let sponsoredClient: Awaited<ReturnType<typeof getSponsoredSmartAccountClient>> | null = null;
-    try {
-      sponsoredClient = await getSponsoredSmartAccountClient({chain, owner: account});
-      await publicClient.call({account: sponsoredClient.account.address, to: tokenAddress as `0x${string}`, data, value: 0n});
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (message && !/timeout|network|fetch|429|403/i.test(message)) {
-        throw new Error(`This withdrawal would revert: ${message}`);
-      }
-    }
-
-    if (sponsoredClient) {
-      try {
-        const authorization = await getEip7702AuthorizationIfNeeded(sponsoredClient, publicClient);
-        const hash = await sponsoredClient.sendTransaction({to: tokenAddress as `0x${string}`, data, value: 0n, authorization});
-        await publicClient.waitForTransactionReceipt({hash});
-        return {hash};
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const isPreBroadcastRejection = /invalid fields set on user operation|invalid useroperation|\\baa[0-9]{2}\\b|error code:\\s*1101|cloudflare.*1101|worker threw.*exception/i.test(message);
-        if (!isPreBroadcastRejection) throw err;
-        // 1101 is a Cloudflare Worker exception from Mango's provider proxy,
-        // and this checkpoint is still before a UserOperation hash/broadcast
-        // has been returned. It is therefore safe to abandon the optional
-        // sponsor and send the exact same ERC-20 transfer normally.
-        console.warn('[sendUsdc] Pimlico sponsorship failed before broadcast; falling back to normal gas:', message);
-      }
+      console.warn('[sendUsdc] Relay gasless withdrawal rejected before broadcast; falling back to normal gas:', message);
     }
   }
 
