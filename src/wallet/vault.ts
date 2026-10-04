@@ -28,6 +28,7 @@
 // same device.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Keychain from 'react-native-keychain';
 import {
   PBKDF2_ITERATIONS,
   assertValidSecretRecord,
@@ -88,7 +89,9 @@ export class VaultLockedError extends Error {
 export type {SecretRecord};
 
 const STORAGE_KEY = 'mango_pro_wallet_vault_v1';
-const VAULT_SCHEMA_VERSION = 1;
+const KEYCHAIN_SERVICE = 'com.mangoprotocol.pro.vault';
+const KEYCHAIN_USERNAME = 'mango-pro-vault';
+const VAULT_SCHEMA_VERSION = 2;
 
 type StoredVault = {
   version: number;
@@ -96,16 +99,43 @@ type StoredVault = {
 };
 
 export async function saveVault(mnemonicRecord: SecretRecord): Promise<void> {
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify({version: VAULT_SCHEMA_VERSION, mnemonicRecord}));
+  const payload = JSON.stringify({version: VAULT_SCHEMA_VERSION, mnemonicRecord});
+  // Keep the encrypted mnemonic record out of ordinary app storage. On
+  // Android this uses the platform Keystore-backed storage selected by
+  // react-native-keychain; on iOS it is Keychain storage. The
+  // WHEN_UNLOCKED_THIS_DEVICE_ONLY policy also prevents the vault record
+  // from migrating through a device backup. Hardware-backed protection is
+  // used by the platform when the device supports it; the app does not
+  // pretend every phone has a Secure Enclave/TEE.
+  await Keychain.setGenericPassword(KEYCHAIN_USERNAME, payload, {
+    service: KEYCHAIN_SERVICE,
+    accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+  });
+  // This marker contains no secret. It exists only so old installations
+  // can distinguish a created vault without depending on AsyncStorage for
+  // the encrypted material itself.
+  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify({version: VAULT_SCHEMA_VERSION}));
 }
 
 export async function loadVault(): Promise<StoredVault | null> {
   try {
+    const secure = await Keychain.getGenericPassword({service: KEYCHAIN_SERVICE});
+    if (secure && typeof secure.password === 'string') {
+      const parsed = JSON.parse(secure.password);
+      if (parsed.version === VAULT_SCHEMA_VERSION && parsed.mnemonicRecord) return parsed;
+    }
+
+    // One-time migration for v1 installs: read the old encrypted record,
+    // move it into Keychain/Keystore storage, then erase the old ciphertext
+    // from AsyncStorage. The mnemonic is still password-encrypted during
+    // this migration; only its storage location changes.
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (parsed.version !== VAULT_SCHEMA_VERSION) return null;
-    return parsed;
+    if (parsed.version !== 1 || !parsed.mnemonicRecord) return null;
+    await saveVault(parsed.mnemonicRecord);
+    await AsyncStorage.removeItem(STORAGE_KEY);
+    return {version: VAULT_SCHEMA_VERSION, mnemonicRecord: parsed.mnemonicRecord};
   } catch {
     return null;
   }
@@ -117,6 +147,7 @@ export async function hasVault(): Promise<boolean> {
 
 /** Permanently deletes the local encrypted vault. Callers MUST have already made the user confirm they've backed up their recovery phrase — this cannot be undone. */
 export async function clearVault(): Promise<void> {
+  await Keychain.resetGenericPassword({service: KEYCHAIN_SERVICE});
   await AsyncStorage.removeItem(STORAGE_KEY);
 }
 
