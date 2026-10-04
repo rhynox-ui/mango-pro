@@ -422,7 +422,7 @@ export function ProfileScreen({
       // live $ values once DexScreener resolves — never blocks showing
       // what's actually held on a price lookup.
       const positions = computeOpenPositions(successful);
-      setOpenPositions(positions.map(p => ({...p, valueUsd: null})));
+      setOpenPositions(positions.map(p => ({...p, valueUsd: null, currentMarketCapUsd: null})));
       withLiveValues(positions).then(setOpenPositions);
     }
     recount(getTxHistory());
