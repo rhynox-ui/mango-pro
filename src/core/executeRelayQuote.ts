@@ -104,6 +104,25 @@ export function solanaSpendIntentFor(intent: TransactionIntent): SolanaSpendInte
   return {spend: intent.originCurrency, maxSpend: intent.amount};
 }
 
+async function solanaOutputVerificationFor(quote: RelayQuote, intent: TransactionIntent, ownerAddress: string): Promise<Pick<SolanaSpendIntent, 'expectedOutputMint' | 'expectedOutputMinimum' | 'expectedOutputAccounts'>> {
+  if (intent.destinationChainId !== 792703809) return {};
+  const output = quote.details?.currencyOut;
+  const mint = output?.currency?.address;
+  if (!mint || !output?.amount || !/^\\d+$/.test(output.amount)) return {};
+  if (mint === SYSTEM_PROGRAM_ID || mint === 'So11111111111111111111111111111111111111112') return {};
+  try {
+    const [{PublicKey}, splToken] = await Promise.all([import('@solana/web3.js'), import('@solana/spl-token')]);
+    const owner = new PublicKey(ownerAddress);
+    const mintKey = new PublicKey(mint);
+    const accounts = await Promise.all([
+      splToken.getAssociatedTokenAddress(mintKey, owner, false, splToken.TOKEN_PROGRAM_ID, splToken.ASSOCIATED_TOKEN_PROGRAM_ID),
+      splToken.getAssociatedTokenAddress(mintKey, owner, false, splToken.TOKEN_2022_PROGRAM_ID, splToken.ASSOCIATED_TOKEN_PROGRAM_ID),
+    ]);
+    return {expectedOutputMint: mint, expectedOutputMinimum: BigInt(output.amount), expectedOutputAccounts: accounts.map(a => a.toBase58())};
+  } catch {
+    throw new Error('The Solana output could not be verified safely — refusing to sign this trade.');
+  }
+}
 async function pollRelayStatus(requestId: string, {intervalMs = 2000, timeoutMs = 10 * 60 * 1000}: {intervalMs?: number; timeoutMs?: number} = {}): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -1353,7 +1372,7 @@ export async function executeRelayQuote(
   try {
     for (const item of pendingItems) {
       if (isSolanaShaped(item)) {
-        const spendIntent = solanaSpendIntentFor(tagged.intent);
+        const spendIntent = {...solanaSpendIntentFor(tagged.intent), ...await solanaOutputVerificationFor(quote, tagged.intent, session.solana.address)};
         const {signature, warnings: solanaStepWarnings} = isGoogleSession
           ? await signAndSendRelaySolanaStepViaParticle(item, session.solana.address, spendIntent)
           : await signAndSendRelaySolanaStep(item, session.solana.privateKey, spendIntent);
