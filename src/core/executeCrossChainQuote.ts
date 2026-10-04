@@ -186,13 +186,19 @@ async function executeSolanaOrigin(
   };
   await assertSolanaSpendWithinIntentWeb3(connection, transaction, session.solana.address, spend);
 
-  transaction.sign([Keypair.fromSecretKey(bs58.decode(session.solana.privateKey))]);
-  const signature = await connection.sendTransaction(transaction, {skipPreflight: false, preflightCommitment: 'confirmed'});
-  const confirmation = await connection.confirmTransaction({
-    signature,
-    ...(await connection.getLatestBlockhash('confirmed')),
-  }, 'confirmed');
-  if (confirmation.value.err) throw new Error('Solana cross-chain transaction failed on-chain.');
+  let signature: string;
+  if (session.authMethod === 'google') {
+    const {signAndSendSolanaTransactionViaParticle} = await import('../wallet/particleSigning.ts');
+    signature = await signAndSendSolanaTransactionViaParticle(raw);
+  } else {
+    transaction.sign([Keypair.fromSecretKey(bs58.decode(session.solana.privateKey))]);
+    signature = await connection.sendTransaction(transaction, {skipPreflight: false, preflightCommitment: 'confirmed'});
+    const confirmation = await connection.confirmTransaction({
+      signature,
+      ...(await connection.getLatestBlockhash('confirmed')),
+    }, 'confirmed');
+    if (confirmation.value.err) throw new Error('Solana cross-chain transaction failed on-chain.');
+  }
   return {hash: signature, warnings: []};
 }
 
