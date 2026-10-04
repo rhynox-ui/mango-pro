@@ -828,7 +828,10 @@ export function TokenTradeScreen({
             const coveredUsd = Math.max(0, amtNum - remainingUsd);
             throw new Error(
               coveredUsd > 0
-                ? 'Could only route 
+                ? 'Could only route ' + coveredUsd.toFixed(2) + ' USDC of the requested ' + amtNum.toFixed(2) + ' USDC from your available balance.'
+                : 'No executable Relay route could cover the requested amount from your available USDC.',
+            );
+          }
           return plan;
         };
 
