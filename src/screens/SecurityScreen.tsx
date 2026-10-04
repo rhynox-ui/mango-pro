@@ -27,7 +27,6 @@ import {EnableBiometricModal} from '../wallet/EnableBiometricModal';
 import {RevealPhraseModal} from '../wallet/RevealPhraseModal';
 import {ExportPrivateKeyModal} from '../wallet/ExportPrivateKeyModal';
 import {loadGaslessTradingEnabled, setGaslessTradingEnabled} from '../settings/gaslessTradingPrefs';
-import {isSmartAccountSponsorshipConfigured} from '../wallet/smartAccount';
 
 export function SecurityScreen({onBack}: {onBack: () => void}) {
   const {colors} = useTheme();
@@ -119,15 +118,14 @@ export function SecurityScreen({onBack}: {onBack: () => void}) {
           </View>
         </>
       )}
-      {isSeedSession && isSmartAccountSponsorshipConfigured() && (
+      {isSeedSession && (
         <>
           <Text style={styles.sectionLabel}>Gasless trading (beta)</Text>
           <View style={styles.switchRow}>
             <View style={styles.switchLabelWrap}>
               <Text style={styles.rowLabel}>Sponsor my trade gas</Text>
               <Text style={styles.sectionHint}>
-                Enable gasless trading to use Mango Pro. Your wallet is delegated to a smart account via EIP-7702, allowing
-                Relay covers transaction gas first; Pimlico is the backup sponsor if Relay cannot execute — no native ETH/BNB required.
+                Enable gasless trading to use Mango Pro. Relay sponsors supported trade execution, so no native ETH/BNB is required when a sponsored route is available.
               </Text>
             </View>
             <Switch
