@@ -28,7 +28,6 @@ import {fetchUsdcPortfolio} from './usdcBalances.ts';
 import {fetchOneClickTokens, findOneClickAssetId, ONE_CLICK_PROXY_BASE_URL, type OneClickQuoteRequest, requestOneClickQuote, fetchOneClickStatus, submitOneClickDepositTx} from './oneClick.ts';
 import {fundOneClickQuote, type OneClickSwapStore} from './oneClickDeposits.ts';
 import {oneClickSwapStore} from '../wallet/oneClickSwapStore.ts';
-import {sendUsdc} from '../wallet/sendUsdc.ts';
 
 export type NearTradeSide = 'buy' | 'sell';
 
@@ -127,7 +126,10 @@ export async function fundNearUsdcForTrade(
         originSymbol: 'USDC',
         originDecimals: decimals,
         fromAddress: sourceChain === 'solana' ? session.solana.address : session.evm.address,
-        send: async (to, sendAmount) => (await sendUsdc(sourceChain, session, to, sendAmount, 'USDC', true)).txId,
+        send: async (to, sendAmount) => {
+          const {sendUsdc} = await import('../wallet/sendUsdc.ts');
+          return (await sendUsdc(sourceChain, session, to, sendAmount, 'USDC', true)).txId;
+        },
         store,
         submitDepositTx: (txHash, depositAddress) => submitOneClickDepositTx(txHash, depositAddress, {baseUrl: ONE_CLICK_PROXY_BASE_URL}),
         now,
