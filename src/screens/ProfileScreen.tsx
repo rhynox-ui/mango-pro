@@ -871,12 +871,12 @@ export function ProfileScreen({
                 {asset.isNative ? (
                   <NetworkIcon chainKey={asset.chainKey} size={30} />
                 ) : (
-                  <AssetIcon symbol={asset.symbol} imageUrl={asset.imageUrl} size={30} />
+                  <AssetIcon symbol={asset.symbol} imageUrl={asset.imageUrl} chainKey={asset.chainKey} address={asset.address} size={30} />
                 )}
                 <View style={styles.closedTradeMain}>
                   <Text style={styles.closedTradeTitle} numberOfLines={1}>{asset.symbol}</Text>
                   <Text style={styles.closedTradeSubtitle} numberOfLines={1}>
-                    {formatTokenAmount(asset.amount)} {asset.symbol} · {asset.chainKey === 'near' ? NEAR_LABEL : CHAIN_LABEL[asset.chainKey]}
+                    {formatTokenAmount(asset.amount)} · {asset.chainKey === 'near' ? NEAR_LABEL : CHAIN_LABEL[asset.chainKey]}
                   </Text>
                   {(() => {
                     const position = positionMetricsByKey.get(`${asset.chainKey}:${asset.chainKey === 'solana' ? asset.address : asset.address.toLowerCase()}`);
