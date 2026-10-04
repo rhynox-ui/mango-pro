@@ -107,7 +107,7 @@ export async function getCrossChainStatus(params: {
     quoteId: params.quoteId,
   });
   const res = await fetch(`${STATUS_URL}?${q.toString()}`);
-  const json = await res.json().catch(() => ({}));
+  const json = await res.json().catch(() => ({} as {data?: unknown; error?: unknown}));
   if (!res.ok || !json?.data) throw apiError(json, 'Could not check cross-chain execution status.');
   return json.data as CrossChainStatus;
 }
