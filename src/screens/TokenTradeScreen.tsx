@@ -339,20 +339,22 @@ export function TokenTradeScreen({
       if (!best || spendable > best.balance) best = {chainKey: result.chainKey, balance: spendable};
     }
     const tokenChain = token.chainKey;
-    const fallbackChain = tokenChain !== 'near' && CASH_SUPPORTED_CHAINS.includes(tokenChain) ? tokenChain : CASH_SUPPORTED_CHAINS[0];
+    const tokenChainKey: ChainKey | null =
+      tokenChain !== 'near' && CASH_SUPPORTED_CHAINS.includes(tokenChain) ? tokenChain : null;
+    const fallbackChain = tokenChainKey ?? CASH_SUPPORTED_CHAINS[0];
 
     // Prefer same-chain cash whenever the destination chain has a usable
     // balance. Cross-chain Relay routes are a fallback: they have minimum
     // quote thresholds and extra routing constraints, so a tiny buy such as
     // $2 should not leave Solana/Base/etc. just because another chain holds
     // the wallet's largest cash balance.
-    const destinationCash = tokenChain !== 'near' && CASH_SUPPORTED_CHAINS.includes(tokenChain)
-      ? cashPortfolio?.results.find(r => r.status === 'ok' && r.chainKey === tokenChain)
+    const destinationCash = tokenChainKey
+      ? cashPortfolio?.results.find(r => r.status === 'ok' && r.chainKey === tokenChainKey)
       : undefined;
-    const destinationSpendable = destinationCash
-      ? spendableCash(tokenChain, destinationCash.balance)
+    const destinationSpendable = destinationCash?.status === 'ok'
+      ? spendableCash(tokenChainKey, destinationCash.balance)
       : 0;
-    const preferredChain = destinationSpendable > 0 ? tokenChain : (best ? best.chainKey : fallbackChain);
+    const preferredChain: ChainKey = destinationSpendable > 0 ? tokenChainKey : (best ? best.chainKey : fallbackChain);
 
     setPayOrigin({chainKey: preferredChain});
   }, [token, cashPortfolio]);
@@ -464,13 +466,14 @@ export function TokenTradeScreen({
   // available, even if one chain alone can cover the trade, so Relay route
   // quality is compared instead of assuming the largest balance is best.
   const unifiedCashSources = cashPortfolio?.results.filter(r => r.status === 'ok' && spendableCash(r.chainKey, r.balance) > 0).length ?? 0;
-  const destinationSpendableForRouting =
-    !nearToken && CASH_SUPPORTED_CHAINS.includes(token.chainKey)
-      ? spendableCash(
-          token.chainKey,
-          cashPortfolio?.results.find(r => r.status === 'ok' && r.chainKey === token.chainKey)?.balance ?? 0,
-        )
-      : 0;
+  const routingTokenChain: ChainKey | null =
+    !nearToken && CASH_SUPPORTED_CHAINS.includes(token.chainKey) ? token.chainKey : null;
+  const destinationSpendableForRouting = routingTokenChain
+    ? spendableCash(
+        routingTokenChain,
+        cashPortfolio?.results.find(r => r.status === 'ok' && r.chainKey === routingTokenChain)?.balance ?? 0,
+      )
+    : 0;
   // Never force a destination-chain buy through the multi-source planner.
   // If Solana/Base/etc. already has enough USDC for the whole amount, use
   // the normal single quote so the chain's same-chain fallback stack remains
