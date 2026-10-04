@@ -274,7 +274,7 @@ export async function quoteUniswapV3({chainId, tokenIn, tokenOut, amountIn}: {ch
               ? [{tokenIn: poolTokenIn, tokenOut: poolTokenOut, amountIn, fee, sqrtPriceLimitX96: 0n}]
               : [poolTokenIn, poolTokenOut, fee, amountIn, 0n],
         })
-        .then(({result}) => ({fee, amountOut: (result as any)[0] ?? result})),
+        .then(({result}) => ({fee, amountOut: typeof result === 'bigint' ? result : result[0]})),
     ),
   );
 
