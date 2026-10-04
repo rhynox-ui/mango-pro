@@ -164,6 +164,31 @@ const QUOTER_ABI = [
   },
 ] as const;
 
+// X Layer publishes Uniswap V3 QuoterV2, whose quoteExactInputSingle
+// takes the packed parameter tuple and returns the richer V2 result tuple.
+const QUOTER_V2_ABI = [
+  {
+    type: 'function',
+    name: 'quoteExactInputSingle',
+    stateMutability: 'nonpayable',
+    inputs: [{
+      name: 'params', type: 'tuple', components: [
+        {name: 'tokenIn', type: 'address'},
+        {name: 'tokenOut', type: 'address'},
+        {name: 'amountIn', type: 'uint256'},
+        {name: 'fee', type: 'uint24'},
+        {name: 'sqrtPriceLimitX96', type: 'uint160'},
+      ],
+    }],
+    outputs: [
+      {name: 'amountOut', type: 'uint256'},
+      {name: 'sqrtPriceX96After', type: 'uint160'},
+      {name: 'initializedTicksCrossed', type: 'uint32'},
+      {name: 'gasEstimate', type: 'uint256'},
+    ],
+  },
+] as const;
+
 const SWAP_ROUTER_02_ABI = [
   {
     type: 'function',
@@ -240,8 +265,16 @@ export async function quoteUniswapV3({chainId, tokenIn, tokenOut, amountIn}: {ch
   const attempts = await Promise.allSettled(
     FEE_TIERS.map(fee =>
       publicClient
-        .simulateContract({address: addresses.quoter, abi: QUOTER_ABI, functionName: 'quoteExactInputSingle', args: [poolTokenIn, poolTokenOut, fee, amountIn, 0n]})
-        .then(({result}) => ({fee, amountOut: result})),
+        .simulateContract({
+          address: addresses.quoter,
+          abi: chainId === 196 ? QUOTER_V2_ABI : QUOTER_ABI,
+          functionName: 'quoteExactInputSingle',
+          args:
+            chainId === 196
+              ? [{tokenIn: poolTokenIn, tokenOut: poolTokenOut, amountIn, fee, sqrtPriceLimitX96: 0n}]
+              : [poolTokenIn, poolTokenOut, fee, amountIn, 0n],
+        })
+        .then(({result}) => ({fee, amountOut: (result as any)[0] ?? result})),
     ),
   );
 
