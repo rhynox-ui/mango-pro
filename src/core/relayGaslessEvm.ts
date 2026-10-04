@@ -13,7 +13,7 @@ import {transportFor} from './chainRegistry.ts';
 
 const RELAY_EXECUTE_PROXY_URL = 'https://mangoprotocol.site/api/v1/pro/relay-execute';
 const RELAY_STATUS_URL = 'https://api.relay.link/intents/status/v3';
-const CALIBUR_ADDRESS = '0x000000009B1D0aF20D8C6d0A44e162d11F9b8f00' as Address;
+export const CALIBUR_ADDRESS = '0x000000009B1D0aF20D8C6d0A44e162d11F9b8f00' as Address;
 const ROOT_KEY_HASH = '0x0000000000000000000000000000000000000000000000000000000000000000' as Hex;
 
 const CALIBUR_ABI = [{
@@ -87,6 +87,36 @@ async function pollRelayStatus(requestId: string): Promise<string> {
 
 function isCaliburDelegated(code: string | undefined): boolean {
   return Boolean(code && code.toLowerCase() === `0xef0100${CALIBUR_ADDRESS.slice(2).toLowerCase()}`);
+}
+
+const caliburAvailabilityCache = new Map<number, {available: boolean; checkedAt: number}>();
+const CALIBUR_AVAILABILITY_CACHE_MS = 30_000;
+
+/**
+ * Checks the exact Calibur delegate used by Mango's current Relay EVM
+ * executor. A quote can be fetched on chains that Relay supports without
+ * that delegate being deployed; those quotes are not executable by this
+ * app's gasless Fomo path. Fail here, before the user ever reaches the
+ * sign/submit stage.
+ */
+export async function assertRelayGaslessEvmAvailable(chain: Chain): Promise<void> {
+  const now = Date.now();
+  const cached = caliburAvailabilityCache.get(chain.id);
+  if (cached && now - cached.checkedAt < CALIBUR_AVAILABILITY_CACHE_MS) {
+    if (!cached.available) {
+      throw new Error(`Relay gasless execution is not available on ${chain.name ?? `chain ${chain.id}`} — the Calibur delegate required by Mango is not deployed.`);
+    }
+    return;
+  }
+
+  const publicClient = createPublicClient({chain, transport: transportFor(chain.id)});
+  const code = await publicClient.getCode({address: CALIBUR_ADDRESS});
+  const available = Boolean(code && code !== '0x');
+  caliburAvailabilityCache.set(chain.id, {available, checkedAt: now});
+
+  if (!available) {
+    throw new Error(`Relay gasless execution is not available on ${chain.name ?? `chain ${chain.id}`} — the Calibur delegate required by Mango is not deployed.`);
+  }
 }
 
 export async function preflightRelayGaslessEvm(params: {
