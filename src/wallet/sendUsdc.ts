@@ -131,9 +131,13 @@ async function sendEvmCashAsset(chainKey: ChainKey, asset: CashAsset, session: D
         return {hash};
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        const isPreBroadcastRejection = /invalid fields set on user operation|invalid useroperation|\baa[0-9]{2}\b/i.test(message);
+        const isPreBroadcastRejection = /invalid fields set on user operation|invalid useroperation|\\baa[0-9]{2}\\b|error code:\\s*1101|cloudflare.*1101|worker threw.*exception/i.test(message);
         if (!isPreBroadcastRejection) throw err;
-        console.warn('[sendUsdc] Pimlico second-choice sponsorship rejected before broadcast; falling back to normal gas:', message);
+        // 1101 is a Cloudflare Worker exception from Mango's provider proxy,
+        // and this checkpoint is still before a UserOperation hash/broadcast
+        // has been returned. It is therefore safe to abandon the optional
+        // sponsor and send the exact same ERC-20 transfer normally.
+        console.warn('[sendUsdc] Pimlico sponsorship failed before broadcast; falling back to normal gas:', message);
       }
     }
   }
