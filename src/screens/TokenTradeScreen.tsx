@@ -921,126 +921,18 @@ export function TokenTradeScreen({
         })
         .catch(relayErr => {
           if (requestId !== quoteRequestIdRef.current) return;
-          const relayErrorMessage = relayErr instanceof Error ? relayErr.message : 'Could not get a quote — try again.';
-          // Relay itself has no route for this pair — try a fallback DEX
-          // aggregator (fallbackDex.ts) before giving up, same real gap
-          // mobile's own DexScreen.tsx closes: a thin/new token Relay's
-          // solver network hasn't indexed can still have a real quote
-          // through 1inch/0x directly. On Solana this checks pump.fun's
-          // bonding curve and PumpSwap's post-graduation pool instead
-          // (fallbackDex.ts's own header explains why) — still null, and
-          // still falling through to the original error, for an ordinary
-          // Solana token with no pump.fun presence at all. NONE of these
-          // fallback providers can bridge CHAINS — they're all direct
-          // on-chain DEX routers/aggregators, same-chain by construction
-          // (paying a different ASSET on the SAME chain, e.g. USDC
-          // instead of native, is exactly the ordinary case they already
-          // handle just fine — only an actual chain difference breaks
-          // that assumption) — so a genuinely cross-chain buy skips this
-          // entirely and just shows Relay's own error instead of
-          // pretending a same-chain aggregator could ever answer a
-          // cross-chain request.
-          if (isBuySide && payOrigin.chainKey !== chainKey) {
-            rawQuoteRef.current = null;
-            fallbackParamsRef.current = null;
-            setQuote(null);
-            setQuoteLoading(false);
-            setQuoteError(relayErrorMessage);
-            return;
-          }
-          const receiveDecimalsFallback = isBuySide
-            ? (tokenDecimals ?? 18)
-            : (assetDecimalsForChain(chainKey, receiveAsset === 'cash' ? (CASH_ASSET_BY_CHAIN[chainKey] ?? 'USDC') : NATIVE_SYMBOL[chainKey]) ?? 18);
-          const fallbackParams: FallbackRouteParams = {
-            chainKey,
-            sellToken: originCurrency,
-            buyToken: isBuySide ? token.address : sellReceiveCurrency,
-            sellAmount: amountBaseUnits,
-            takerAddress: userAddress,
-            originAmountUsd,
-            buyDecimals: receiveDecimalsFallback,
-            slippageBps: slippageBps ?? undefined,
-          };
-          checkFallbackRoute(fallbackParams)
-            .then(async fallback => {
-              if (requestId !== quoteRequestIdRef.current) return;
-              if (!fallback) {
-                rawQuoteRef.current = null;
-                fallbackParamsRef.current = null;
-                setQuote(null);
-                setQuoteLoading(false);
-                setQuoteError(relayErrorMessage);
-                return;
-              }
-              // Real UX gap this closes: on Solana, when the pair isn't
-              // even SOL<->token shaped, checkFallbackRoute now says so
-              // explicitly instead of returning a bare null indistinguishable
-              // from "the fallback tried and found nothing" — surface
-              // that instead of Relay's own generic message, which used
-              // to read as "nothing exists for this trade" rather than
-              // "the one fallback here only covers a narrower case."
-              if ('unsupportedReason' in fallback) {
-                rawQuoteRef.current = null;
-                fallbackParamsRef.current = null;
-                setQuote(null);
-                setQuoteLoading(false);
-                setQuoteError(fallback.unsupportedReason);
-                return;
-              }
-              rawQuoteRef.current = null;
-              fallbackParamsRef.current = fallbackParams;
-              let receivedAmountFormatted: string | null = null;
-              try {
-                receivedAmountFormatted = formatUnits(BigInt(fallback.buyAmount), receiveDecimalsFallback);
-              } catch {
-                receivedAmountFormatted = null;
-              }
-              // Real gap this closes: Relay's own quote carries a
-              // priceImpactPct that extremePriceImpact (below) blocks a
-              // trade on above EXTREME_PRICE_IMPACT_PCT — this fallback
-              // path always left it null, so that same safety gate never
-              // fired here no matter how thin the pool actually was. The
-              // TOKEN side of the trade is the same contract regardless
-              // of Buy/Sell (token.address/token.chainKey); only which
-              // side is "fixed/known" vs. "valued at live market price"
-              // swaps — a Buy's fixed side is the USD paid
-              // (originAmountUsd), a Sell's fixed side is the exact
-              // token amount sold (amtNum). See fetchLiveTokenPriceUsd's
-              // own header for why this compares against the token's
-              // real live market price rather than attempting separate
-              // spot-price math per AMM type.
-              let priceImpactPct: number | null = null;
-              if (requestId === quoteRequestIdRef.current) {
-                const tokenPriceUsd = await fetchLiveTokenPriceUsd({chainKey, tokenAddress: token.address});
-                if (tokenPriceUsd != null && requestId === quoteRequestIdRef.current) {
-                  if (isBuySide && originAmountUsd && receivedAmountFormatted) {
-                    const tokensReceived = Number(receivedAmountFormatted);
-                    const fairUsdReceived = tokensReceived * tokenPriceUsd;
-                    if (Number.isFinite(fairUsdReceived) && fairUsdReceived > 0) {
-                      priceImpactPct = ((fairUsdReceived - originAmountUsd) / originAmountUsd) * 100;
-                    }
-                  } else if (!isBuySide && amtNum > 0 && receivedAmountFormatted) {
-                    const fairUsdSold = amtNum * tokenPriceUsd;
-                    const nativePriceUsd = receiveAsset === 'cash' ? 1 : (await fetchWalletPrices().catch(() => ({}) as Record<string, number>))[NATIVE_SYMBOL[chainKey]];
-                    const actualUsdReceived = nativePriceUsd ? Number(receivedAmountFormatted) * nativePriceUsd : null;
-                    if (Number.isFinite(fairUsdSold) && fairUsdSold > 0 && actualUsdReceived != null && Number.isFinite(actualUsdReceived)) {
-                      priceImpactPct = ((actualUsdReceived - fairUsdSold) / fairUsdSold) * 100;
-                    }
-                  }
-                }
-              }
-              if (requestId !== quoteRequestIdRef.current) return;
-              setQuote({totalFeeUsd: null, etaSeconds: null, receivedAmountFormatted, payAmountUsd: null, receiveAmountUsd: null, priceImpactPct});
-              setQuoteLoading(false);
-            })
-            .catch(() => {
-              if (requestId !== quoteRequestIdRef.current) return;
-              rawQuoteRef.current = null;
-              fallbackParamsRef.current = null;
-              setQuote(null);
-              setQuoteLoading(false);
-              setQuoteError(relayErrorMessage);
-            });
+          // Mango's Fomo-style execution contract is Relay-first and
+          // gas-abstracted. Do not silently switch to 1inch/0x/pump.fun
+          // direct transactions when Relay cannot quote: those fallbacks
+          // are ordinary user-paid on-chain transactions and can require
+          // ETH/BNB/SOL. A fallback that changes the execution provider
+          // would recreate the exact native-gas failure this screen is
+          // designed to eliminate.
+          rawQuoteRef.current = null;
+          fallbackParamsRef.current = null;
+          setQuote(null);
+          setQuoteLoading(false);
+          setQuoteError(relayErr instanceof Error ? relayErr.message : 'Could not get a Relay route — try again.');
         });
     }, QUOTE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
