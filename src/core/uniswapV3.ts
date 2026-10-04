@@ -121,6 +121,15 @@ export const UNISWAP_V3_ADDRESSES: Record<number, UniswapV3ChainAddresses> = {
   // ARC_USDC), so the wrap/unwrap paths are never taken on Arc; pointing
   // wrappedNative at the same ERC-20 keeps a stray native quote on the
   // right pools and makes a stray native execution fail in simulation.
+  196: {
+    factory: '0x4B2ab38DBF28D31D467aA8993f6c2585981D6804',
+    quoter: '0xd1b797d92b688193a2b976dc8d577d204343' as never,
+    swapRouter02: '0x4f0c28f5926afda16bf2506d5d9e57ea190f9bca',
+    wrappedNative: '0xe538905cf8410324e03A5A23C1c177a474D59b2b',
+    v4PoolManager: '0x360e68faccca8ca495c1b759fd9eee466db9fb32',
+    v4Quoter: '0x8928074ca1b241d8ec02815881c1af11e8bc5219',
+    v4StateView: '0x76fd297e2d437cd7f76d50f01afe6160f86e9990',
+  },
   5042: {
     factory: '0xf0db7b58379503491d857db50ac9ece64c653918',
     quoter: '0x7dfd4f31be6814d2906bde155c3e1b146eac1468',
