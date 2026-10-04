@@ -16,6 +16,7 @@ import {useEffect, useMemo, useState} from 'react';
 import {Image, StyleSheet, Text, View} from 'react-native';
 import {useTheme} from '../theme/ThemeContext';
 import type {TradeChain} from '../core/chainData';
+import {dexScreenerChainForChain} from '../core/dexScreener';
 
 const logoCache = new Map<string, string | null>();
 const logoInFlight = new Map<string, Promise<string | null>>();
@@ -39,7 +40,8 @@ async function resolveTokenLogo(chainKey: TradeChain, address: string): Promise<
       const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(address)}`);
       if (response.ok) {
         const body = await response.json() as {pairs?: Array<{chainId?: string; liquidity?: {usd?: number}; info?: {imageUrl?: string}}>};
-        const pairs = (body.pairs ?? []).filter(p => typeof p?.info?.imageUrl === 'string' && p.info.imageUrl);
+        const dexChain = dexScreenerChainForChain(chainKey);
+        const pairs = (body.pairs ?? []).filter(p => p.chainId === dexChain && typeof p?.info?.imageUrl === 'string' && p.info.imageUrl);
         pairs.sort((a, b) => Number(b.liquidity?.usd ?? 0) - Number(a.liquidity?.usd ?? 0));
         const image = pairs[0]?.info?.imageUrl;
         if (image) return image;
