@@ -126,7 +126,7 @@ export async function fundNearUsdcForTrade(
           recipientType: 'DESTINATION_CHAIN',
           refundTo: sourceChain === 'solana' ? session.solana.address : session.evm.address,
           maxSlippageBps: 100,
-          appFees: [{recipient: 'widekingdom6862.near', fee: 0}],
+          appFees: [],
         },
         originChainKey: sourceChain,
         originSymbol: 'USDC',
