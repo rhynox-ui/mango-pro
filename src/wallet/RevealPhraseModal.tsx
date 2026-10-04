@@ -17,6 +17,7 @@
 // call here, gated behind the same password-throttled unlock every
 // other vault access already goes through.
 
+import Clipboard from '@react-native-clipboard/clipboard';
 import {useEffect, useMemo, useState} from 'react';
 import {Modal, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {ErrorText, PasswordField, PrimaryButton} from '../onboarding/ui';
@@ -33,6 +34,7 @@ export function RevealPhraseModal({visible, onClose}: {visible: boolean; onClose
   const [checking, setChecking] = useState(false);
   const [mnemonic, setMnemonic] = useState('');
   const [revealed, setRevealed] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   // Fails closed: the phrase is only ever unlocked once FLAG_SECURE is
   // genuinely applied, same contract mango-mobile's own RevealSeedPhraseModal.tsx
@@ -62,6 +64,7 @@ export function RevealPhraseModal({visible, onClose}: {visible: boolean; onClose
     setChecking(false);
     setMnemonic('');
     setRevealed(false);
+    setCopied(false);
   }
 
   function handleClose() {
@@ -133,8 +136,20 @@ export function RevealPhraseModal({visible, onClose}: {visible: boolean; onClose
                   </View>
                 )}
               </TouchableOpacity>
-              <View style={styles.buttonWrap}>
-                <PrimaryButton onPress={handleClose}>Done</PrimaryButton>
+              <View style={styles.actionRow}>
+                <TouchableOpacity
+                  style={styles.secondaryButton}
+                  onPress={() => {
+                    Clipboard.setString(mnemonic);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1800);
+                  }}
+                >
+                  <Text style={styles.secondaryButtonText}>{copied ? 'Copied' : 'Copy recovery phrase'}</Text>
+                </TouchableOpacity>
+                <View style={styles.doneButton}>
+                  <PrimaryButton onPress={handleClose}>Done</PrimaryButton>
+                </View>
               </View>
             </>
           )}
@@ -153,6 +168,10 @@ function makeStyles(colors: Colors) {
     closeX: {color: colors.textMuted, fontSize: 16},
     warning: {color: colors.textMuted, fontSize: 12, marginBottom: 12, lineHeight: 17},
     buttonWrap: {marginTop: 14},
+    actionRow: {flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14},
+    doneButton: {flex: 1},
+    secondaryButton: {flex: 1, borderColor: colors.panelBorder, borderWidth: 1, borderRadius: 10, paddingVertical: 12, alignItems: 'center'},
+    secondaryButtonText: {color: colors.textPrimary, fontSize: 12, fontWeight: '700'},
     grid: {
       flexDirection: 'row',
       flexWrap: 'wrap',
