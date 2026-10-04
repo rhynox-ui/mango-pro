@@ -1477,6 +1477,7 @@ const needsUnifiedRouting =
           <View style={styles.prMainRow}>
             {isBuySide ? (
               <View style={styles.assetSelector}>
+                <CashBadge chainKey={payOrigin.chainKey} size={16} />
                 <Text style={styles.assetSelectorText}>{paySymbol}</Text>
               </View>
             ) : (
