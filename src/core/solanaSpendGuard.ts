@@ -110,21 +110,15 @@ export async function assertSolanaSpendWithinIntent(
     expectedOutputMint,
     expectedOutputMinimum = 0n,
     expectedOutputAccounts = [],
-    tokenAccountConnection,
-  }: {owner: unknown; ownerAddress: string; intent: SolanaSpendIntent; tokenProgramIds: [unknown, unknown]; encodeBase58: (b: Uint8Array) => string; overheadLamports?: bigint; expectedOutputMint?: string; expectedOutputMinimum?: bigint; expectedOutputAccounts?: string[]; tokenAccountConnection?: SpendGuardConnection},
+  }: {owner: unknown; ownerAddress: string; intent: SolanaSpendIntent; tokenProgramIds: [unknown, unknown]; encodeBase58: (b: Uint8Array) => string; overheadLamports?: bigint; expectedOutputMint?: string; expectedOutputMinimum?: bigint; expectedOutputAccounts?: string[]},
 ): Promise<void> {
   const spendsSol = intent.spend === SOLANA_NATIVE_SPEND;
   const allowance = (mint: string): bigint =>
     (!spendsSol && eq(mint, intent.spend) ? intent.maxSpend : 0n) + (intent.extra ?? []).filter(e => eq(e.mint, mint)).reduce((s, e) => s + e.units, 0n);
 
-  // Some public Solana RPCs intentionally refuse getTokenAccountsByOwner while
-  // still serving balances, simulations, and transactions. That must not make
-  // the security guard turn a valid trade into an execution failure. The caller
-  // may provide a read-only token-account connection backed by a fuller RPC.
-  const tokenReader = tokenAccountConnection ?? connection;
   const [classic, t22, preLamports] = await Promise.all([
-    tokenReader.getParsedTokenAccountsByOwner(owner, {programId: tokenProgramIds[0]}),
-    tokenReader.getParsedTokenAccountsByOwner(owner, {programId: tokenProgramIds[1]}),
+    connection.getParsedTokenAccountsByOwner(owner, {programId: tokenProgramIds[0]}),
+    connection.getParsedTokenAccountsByOwner(owner, {programId: tokenProgramIds[1]}),
     connection.getBalance(owner),
   ]);
   const held: Tracked[] = [];
@@ -211,7 +205,7 @@ export async function assertSolanaSpendWithinIntent(
 }
 
 /** The standard wiring: web3.js PublicKeys for the two token programs, bs58 for addresses. */
-export async function assertSolanaSpendWithinIntentWeb3(connection: SpendGuardConnection, transaction: unknown, ownerAddress: string, intent: SolanaSpendIntent, tokenAccountConnection?: SpendGuardConnection): Promise<void> {
+export async function assertSolanaSpendWithinIntentWeb3(connection: SpendGuardConnection, transaction: unknown, ownerAddress: string, intent: SolanaSpendIntent): Promise<void> {
   const [{PublicKey}, bs58Module] = await Promise.all([import('@solana/web3.js'), import('bs58')]);
   const bs58 = bs58Module.default;
   await assertSolanaSpendWithinIntent(connection, transaction, {
@@ -220,7 +214,6 @@ export async function assertSolanaSpendWithinIntentWeb3(connection: SpendGuardCo
     intent,
     tokenProgramIds: [new PublicKey(TOKEN_PROGRAM), new PublicKey(TOKEN_2022_PROGRAM)],
     encodeBase58: b => bs58.encode(b),
-    tokenAccountConnection,
   });
 }
 
