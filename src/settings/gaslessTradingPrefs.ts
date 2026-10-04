@@ -1,7 +1,7 @@
 // src/settings/gaslessTradingPrefs.ts
 //
-// Default-on preference for the EIP-7702 gasless trading path
-// (Relay primary, Pimlico secondary) (smartAccount.ts, executeRelayQuote.ts's sendRelayEvmStepSponsored).
+// Default-on preference for Relay's gasless trading path.
+// Relay is the only EVM gasless provider used by Mango Pro.
 // This app's whole premise is not needing native gas to trade — a new
 // user shouldn't be able to fund the wallet and then discover trading
 // is blocked because they hold no ETH/BNB/etc. on top of it. App.tsx's
@@ -10,8 +10,8 @@
 // isn't silent), but the default here is ALSO true — matching that
 // intent for any read that happens before onboarding gets a chance to
 // set it (or a future call site that doesn't). Still overridable from
-// Security settings (a Relay/Pimlico gasless path that cannot sponsor still
-// falls back to a plain transaction either way — see
+// Security settings (if Relay cannot execute gaslessly, execution falls back
+// to a normal user-signed transaction — see
 // executeRelayQuote.ts — so turning this off never removes the ability
 // to trade, only which path is tried first) and still meaningless for a
 // Google/Particle session, which has no local key to sign a 7702
