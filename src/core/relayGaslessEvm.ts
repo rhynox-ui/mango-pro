@@ -104,8 +104,9 @@ export async function sendEvmCallsViaRelayGasless(params: {
   fromAddress: Address;
   privateKey: Hex;
   calls: {to: Address; value: bigint; data: Hex}[];
+  requestId?: string;
 }): Promise<{hash: string}> {
-  const {chain, fromAddress, privateKey, calls} = params;
+  const {chain, fromAddress, privateKey, calls, requestId} = params;
   if (!calls.length) throw new Error('Relay gasless execution requires at least one call.');
   if (calls.some(call => call.value < 0n)) throw new Error('Invalid Relay gasless call value.');
 
@@ -192,6 +193,7 @@ export async function sendEvmCallsViaRelayGasless(params: {
       ...(authorization ? {authorizationList: [authorization]} : {}),
     },
     executionOptions: {subsidizeFees: true},
+    ...(requestId ? {requestId} : {}),
   });
 
   return {hash: await pollRelayStatus(response.requestId!)};
