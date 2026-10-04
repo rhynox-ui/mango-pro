@@ -1380,21 +1380,19 @@ export async function executeRelayQuote(
         // and a bundler/paymaster rejection must never strand an otherwise-
         // tradeable quote.
         const walletClient = owner ? createWalletClient({account: owner, chain: viemChain, transport}) : null;
-        // No sponsored client on a chain gasless is off for (Arc): the
-        // dispatch below then takes the plain-transaction path.
-        const gaslessOnThisChain: boolean = useGasless && isGaslessSupportedOnChain(chainId);
-        const sponsoredClient: Awaited<ReturnType<typeof getSponsoredSmartAccountClient>> | null = owner && gaslessOnThisChain ? await getSponsoredSmartAccountClient({chain: viemChain, owner}) : null;
-        evmClients = {walletClient, publicClient, sponsoredClient};
+        // Do NOT initialize Pimlico here. Relay must be the first gasless
+        // choice, so a Pimlico outage/configuration error can never prevent
+        // the primary Relay attempt from running.
+        evmClients = {walletClient, publicClient, sponsoredClient: null};
       }
       let hash: string;
       if (isGoogleSession) {
         hash = await sendRelayEvmStepViaParticle(session.evm.address as `0x${string}`, evmClients.publicClient, chainId, item, originToken, originAmount);
-      } else if (useGasless && evmClients.sponsoredClient) {
-        // Relay is the PRIMARY EVM gasless executor. Pimlico remains the
-        // SECOND choice for a pre-broadcast Relay rejection. This keeps one
-        // deterministic policy everywhere: Relay -> Pimlico -> plain tx.
-        const relayGaslessEligible = Boolean(evmClients.walletClient && session.evm.privateKey);
-        if (relayGaslessEligible) {
+      } else if (useGasless && evmClients.walletClient && isGaslessSupportedOnChain(chainId)) {
+        // Relay is the PRIMARY EVM gasless executor. Pimlico is initialized
+        // only after Relay has rejected before broadcast, making the order
+        // real rather than merely conceptual.
+        try {
           try {
             const relayResult = await sendEvmCallsViaRelayGasless({
               chain: evmClients.publicClient.chain!,
@@ -1415,8 +1413,16 @@ export async function executeRelayQuote(
             console.warn('[relayGasless] Primary Relay execution rejected before broadcast; trying Pimlico second:', relayMessage);
           }
         }
+
+        // Pimlico is the SECOND gasless choice and is constructed lazily,
+        // only after Relay's pre-broadcast rejection.
+        const sponsoredClient = await getSponsoredSmartAccountClient({
+          chain: evmClients.publicClient.chain!,
+          owner: evmClients.walletClient.account!,
+        });
+        evmClients.sponsoredClient = sponsoredClient;
         try {
-          hash = await sendRelayEvmStepSponsored(evmClients.sponsoredClient, evmClients.publicClient, item, originToken, originAmount);
+          hash = await sendRelayEvmStepSponsored(sponsoredClient, evmClients.publicClient, item, originToken, originAmount);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           // Only fall back on a rejection that happened BEFORE anything was
