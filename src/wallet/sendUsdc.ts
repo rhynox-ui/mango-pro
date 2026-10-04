@@ -113,7 +113,7 @@ async function sendEvmCashAsset(chainKey: ChainKey, asset: CashAsset, session: D
     const isPimlicoInfrastructureFailure = (message: string) => /pimlico_getUserOperationGasPrice|HTTP request failed|status:\s*5(?:00|02|03|04)|error code:\s*1101|Could not reach Pimlico/i.test(message);
     const tryRelayGaslessFallback = async (): Promise<{hash: string} | null> => {
       try {
-        return await sendEvmCashAssetViaRelayGasless({chain, chainKey, tokenAddress: tokenAddress as `0x${string}`, fromAddress, toAddress: toAddress as `0x${string}`, amountRaw, privateKey: account.privateKey as `0x${string}`});
+        return await sendEvmCashAssetViaRelayGasless({chain, chainKey, tokenAddress: tokenAddress as `0x${string}`, fromAddress, toAddress: toAddress as `0x${string}`, amountRaw, privateKey: session.evm.privateKey as `0x${string}`});
       } catch (relayErr) {
         console.warn('[sendUsdc] Relay gasless withdrawal fallback was not available:', relayErr instanceof Error ? relayErr.message : String(relayErr));
         return null;
