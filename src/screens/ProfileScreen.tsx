@@ -992,8 +992,7 @@ export function ProfileScreen({
                 </View>
                 <View style={styles.closedTradeRight}>
                   <Text style={styles.closedTradeTitle}>
-                    {asset.valueUsd != null ? '
-                  </Text>
+                    {asset.valueUsd != null ? String.fromCharCode(36) + formatUsd(asset.valueUsd) : '—'}</Text>
                 </View>
               </TouchableOpacity>
             ))
