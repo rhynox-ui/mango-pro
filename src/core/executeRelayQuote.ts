@@ -1036,11 +1036,10 @@ export function getPartialTxHashes(err: unknown): string[] {
  * anything else (network, insufficient balance, on-chain revert).
  *
  * `options.useGaslessTrading` (default false, per the caller's own
- * gaslessTradingPrefs.ts read) routes EVM steps through the
- * Pimlico-sponsored smart-account path instead of a plain wallet
- * transaction — silently ignored for a Google session (no local key to
- * sign a 7702 delegation with yet) or if Pimlico isn't configured, so a
- * stale "on" preference can never break plain trading.
+ * gaslessTradingPrefs.ts read) routes EVM steps through Relay's sponsored
+ * Calibur/EIP-7702 path instead of a plain wallet transaction. Google-login
+ * sessions use their existing Particle signing path; a Relay rejection
+ * before broadcast falls back to a normal user-signed transaction.
  */
 export async function executeRelayQuote(
   quote: RelayQuote,
