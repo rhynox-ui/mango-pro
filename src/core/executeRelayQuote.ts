@@ -732,6 +732,7 @@ export async function signAndSendSponsoredSolanaStep(
   const warnings = assertSolanaTransactionMatchesIntent(unsignedTransaction, {
     expectedSigner: signer.publicKey.toBase58(),
     expectedFeePayer: feePayerPubkey.toBase58(),
+    addressLookupTableAccounts: lookupTables,
   });
   // The semantic check (solanaSpendGuard.ts): the wallet's balances may
   // only change as the trade allows. Sponsorship moves who pays the fee,
@@ -791,7 +792,10 @@ async function signAndSendRelaySolanaStep(item: RelayTransactionStepItem, secret
   // payer that somehow isn't this wallet, or a hidden SPL Approve/
   // SetAuthority/CloseAccount instruction bundled into the swap, is
   // caught here instead of silently signed.
-  const solanaWarnings = assertSolanaTransactionMatchesIntent(transaction, {expectedSigner: keypair.publicKey.toBase58()});
+  const solanaWarnings = assertSolanaTransactionMatchesIntent(transaction, {
+    expectedSigner: keypair.publicKey.toBase58(),
+    addressLookupTableAccounts: lookupTables,
+  });
 
   const localSigner: SolanaTransactionSigner = {
     publicKey: keypair.publicKey,
@@ -915,7 +919,10 @@ async function signAndSendRelaySolanaStepViaParticle(item: RelayTransactionStepI
 
   // Same real pre-sign check as the local-signing path above, run on
   // the exact object about to be serialized and handed to Particle.
-  const solanaWarnings = assertSolanaTransactionMatchesIntent(transaction, {expectedSigner: solanaAddress});
+  const solanaWarnings = assertSolanaTransactionMatchesIntent(transaction, {
+    expectedSigner: solanaAddress,
+    addressLookupTableAccounts: lookupTables,
+  });
   // The semantic check (solanaSpendGuard.ts), before Particle signs. A
   // wallet short of SOL can't be simulated as its own fee payer; the
   // balance check below then takes the sponsored path, which runs the
@@ -1035,11 +1042,11 @@ export function getPartialTxHashes(err: unknown): string[] {
  * txIntentFirewall.ts) if the firewall blocks; throws a plain Error for
  * anything else (network, insufficient balance, on-chain revert).
  *
- * `options.useGaslessTrading` (default false, per the caller's own
- * gaslessTradingPrefs.ts read) routes EVM steps through Relay's sponsored
- * Calibur/EIP-7702 path instead of a plain wallet transaction. Google-login
- * sessions use their existing Particle signing path; a Relay rejection
- * before broadcast falls back to a normal user-signed transaction.
+ * EVM transaction items are executed through Relay's sponsored
+ * Calibur/EIP-7702 batch path. There is deliberately no native-gas fallback:
+ * if Relay cannot sponsor the route, the trade stops before that EVM batch
+ * is broadcast. Google/Particle EVM sessions are rejected until their signer
+ * exposes the same Relay-compatible authorization/signature primitives.
  */
 export async function executeRelayQuote(
   quote: RelayQuote,
@@ -1132,6 +1139,9 @@ export async function executeRelayQuote(
   // for EVM execution. The option is retained for API compatibility, but it is
   // intentionally ignored here so a stale/disabled local preference can never
   // produce the ETH/BNB/MATIC "you need native gas" failure path.
+  // Fomo-style Mango trading is chain-abstracted: an EVM Buy/Sell must
+  // never fall back to a user-paid native-gas transaction. Relay is the
+  // execution/sponsorship provider, so this is intentionally unconditional.
   const useGasless = true;
   const txHashes: string[] = [];
   let evmClients: {
@@ -1140,9 +1150,47 @@ export async function executeRelayQuote(
   } | null = null;
 
   try {
+    // Relay's official Calibur/EIP-7702 flow batches the quote's origin-chain
+    // transaction items (typically approve + deposit) into ONE atomic
+    // sponsored execute call. Mango previously submitted each item as its
+    // own /execute request. That was a fundamental mismatch with the
+    // documented Relay gasless flow and could leave an approval on-chain
+    // before the deposit or make a multi-step quote fail halfway through.
+    //
+    // Solana remains instruction-bundle based and is executed as its own
+    // transaction. EVM items are batched only when they are consecutive
+    // items for the same chain, preserving Relay's returned ordering.
+    type EvmBatch = {
+      chainId: number;
+      items: RelayTransactionStepItem[];
+    };
+    const units: Array<
+      | {kind: 'solana'; item: RelayTransactionStepItem}
+      | {kind: 'evm'; batch: EvmBatch}
+    > = [];
+
     for (const item of pendingItems) {
       if (isSolanaShaped(item)) {
-        const spendIntent = {...solanaSpendIntentFor(tagged.intent), ...await solanaOutputVerificationFor(quote, tagged.intent, session.solana.address)};
+        units.push({kind: 'solana', item});
+        continue;
+      }
+      const chainId = item.data?.chainId;
+      if (!chainId) throw new Error('The routing service returned a transaction with no chain.');
+      const last = units[units.length - 1];
+      if (last?.kind === 'evm' && last.batch.chainId === chainId) {
+        last.batch.items.push(item);
+      } else {
+        units.push({kind: 'evm', batch: {chainId, items: [item]}});
+      }
+    }
+
+    for (const unit of units) {
+      if (unit.kind === 'solana') {
+        const item = unit.item;
+        const spendIntent = {
+          ...solanaSpendIntentFor(tagged.intent),
+          ...await solanaOutputVerificationFor(quote, tagged.intent, session.solana.address),
+        };
         const {signature, warnings: solanaStepWarnings} = isGoogleSession
           ? await signAndSendRelaySolanaStepViaParticle(item, session.solana.address, spendIntent)
           : await signAndSendRelaySolanaStep(item, session.solana.privateKey, spendIntent);
@@ -1154,62 +1202,39 @@ export async function executeRelayQuote(
         continue;
       }
 
-      const chainId = item.data?.chainId;
-      if (!chainId) throw new Error('The routing service returned a transaction with no chain.');
-      if (!evmClients || evmClients.publicClient.chain?.id !== chainId) {
-        const viemChain = viemChainForChainId(chainId);
-        if (!viemChain) throw new Error(`No EVM chain configured for chain id ${chainId}.`);
-        const transport = transportFor(chainId);
-        const publicClient = createPublicClient({chain: viemChain, transport});
-        const owner = isGoogleSession ? null : privateKeyToAccount(session.evm.privateKey as `0x${string}`);
-        const walletClient = owner ? createWalletClient({account: owner, chain: viemChain, transport}) : null;
-        evmClients = {walletClient, publicClient};
-      }
-
-      let hash: string;
+      const chainId = unit.batch.chainId;
+      const viemChain = viemChainForChainId(chainId);
+      if (!viemChain) throw new Error(`No EVM chain configured for chain id ${chainId}.`);
       if (isGoogleSession) {
-        // Particle's current EVM signing seam exposes broadcast transactions,
-        // not the EIP-7702 authorization + EIP-712 Calibur signature needed by
-        // Mango's Relay-only sponsor path. Do not fall back to a user-paid
-        // native-gas transaction here: that would violate Mango's core model.
-        throw new Error('Mango requires Relay gas sponsorship for EVM trading. Google/Particle signing cannot use the Relay gasless EIP-7702 path yet.');
-      } else if (useGasless && evmClients.walletClient) {
-        try {
-          const relayResult = await sendEvmCallsViaRelayGasless({
-            chain: evmClients.publicClient.chain!,
-            fromAddress: evmClients.walletClient.account!.address,
-            privateKey: session.evm.privateKey as `0x${string}`,
-            calls: [{
-              to: item.data?.to as `0x${string}`,
-              value: item.data?.value ? BigInt(item.data.value) : 0n,
-              data: (item.data?.data || '0x') as `0x${string}`,
-            }],
-            requestId,
-          });
-          hash = relayResult.hash;
-          txHashes.push(hash);
-          continue;
-        } catch (relayErr) {
-          const relayMessage = relayErr instanceof Error ? relayErr.message : String(relayErr);
-          if (!isPreBroadcastRelayError(relayMessage)) throw relayErr;
-
-          // NEVER fall back to a user-paid native-gas transaction. Mango is
-          // USDC-first and cross-chain: if Relay cannot sponsor this EVM leg,
-          // continuing would turn a gasless FOMO buy into "bring ETH/BNB/etc"
-          // and can also create a partial multi-leg trade. Stop before this
-          // item is broadcast and surface the real Relay failure.
-          throw new Error('Relay gasless execution is unavailable for this EVM leg: ' + relayMessage);
-        }
-      } else {
-        hash = await sendRelayEvmStep(evmClients.walletClient!, evmClients.publicClient, item, originToken, originAmount);
+        // Particle's current RN signing surface does not expose the
+        // EIP-7702 authorization + Calibur EIP-712 signing primitives used
+        // by Relay's official full-subsidy EOA flow. Never replace this with
+        // a normal eth_sendTransaction: that would reintroduce native-gas
+        // requirements and violate Mango's Fomo-style execution contract.
+        throw new Error('Relay gasless EVM trading is not available for this Google/Particle wallet on this route yet.');
       }
 
-      txHashes.push(hash);
+      const owner = privateKeyToAccount(session.evm.privateKey as `0x${string}`);
+      const calls = unit.batch.items.map(item => ({
+        to: item.data?.to as `0x${string}`,
+        value: item.data?.value ? BigInt(item.data.value) : 0n,
+        data: (item.data?.data || '0x') as `0x${string}`,
+      }));
+
+      const transport = transportFor(chainId);
+      const publicClient = createPublicClient({chain: viemChain, transport});
+      const walletClient = createWalletClient({account: owner, chain: viemChain, transport});
+
+      const relayResult = await sendEvmCallsViaRelayGasless({
+        chain: viemChain,
+        fromAddress: owner.address,
+        privateKey: session.evm.privateKey as `0x${string}`,
+        calls,
+        requestId,
+      });
+      txHashes.push(relayResult.hash);
     }
   } catch (err) {
-    // See attachPartialTxHashes's own header above — tags the SAME
-    // error object with whatever hashes already landed before this
-    // step failed, never replacing or rewrapping it.
     attachPartialTxHashes(err, txHashes);
     throw err;
   }
