@@ -24,8 +24,9 @@
 //   stale simulation snapshot rejects a transaction that the real
 //   cluster accepts a moment later).
 //
-// Solana's WSOL-unwrap edge case from mango-mobile's version is NOT
-// ported: this app requests Solana's native-SOL identifier, never WSOL,
+// Solana routes may still contain WSOL internally when Relay/Jupiter
+// needs it; the intent firewall now validates legitimate cleanup rather
+// than assuming every CloseAccount is malicious.
 // so there's nothing left to unwrap (see mobile's own long comment on
 // why that fix made the whole cleanup path unnecessary going forward).
 
@@ -35,8 +36,7 @@ import {assertQuoteSafeToSign, type TransactionIntent} from './txIntentFirewall.
 import {assertSolanaTransactionMatchesIntent} from './solanaTxIntent.ts';
 import {SOLANA_NATIVE_SPEND, assertSolanaSpendWithinIntentWeb3, isInsufficientSolSimulation, type SolanaSpendIntent} from './solanaSpendGuard.ts';
 import {intentForQuote, type RelayQuote, type RelayTransactionStepItem} from './relayQuote.ts';
-import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, ARC_USDC, MAINNET_CHAIN_IDS, assetDecimalsForChain} from './chainData.ts';
-import {DEV_FEE_WALLET} from './fees.ts';
+import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, ARC_USDC, MAINNET_CHAIN_IDS} from './chainData.ts';
 import {sendEvmCallsViaRelayGasless} from './relayGaslessEvm.ts';
 import {fetchWalletPrices} from './walletPrices.ts';
 import type {DerivedAccounts} from '../wallet/keys';
