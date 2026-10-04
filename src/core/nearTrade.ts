@@ -17,7 +17,7 @@
 // swap pays no fee; a partly filled one pays the same share. NEAR gas is
 // covered by Mango (it costs a fraction of a cent per swap).
 
-import {NATIVE_NEAR, NEAR_USDC, NEAR_USDC_DECIMALS, TOKEN_ADDRESSES, assetDecimalsForChain, type ChainKey} from './chainData.ts';
+import {NATIVE_NEAR, NEAR_USDC, NEAR_USDC_DECIMALS, WRAP_NEAR, TOKEN_ADDRESSES, assetDecimalsForChain, type ChainKey} from './chainData.ts';
 import {DEV_FEE_WALLET_NEAR, appFeeBps} from './fees.ts';
 import {IntearRouteError, assertIntearRouteSafe, feeTransaction, fetchIntearRoutes, pickSafeRoute, type IntearRoute, type SafeRoute} from './intearRouter.ts';
 import {classifySwapOutcomes, type SwapOutcomeStatus} from './nearOutcome.ts';
@@ -203,6 +203,8 @@ export type NearTradeQuote = {
   tokenIn: string;
   tokenOut: string;
   route: SafeRoute;
+  /** Optional two-stage route, used when USDC and a Nearly DCL launch require wNEAR as the intermediate asset. */
+  stages?: NearTradeStage[];
   /** Mango's fee in USDC base units, before any partial-fill adjustment. */
   fee: bigint;
   /** What the user can expect / is guaranteed, after the fee. */
