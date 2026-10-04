@@ -1228,7 +1228,9 @@ const needsUnifiedRouting =
     const multiSourcePlan = multiSourcePlanRef.current;
     let quoteToExecute = rawQuoteRef.current;
     const fallbackParams = fallbackParamsRef.current;
-    if ((!quoteToExecute && !fallbackParams && multiSourcePlan.length === 0) || !session) return;
+    const crossChainQuote = crossChainQuoteRef.current;
+    const crossChainOrigin = crossChainOriginRef.current;
+    if ((!quoteToExecute && !fallbackParams && !crossChainQuote && multiSourcePlan.length === 0) || !session) return;
     setExecuteError(null);
     setExecuteWarnings([]);
     setExecuteTxHashes([]);
@@ -1241,7 +1243,26 @@ const needsUnifiedRouting =
       let txHashes: string[];
       let warnings: string[];
       let receivedAmountFormatted: string | null;
-      if (multiSourcePlan.length > 0) {
+      if (crossChainQuote && crossChainOrigin && tradeIsBuySide) {
+        setExecuteState('build');
+        const result = await executeCrossChainQuote(
+          crossChainQuote,
+          session,
+          {
+            originChainKey: crossChainOrigin,
+            destinationChainKey: chainKey,
+            sellToken: crossChainQuote.sellToken,
+            buyToken: crossChainQuote.buyToken,
+            sellAmount: crossChainQuote.quote.sellAmount,
+            recipientAddress: chainKey === 'solana' ? session.solana.address : session.evm.address,
+          },
+          step => setExecuteState(step === 'filling' ? 'filling' : step),
+        );
+        txHashes = result.txHashes;
+        warnings = result.warnings;
+        receivedAmountFormatted = formatUnits(BigInt(crossChainQuote.quote.buyAmount), tokenDecimals ?? 18);
+        quoteToExecute = null;
+      } else if (multiSourcePlan.length > 0) {
         const allHashes: string[] = [];
         const allWarnings: string[] = [];
         try {
