@@ -48,10 +48,10 @@ export const RELAY_MAX_GAS = 300_000_000_000_000n;
 export async function fundNearUsdcForTrade(
   session: DerivedAccounts,
   neededUnits: bigint,
-  {store, now = () => Date.now()}: {
-    store: OneClickSwapStore;
+  {store = oneClickSwapStore, now = () => Date.now()}: {
+    store?: OneClickSwapStore;
     now?: () => number;
-  },
+  } = {},
 ): Promise<{sourceChain: ChainKey; sourceAmount: string; depositAddress: string; destinationTxHashes: string[]}> {
   if (!session.near) throw new NearTradeError('This wallet has no NEAR account.');
   if (neededUnits <= 0n) return {sourceChain: 'ethereum', sourceAmount: '0', depositAddress: '', destinationTxHashes: []};
