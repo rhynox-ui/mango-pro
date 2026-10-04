@@ -131,9 +131,6 @@ function aggregatePositionsByToken(entries: TxHistoryEntry[]): AggregatedPositio
         entryMarketCapCost: entry.isBuySide && Number.isFinite(Number(entry.entryMarketCapUsd)) && Number(entry.entryMarketCapUsd) > 0 && Number.isFinite(Number(entry.payAmount)) && Number(entry.payAmount) > 0 ? Number(entry.entryMarketCapUsd) * Number(entry.payAmount) : 0,
         entryMarketCapWeight: entry.isBuySide && Number.isFinite(Number(entry.entryMarketCapUsd)) && Number(entry.entryMarketCapUsd) > 0 && Number.isFinite(Number(entry.payAmount)) && Number(entry.payAmount) > 0 ? Number(entry.payAmount) : 0,
         lastTradeAt: entry.timestamp,
-        entryMarketCapUsd: null,
-        entryMarketCapCost: 0,
-        entryMarketCapWeight: 0,
       });
     }
   }
