@@ -31,6 +31,8 @@ export type OpenPosition = {
   imageUrl: string | null;
   amountHeld: number;
   lastTradeAt: number;
+  /** Cost-weighted market cap at the user's buys; null when historical buys predate entry-MC tracking. */
+  entryMarketCapUsd: number | null;
 };
 
 export type OpenPositionWithValue = OpenPosition & {valueUsd: number | null};
@@ -82,7 +84,7 @@ const CLOSED_DUST_FRACTION = 0.005;
 // Internal only — totalBought is what CLOSED_DUST_FRACTION needs to
 // judge "closed" relative to position size; neither OpenPosition nor
 // ClosedPosition expose it publicly.
-type AggregatedPosition = OpenPosition & {totalBought: number};
+type AggregatedPosition = OpenPosition & {totalBought: number; entryMarketCapCost: number; entryMarketCapWeight: number};
 
 function aggregatePositionsByToken(entries: TxHistoryEntry[]): AggregatedPosition[] {
   const byKey = new Map<string, AggregatedPosition>();
@@ -102,7 +104,16 @@ function aggregatePositionsByToken(entries: TxHistoryEntry[]): AggregatedPositio
     const existing = byKey.get(key);
     if (existing) {
       existing.amountHeld += delta;
-      if (entry.isBuySide) existing.totalBought += amount;
+      if (entry.isBuySide) {
+        existing.totalBought += amount;
+        const entryMc = Number(entry.entryMarketCapUsd);
+        const buyCostUsd = Number(entry.payAmount);
+        if (Number.isFinite(entryMc) && entryMc > 0 && Number.isFinite(buyCostUsd) && buyCostUsd > 0) {
+          existing.entryMarketCapCost += entryMc * buyCostUsd;
+          existing.entryMarketCapWeight += buyCostUsd;
+          existing.entryMarketCapUsd = existing.entryMarketCapCost / existing.entryMarketCapWeight;
+        }
+      }
       existing.symbol = symbol;
       existing.lastTradeAt = entry.timestamp;
       if (entry.tokenImageUrl) existing.imageUrl = entry.tokenImageUrl;
@@ -116,7 +127,13 @@ function aggregatePositionsByToken(entries: TxHistoryEntry[]): AggregatedPositio
         imageUrl: entry.tokenImageUrl ?? null,
         amountHeld: delta,
         totalBought: entry.isBuySide ? amount : 0,
+        entryMarketCapUsd: entry.isBuySide && Number.isFinite(Number(entry.entryMarketCapUsd)) && Number(entry.entryMarketCapUsd) > 0 && Number.isFinite(Number(entry.payAmount)) && Number(entry.payAmount) > 0 ? Number(entry.entryMarketCapUsd) : null,
+        entryMarketCapCost: entry.isBuySide && Number.isFinite(Number(entry.entryMarketCapUsd)) && Number(entry.entryMarketCapUsd) > 0 && Number.isFinite(Number(entry.payAmount)) && Number(entry.payAmount) > 0 ? Number(entry.entryMarketCapUsd) * Number(entry.payAmount) : 0,
+        entryMarketCapWeight: entry.isBuySide && Number.isFinite(Number(entry.entryMarketCapUsd)) && Number(entry.entryMarketCapUsd) > 0 && Number.isFinite(Number(entry.payAmount)) && Number(entry.payAmount) > 0 ? Number(entry.payAmount) : 0,
         lastTradeAt: entry.timestamp,
+        entryMarketCapUsd: null,
+        entryMarketCapCost: 0,
+        entryMarketCapWeight: 0,
       });
     }
   }
