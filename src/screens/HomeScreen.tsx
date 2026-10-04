@@ -392,16 +392,16 @@ export function HomeScreen({
   const accountHistory = useMemo(
     () => filterTxHistoryForAccount(txHistory, {
       evmAddress: session?.evm.address,
-      solanaAddress: session?.solana.address,
-      nearAddress: session?.near.address,
+      solanaAddress: session?.solana?.address,
+      nearAddress: session?.near?.address,
     }),
-    [txHistory, session?.evm.address, session?.solana.address, session?.near.address],
+    [txHistory, session?.evm.address, session?.solana?.address, session?.near?.address],
   );
   const entryMarketCaps = useMemo(() => {
     const map = new Map<string, number>();
     for (const position of computeOpenPositions(accountHistory)) {
       if (position.entryMarketCapUsd != null && Number.isFinite(position.entryMarketCapUsd) && position.entryMarketCapUsd > 0) {
-        map.set(position.key, position.entryMarketCapUsd);
+        map.set(`${position.chainKey}:${position.chainKey === 'solana' ? position.tokenAddress : position.tokenAddress.toLowerCase()}`, position.entryMarketCapUsd);
       }
     }
     return map;
@@ -422,7 +422,7 @@ export function HomeScreen({
           colors={colors}
           onPress={onSelectToken}
           starred={watchlistKeys.has(`${item.chainKey}:${item.tokenAddress.toLowerCase()}`)}
-          entryMarketCapUsd={entryMarketCaps.get(`${item.chainKey}:${item.tokenAddress.toLowerCase()}`) ?? null}
+          entryMarketCapUsd={entryMarketCaps.get(`${item.chainKey}:${item.chainKey === 'solana' ? item.tokenAddress : item.tokenAddress.toLowerCase()}`) ?? null}
         />
       )}
       ListHeaderComponent={
