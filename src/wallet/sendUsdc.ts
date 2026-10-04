@@ -85,7 +85,6 @@ async function sendEvmCashAsset(chainKey: ChainKey, asset: CashAsset, session: D
     const {sendEvmTransactionViaParticle} = await import('./particleSigning.ts');
     const hash = await sendEvmTransactionViaParticle(fromAddress, {chainId: chain.id, to: tokenAddress as `0x${string}`, data});
     return {hash};
-    return {hash};
   }
 
   const account = privateKeyToAccount(session.evm.privateKey as `0x${string}`);
