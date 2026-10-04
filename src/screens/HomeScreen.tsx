@@ -31,7 +31,8 @@
 
 import {useEffect, useMemo, useRef, useState} from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {ActivityIndicator, FlatList, Image, Keyboard, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {ActivityIndicator, FlatList, Keyboard, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {AssetIcon} from '../components/AssetIcon';
 import {FilterIcon, GearIcon, NewspaperIcon, StarIcon} from '../components/icons';
 import {FloatingMangoDecor} from '../components/FloatingMangoDecor';
 import {fetchGraduatedTokens, fetchBondingTokens, fetchTrendingTokens, type DiscoveryToken} from '../core/discoveryFeed';
@@ -700,7 +701,6 @@ function TokenRow({
   entryMarketCapUsd: number | null;
 }) {
   const styles = makeStyles(colors);
-  const [imageFailed, setImageFailed] = useState(false);
   const positive = (token.change24h ?? 0) >= 0;
   const hasPosition = entryMarketCapUsd != null && entryMarketCapUsd > 0;
   const mcReturnPct = hasPosition && token.marketCapUsd != null && token.marketCapUsd > 0
@@ -710,13 +710,13 @@ function TokenRow({
 
   return (
     <TouchableOpacity style={styles.tokenRow} activeOpacity={onPress ? 0.6 : 1} onPress={() => onPress?.(token)} disabled={!onPress}>
-      {token.imageUrl && !imageFailed ? (
-        <Image source={{uri: token.imageUrl}} style={styles.tokenAvatarImage} onError={() => setImageFailed(true)} />
-      ) : (
-        <View style={styles.tokenAvatar}>
-          <Text style={styles.tokenAvatarText}>{token.symbol.slice(0, 1).toUpperCase()}</Text>
-        </View>
-      )}
+      <AssetIcon
+        symbol={token.symbol}
+        imageUrl={token.imageUrl}
+        chainKey={token.chainKey}
+        address={token.tokenAddress}
+        size={52}
+      />
       <View style={styles.tokenInfo}>
         <Text style={styles.tokenSymbol} numberOfLines={1}>
           {token.symbol}
