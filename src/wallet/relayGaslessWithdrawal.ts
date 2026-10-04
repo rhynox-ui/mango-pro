@@ -36,8 +36,6 @@ const RELAY_EXECUTE_PROXY_URL = 'https://mangoprotocol.site/api/v1/pro/relay-exe
 const RELAY_STATUS_URL = 'https://api.relay.link/intents/status/v3';
 const CALIBUR_ADDRESS = '0x000000009B1D0aF20D8C6d0A44e162d11F9b8f00' as Address;
 const ROOT_KEY_HASH = '0x0000000000000000000000000000000000000000000000000000000000000000' as Hex;
-const ORIGIN_GAS_OVERHEAD = 80_000;
-
 const CALIBUR_ABI = [
   {
     name: 'execute',
@@ -169,6 +167,7 @@ export async function sendEvmCashAssetViaRelayGasless(params: {
     userAddress: fromAddress,
     recipientAddress: toAddress,
     waiveAppFee: true,
+    originGasOverhead: 80_000,
   });
 
   const outputAmount = quote.details?.currencyOut?.amount;
