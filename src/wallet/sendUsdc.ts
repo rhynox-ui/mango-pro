@@ -26,6 +26,7 @@ import bs58 from 'bs58';
 import {getViemChain, transportFor} from '../core/chainRegistry.ts';
 import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, assetDecimalsForChain, type ChainKey} from '../core/chainData.ts';
 import {getEip7702AuthorizationIfNeeded, getSponsoredSmartAccountClient, isGaslessSupportedOnChain, isSmartAccountSponsorshipConfigured} from './smartAccount.ts';
+import {sendEvmCallsViaRelayGasless, isPreBroadcastRelayError} from '../core/relayGaslessEvm.ts';
 import {signAndSendSponsoredSolanaStep, type SolanaTransactionSigner} from '../core/executeRelayQuote.ts';
 import type {DerivedAccounts} from './keys';
 
@@ -91,24 +92,26 @@ async function sendEvmCashAsset(chainKey: ChainKey, asset: CashAsset, session: D
 
   const account = privateKeyToAccount(session.evm.privateKey as `0x${string}`);
 
-  // Gasless withdrawal — same Security-screen opt-in and same
-  // EIP-7702/Pimlico path executeRelayQuote.ts's sendRelayEvmStepSponsored
-  // already uses for trades, deliberately WITHOUT that function's own
-  // cost-recovery instruction: a withdrawal already moves the user's
-  // exact requested amount to an external address, so there's no fee
-  // stream here to recycle a recovery transfer out of — sponsoring this
-  // is accepted as a real, uncompensated cost (covered elsewhere), not
-  // something to quietly claw back from the withdrawal itself.
-  //
-  // Real double-send risk if this were handled carelessly: catching a
-  // failure that happens AFTER sendTransaction may have already
-  // broadcast the UserOperation, then blindly retrying with a plain
-  // transaction, could withdraw the same amount twice. So this only
-  // ever falls back to the plain path below on a rejection PROVEN to
-  // have happened before anything broadcast — same discipline
-  // executeRelayQuote.ts's own dispatch already holds sponsored EVM
-  // steps to, never a broader catch-and-retry.
+  // EVM gasless policy is global: Relay is PRIMARY, Pimlico is SECOND.
+  // Relay receives the exact ERC-20 transfer call already built above, so
+  // this path never changes the withdrawal asset, amount, or recipient.
   if (useGaslessTrading && isSmartAccountSponsorshipConfigured() && isGaslessSupportedOnChain(chain.id)) {
+    try {
+      const relay = await sendEvmCallsViaRelayGasless({
+        chain,
+        fromAddress,
+        privateKey: session.evm.privateKey as `0x${string}`,
+        calls: [{to: tokenAddress as `0x${string}`, data, value: 0n}],
+      });
+      return {hash: relay.hash};
+    } catch (relayErr) {
+      const message = relayErr instanceof Error ? relayErr.message : String(relayErr);
+      if (!isPreBroadcastRelayError(message)) throw relayErr;
+      console.warn('[sendUsdc] Primary Relay gasless withdrawal rejected before broadcast; trying Pimlico second:', message);
+    }
+
+    // Pimlico remains the second-choice EIP-7702 sponsor. Never downgrade
+    // to a plain transaction from an ambiguous post-broadcast failure.
     let sponsoredClient: Awaited<ReturnType<typeof getSponsoredSmartAccountClient>> | null = null;
     try {
       sponsoredClient = await getSponsoredSmartAccountClient({chain, owner: account});
@@ -118,9 +121,6 @@ async function sendEvmCashAsset(chainKey: ChainKey, asset: CashAsset, session: D
       if (message && !/timeout|network|fetch|429|403/i.test(message)) {
         throw new Error(`This withdrawal would revert: ${message}`);
       }
-      // A transient hiccup building the client or running the pre-flight
-      // call — nothing was ever broadcast, safe to fall through to plain.
-      sponsoredClient = null;
     }
 
     if (sponsoredClient) {
@@ -133,7 +133,7 @@ async function sendEvmCashAsset(chainKey: ChainKey, asset: CashAsset, session: D
         const message = err instanceof Error ? err.message : String(err);
         const isPreBroadcastRejection = /invalid fields set on user operation|invalid useroperation|\baa[0-9]{2}\b/i.test(message);
         if (!isPreBroadcastRejection) throw err;
-        console.warn('[sendUsdc] Sponsored withdrawal rejected before broadcast, falling back to a plain transaction:', message);
+        console.warn('[sendUsdc] Pimlico second-choice sponsorship rejected before broadcast; falling back to normal gas:', message);
       }
     }
   }
