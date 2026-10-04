@@ -96,6 +96,8 @@ export type DemoToken = {
   symbol: string;
   /** Real token image from wherever this token was picked (HomeScreen's DiscoveryToken / SearchScreen's TokenSearchResult both already carry one) — optional because the default demo token and any other bare construction site has none; AssetIcon below falls back to a lettered badge rather than fabricating one. */
   imageUrl?: string | null;
+  /** Current market cap carried from discovery/search when available; captured into trade history on successful buys. */
+  marketCapUsd?: number | null;
 };
 
 // A real, highly-liquid token so the chart genuinely resolves a
@@ -1035,6 +1037,13 @@ const needsUnifiedRouting =
   // Multi-source buys route each contributing cash chain directly to the
   // destination token chain; there is no intermediate consolidation step.
   
+  async function resolveEntryMarketCap(): Promise<number | null> {
+    const supplied = Number(token.marketCapUsd);
+    if (Number.isFinite(supplied) && supplied > 0) return supplied;
+    const pair = await resolveDexScreenerPair({chainKey: token.chainKey, tokenAddress: token.address});
+    return pair?.marketCapUsd ?? null;
+  }
+
   async function handleNearTrade() {
     const nearQuote = nearQuoteRef.current;
     if (!nearQuote || !session?.near) return;
@@ -1044,6 +1053,8 @@ const needsUnifiedRouting =
     setResultModalDismissed(false);
     setExecuteState('signing');
     const fromAddress = session.near.address;
+    const tradeIsBuySide = isBuySide;
+    const entryMarketCapUsd = tradeIsBuySide ? await resolveEntryMarketCap() : null;
     const receivedAmountFormatted = quote?.receivedAmountFormatted ?? null;
     let hashes: string[] = [];
     try {
@@ -1075,6 +1086,7 @@ const needsUnifiedRouting =
         fromAddress,
         tokenAddress: token.address,
         tokenImageUrl: token.imageUrl,
+        entryMarketCapUsd,
       });
     } catch (err) {
       if (err instanceof NearSendError) hashes = err.sent.map(o => o.hash).filter(Boolean);
@@ -1111,6 +1123,8 @@ const needsUnifiedRouting =
     setExecuteTxHashes([]);
     setResultModalDismissed(false);
     const fromAddress = solana ? session.solana.address : session.evm.address;
+    const tradeIsBuySide = isBuySide;
+    const entryMarketCapUsd = tradeIsBuySide ? await resolveEntryMarketCap() : null;
     // Multi-source buys execute each direct source -> destination quote below.
     try {
       let txHashes: string[];
@@ -1227,6 +1241,7 @@ const needsUnifiedRouting =
         fromAddress,
         tokenAddress: token.address,
         tokenImageUrl: token.imageUrl,
+        entryMarketCapUsd,
       });
     } catch (err) {
       // TransactionIntentError carries its own complete, user-facing
