@@ -119,7 +119,7 @@ export function describeSolanaTransaction(
   // — that's how @solana/web3.js itself orders the table when compiling.
   const message = transaction.message;
   if (message && Array.isArray(message.staticAccountKeys) && Array.isArray(message.compiledInstructions)) {
-    const keys = message.staticAccountKeys.map(k => keyToBase58(k) ?? String(k));
+    const keys = message.staticAccountKeys.map((k: any) => keyToBase58(k) ?? String(k));
     const numRequiredSignatures = message.header?.numRequiredSignatures ?? 1;
     let resolvedKeys: {get: (index: number) => Base58Key | undefined} | null = null;
     try {
@@ -132,10 +132,10 @@ export function describeSolanaTransaction(
     return {
       feePayer: keys[0] ?? null,
       requiredSigners: keys.slice(0, numRequiredSignatures),
-      instructions: message.compiledInstructions.map(ix => ({
+      instructions: message.compiledInstructions.map((ix: any) => ({
         programId: keys[ix.programIdIndex] ?? null,
         firstDataByte: ix.data?.length ? ix.data[0] : null,
-        accounts: (ix.accountKeyIndexes ?? []).map(index =>
+        accounts: (ix.accountKeyIndexes ?? []).map((index: number) =>
           keyToBase58(resolvedKeys?.get(index) ?? keys[index]) ?? '',
         ),
       })),
