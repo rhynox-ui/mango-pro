@@ -55,6 +55,16 @@ const CALIBUR_EIP712_TYPES = {
 
 type RelayExecuteResponse = {requestId?: string; error?: string; message?: string};
 
+type RelayStatusResponse = {
+  status?: string;
+  message?: string;
+  errorCode?: string;
+  errorData?: string;
+  failReason?: string;
+  refundFailReason?: string;
+  txHashes?: string[];
+};
+
 async function postRelayExecute(body: Record<string, unknown>): Promise<RelayExecuteResponse> {
   const res = await fetch(RELAY_EXECUTE_PROXY_URL, {
     method: 'POST',
@@ -74,10 +84,14 @@ async function pollRelayStatus(requestId: string): Promise<string> {
   while (Date.now() - started < 10 * 60 * 1000) {
     const res = await fetch(`${RELAY_STATUS_URL}?requestId=${encodeURIComponent(requestId)}`);
     if (res.ok) {
-      const body = await res.json() as {status?: string; message?: string; txHashes?: string[]};
+      const body = await res.json() as RelayStatusResponse;
       if (body.status === 'success') return body.txHashes?.[0] || requestId;
       if (body.status === 'failure' || body.status === 'refund') {
-        throw new Error(body.message || `Relay gasless execution ended with status ${body.status}.`);
+        const reason = body.failReason || body.refundFailReason || body.errorCode || body.message;
+        const detail = body.errorData ? ` — ${body.errorData}` : '';
+        throw new Error(
+          `Relay gasless execution ${body.status} (request ${requestId})${reason ? `: ${reason}` : ''}${detail}`,
+        );
       }
     }
     await new Promise(resolve => setTimeout(resolve, 2000));
