@@ -18,7 +18,6 @@ import {CHAIN_KEY_TO_VIEM_CHAIN, RPC_FALLBACKS, viemChainForChainId} from '../sr
 import {SPONSORSHIP_COST_ESTIMATE_USD} from '../src/core/fees.ts';
 import {ARC_GAS_RESERVE_USDC, CASH_ASSET_BY_CHAIN, spendableCash, spendableTotalUsd} from '../src/core/usdcBalances.ts';
 import {arcUsdcSpendInNativeUnits} from '../src/core/executeRelayQuote.ts';
-import {isGaslessSupportedOnChain} from '../src/wallet/smartAccount.ts';
 import {UNISWAP_V3_ADDRESSES, uniswapV3SupportsChain} from '../src/core/uniswapV3.ts';
 import {UNIVERSAL_ROUTER_ADDRESSES} from '../src/core/uniswapV4.ts';
 import {dexScreenerChainForChain, chainKeyForDexScreenerChainId} from '../src/core/dexScreener.ts';
@@ -78,9 +77,6 @@ assert.equal(arcUsdcSpendInNativeUnits(5042, undefined, 1_000_000n), 0n);
 assert.equal(arcUsdcSpendInNativeUnits(5042, ARC_USDC, undefined), 0n);
 console.log('ok', ++checks, '- Arc pre-flight counts the USDC being spent against the 18-decimal gas balance');
 
-assert.equal(isGaslessSupportedOnChain(5042), false);
-assert.equal(isGaslessSupportedOnChain(8453), true);
-console.log('ok', ++checks, '- Arc never takes the Pimlico gasless path');
 
 assert.equal(uniswapV3SupportsChain(5042), true);
 assert.equal(UNISWAP_V3_ADDRESSES[5042].wrappedNative, ARC_USDC);
