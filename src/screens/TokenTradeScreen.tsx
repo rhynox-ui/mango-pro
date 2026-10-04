@@ -54,6 +54,8 @@ import {NEAR_USDC, NEAR_USDC_DECIMALS} from '../core/chainData';
 import {executeNearTrade, fetchNearTokenBalance, fetchNearTokenMeta, quoteNearTrade, NearSendError, type NearTradeQuote} from '../core/nearTrade';
 import {getRelayQuote, summarizeQuote, type GetRelayQuoteParams, type QuoteSummary, type RelayQuote} from '../core/relayQuote';
 import {executeRelayQuote, getPartialTxHashes, type ExecuteStep} from '../core/executeRelayQuote';
+import {getCrossChainQuote, type CrossChainQuote} from '../core/crossChainQuote';
+import {executeCrossChainQuote} from '../core/executeCrossChainQuote';
 import {loadGaslessTradingEnabled} from '../settings/gaslessTradingPrefs';
 import {checkFallbackRoute, fetchLiveTokenPriceUsd, sweepFallbackFeeFromNativeBalance, sweepFallbackFeeFromSolanaBalance, tryFallbackProviders, type FallbackRouteParams} from '../core/fallbackDex';
 import {fetchWalletPrices} from '../core/walletPrices';
@@ -235,6 +237,11 @@ export function TokenTradeScreen({
   // needs the actual RelayQuote (steps + the intent relayQuote.ts tagged
   // it with), not the display-only numbers summarizeQuote() derives.
   const rawQuoteRef = useRef<RelayQuote | null>(null);
+  // 0x Cross-Chain fallback, used only when Relay cannot route the cash
+  // source directly to the target token. The quote is executed through its
+  // own security-aware executor, never through the Relay executor.
+  const crossChainQuoteRef = useRef<CrossChainQuote | null>(null);
+  const crossChainOriginRef = useRef<ChainKey | null>(null);
   // Direct source -> destination legs for FOMO-style unified buys.
   const multiSourcePlanRef = useRef<MultiSourceLeg[]>([]);
   // The NEAR equivalent of rawQuoteRef (nearToken only): the checked route
@@ -532,6 +539,8 @@ const needsUnifiedRouting =
     // Without this, a stale multi-source plan could remain tradeable while a
     // newer amount/token quote is still loading.
     multiSourcePlanRef.current = [];
+    crossChainQuoteRef.current = null;
+    crossChainOriginRef.current = null;
     if (amtNum <= 0) {
       setQuote(null);
       rawQuoteRef.current = null;
@@ -543,6 +552,8 @@ const needsUnifiedRouting =
       setQuote(null);
       rawQuoteRef.current = null;
       fallbackParamsRef.current = null;
+      crossChainQuoteRef.current = null;
+      crossChainOriginRef.current = null;
       setQuoteLoading(false);
       return;
     }
