@@ -664,7 +664,8 @@ const needsUnifiedRouting =
         if (!isBuySide || sourceChainKey === chainKey || !session) return false;
         const sourceAsset = CASH_ASSET_BY_CHAIN[sourceChainKey] ?? 'USDC';
         const sourceDecimals = assetDecimalsForChain(sourceChainKey, sourceAsset) ?? 6;
-        const sourceBalance = cashPortfolio?.results.find(r => r.chainKey === sourceChainKey)?.balanceUsd ?? 0;
+        const sourceBalanceResult = cashPortfolio?.results.find(r => r.chainKey === sourceChainKey);
+        const sourceBalance = sourceBalanceResult?.status === 'ok' ? sourceBalanceResult.balance : 0;
         if (sourceBalance + 0.000001 < amtNum) return false;
 
         const sourceAddress = sourceChainKey === 'solana' ? session.solana.address : session.evm.address;
@@ -917,7 +918,7 @@ const needsUnifiedRouting =
             const candidates = CASH_SUPPORTED_CHAINS
               .map(sourceChainKey => ({
                 chainKey: sourceChainKey,
-                balanceUsd: cashPortfolio?.results.find(r => r.chainKey === sourceChainKey)?.balanceUsd ?? 0,
+                balanceUsd: (() => { const r = cashPortfolio?.results.find(x => x.chainKey === sourceChainKey); return r?.status === 'ok' ? r.balance : 0; })(),
               }))
               .filter(c => c.balanceUsd + 0.000001 >= amtNum)
               .sort((a, b) => b.balanceUsd - a.balanceUsd);
