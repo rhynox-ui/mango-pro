@@ -341,7 +341,21 @@ export function TokenTradeScreen({
     }
     const tokenChain = token.chainKey;
     const fallbackChain = tokenChain !== 'near' && CASH_SUPPORTED_CHAINS.includes(tokenChain) ? tokenChain : CASH_SUPPORTED_CHAINS[0];
-    setPayOrigin({chainKey: best ? best.chainKey : fallbackChain});
+
+    // Prefer same-chain cash whenever the destination chain has a usable
+    // balance. Cross-chain Relay routes are a fallback: they have minimum
+    // quote thresholds and extra routing constraints, so a tiny buy such as
+    // $2 should not leave Solana/Base/etc. just because another chain holds
+    // the wallet's largest cash balance.
+    const destinationCash = tokenChain !== 'near' && CASH_SUPPORTED_CHAINS.includes(tokenChain)
+      ? cashPortfolio?.results.find(r => r.status === 'ok' && r.chainKey === tokenChain)
+      : undefined;
+    const destinationSpendable = destinationCash
+      ? spendableCash(tokenChain, destinationCash.balance)
+      : 0;
+    const preferredChain = destinationSpendable > 0 ? tokenChain : (best ? best.chainKey : fallbackChain);
+
+    setPayOrigin({chainKey: preferredChain});
   }, [token, cashPortfolio]);
 
   // Always the literal, user-facing label "USDC" on Buy — per the
