@@ -8,11 +8,11 @@
 // contains fungible assets with a positive on-chain balance; NFTs are
 // intentionally excluded because Mango's trade screen cannot swap them.
 
-import type {ChainKey} from '../core/chainData';
+import type {TradeChain} from '../core/chainData';
 
 export type WalletAsset = {
   key: string;
-  chainKey: ChainKey;
+  chainKey: TradeChain;
   address: string;
   symbol: string;
   name: string;
@@ -41,9 +41,10 @@ let inFlight: Promise<WalletAssetsResult> | null = null;
 export async function fetchWalletAssets(
   evmAddress: string,
   solanaAddress: string,
+  nearAddress: string | null = null,
   {forceFresh = false}: {forceFresh?: boolean} = {},
 ): Promise<WalletAssetsResult> {
-  const key = `${evmAddress.toLowerCase()}:${solanaAddress}`;
+  const key = `${evmAddress.toLowerCase()}:${solanaAddress}:${nearAddress || ''}`;
   if (!forceFresh && cachedResult && cachedKey === key && Date.now() - cachedAt < CACHE_TTL_MS) {
     return cachedResult;
   }
@@ -52,7 +53,7 @@ export async function fetchWalletAssets(
   inFlight = fetch(API_URL, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({evmAddress, solanaAddress}),
+    body: JSON.stringify({evmAddress, solanaAddress, nearAddress}),
   })
     .then(async response => {
       const payload = (await response.json().catch(() => null)) as {error?: string} | null;

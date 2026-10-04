@@ -59,7 +59,7 @@ assert.equal(failed.complete, false);
 assert.equal(withNearCash(base, null).totalUsd, 10);
 console.log('ok', ++checks, "- an unreachable NEAR RPC marks the total incomplete; no NEAR account changes nothing");
 
-assert.equal(NEAR_ENABLED, false);
-console.log('ok', ++checks, '- NEAR stays switched off until deposit, trade and withdraw all work');
+assert.equal(NEAR_ENABLED, true);
+console.log('ok', ++checks, '- NEAR is enabled because deposit, cash moves, trading and withdrawal paths are implemented');
 
 console.log(`\n${checks} checks passed`);
