@@ -8,7 +8,6 @@
 // never sends for less than the minimum shown. Run via `npm run verify`.
 
 import assert from 'node:assert/strict';
-import {deriveAccounts} from '../src/wallet/keys.ts';
 import {NEAR_ENABLED, NEAR_USDC, tradeChainLabel} from '../src/core/chainData.ts';
 import {dexScreenerChainForChain, tradeChainForDexScreenerChainId} from '../src/core/dexScreener.ts';
 import {DEV_FEE_WALLET_NEAR} from '../src/core/fees.ts';
@@ -16,8 +15,8 @@ import {NearTradeError, executeNearTrade, nearTradeFee, pickRelayableRoute, quot
 
 let checks = 0;
 const ok = name => console.log('ok', ++checks, `- ${name}`);
-const session = deriveAccounts('abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about');
-const USER = session.near.address;
+const USER = 'mango-test.near';
+const session = {near: {address: USER}};
 const MEME = 'rust-334.meme-cooking.near';
 const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64');
 const fc = (method_name, args, deposit = '0', gas = 30_000_000_000_000) => ({FunctionCall: {method_name, args: b64(args), gas, deposit}});
@@ -66,6 +65,44 @@ ok("Mango's fee is 0.5% of the USDC, capped at $50");
   assert.equal(q.receiveUnits, 5_000_000n);
   assert.equal(q.minReceiveUnits, 4_950_000n);
   ok('Buy: the fee is set aside from the USDC and only the rest is swapped');
+}
+
+// A direct Nearly launch pool is a Rhea DCL leg.
+function dclRoute({tokenIn, tokenOut = MEME, amountIn, out = '3000000', min = '2970000'} = {}) {
+  const msg = JSON.stringify({Swap: {pool_ids: [tokenOut + '|wrap.near|10000'], output_token: tokenOut, min_output_amount: min, skip_unwrap_near: true}});
+  return {
+    dex_id: 'RheaDcl',
+    estimated_amount: {amount_out: out},
+    worst_case_amount: {amount_out: min},
+    execution_instructions: [
+      tx(tokenOut, fc('storage_deposit', {account_id: USER, registration_only: true}, '1250000000000000000000')),
+      tx(tokenIn, fc('ft_transfer_call', {receiver_id: 'dclv2.ref-labs.near', amount: String(amountIn), msg}, '1', 180_000_000_000_000)),
+    ],
+    token_output: 'nep141:' + tokenOut,
+  };
+}
+
+// Staged Nearly route: Rhea cannot compose its USDC→wNEAR leg with Rhea DCL's
+// wNEAR→launch leg, so Mango composes the two independently checked routes.
+{
+  const {fetchImpl, seen} = routesFetch(u => {
+    const tin = u.searchParams.get('token_in');
+    const tout = u.searchParams.get('token_out');
+    if (tin === 'nep141:' + NEAR_USDC && tout === 'nep141:' + MEME) return [];
+    if (tin === 'nep141:' + NEAR_USDC && tout === 'nep141:wrap.near') {
+      return [rheaRoute({tokenOut: 'wrap.near', amountIn: u.searchParams.get('amount_in'), out: '8000000000000000000', min: '7920000000000000000'})];
+    }
+    if (tin === 'nep141:wrap.near' && tout === 'nep141:' + MEME) {
+      return [dclRoute({tokenIn: 'wrap.near', amountIn: u.searchParams.get('amount_in')})];
+    }
+    return [];
+  });
+  const q = await quoteNearTrade({side: 'buy', token: MEME, payUnits: 10_000_000n, accountId: USER, fetchImpl, now: 1});
+  assert.equal(q.stages?.length, 2);
+  assert.equal(q.stages?.[0].tokenOut, 'wrap.near');
+  assert.equal(q.stages?.[1].tokenIn, 'wrap.near');
+  assert.equal(seen.length, 3, 'direct route + Rhea intermediate quote + DCL quote');
+  ok('Nearly launches can be composed safely through wNEAR without touching DexScreener');
 }
 
 // Sell quote
