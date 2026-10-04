@@ -100,6 +100,8 @@ export type GetRelayQuoteParams = {
   originAmountUsd?: number | null;
   /** Basis-points string ("50" = 0.5%), or omit entirely for Auto — Relay's own front-running-aware default. Never a client-side guess: when set, this is the literal bound Relay quotes against and the number shown back in details.slippageTolerance.total. */
   slippageTolerance?: string;
+  /** Extra origin gas reserved for Relay's Calibur/EIP-7702 gasless wrapper. Only set when Relay gasless execution is enabled. */
+  originGasOverhead?: string;
   /**
    * True for a pure cash-to-cash conversion (ConvertCashScreen's own
    * USDG-on-Robinhood <-> USDC-elsewhere move, not a token trade) —
@@ -212,7 +214,7 @@ function isBetterExactInputQuote(candidate: RelayQuote, current: RelayQuote): bo
 }
 
 export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQuote> {
-  const {fromChainKey, toChainKey, fromAsset, toAsset, originCurrency, destinationCurrency, amountBaseUnits, userAddress, recipientAddress, originAmountUsd, slippageTolerance, waiveAppFee} = params;
+  const {fromChainKey, toChainKey, fromAsset, toAsset, originCurrency, destinationCurrency, amountBaseUnits, userAddress, recipientAddress, originAmountUsd, slippageTolerance, originGasOverhead, waiveAppFee} = params;
 
   const resolvedOriginCurrency = originCurrency ?? (fromAsset ? currencyAddress(fromChainKey, fromAsset) : undefined);
   const resolvedDestinationCurrency = destinationCurrency ?? (toAsset ? currencyAddress(toChainKey, toAsset) : undefined);
@@ -274,6 +276,7 @@ export async function getRelayQuote(params: GetRelayQuoteParams): Promise<RelayQ
     // mango-mobile's own relayBridge.js, so leaving slippage on Auto
     // is a real "field not sent" rather than a client-guessed default.
     ...(slippageTolerance ? {slippageTolerance} : {}),
+    ...(originGasOverhead ? {originGasOverhead} : {}),
   };
 
   const res = await postRelayQuote(body);
