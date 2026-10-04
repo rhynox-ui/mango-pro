@@ -1039,9 +1039,12 @@ const needsUnifiedRouting =
   
   async function resolveEntryMarketCap(): Promise<number | null> {
     const supplied = Number(token.marketCapUsd);
-    if (Number.isFinite(supplied) && supplied > 0) return supplied;
     const pair = await resolveDexScreenerPair({chainKey: token.chainKey, tokenAddress: token.address});
-    return pair?.marketCapUsd ?? null;
+    return pair?.marketCapUsd != null && pair.marketCapUsd > 0
+      ? pair.marketCapUsd
+      : Number.isFinite(supplied) && supplied > 0
+        ? supplied
+        : null;
   }
 
   async function handleNearTrade() {
