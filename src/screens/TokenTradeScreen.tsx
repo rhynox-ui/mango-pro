@@ -1482,7 +1482,7 @@ const needsUnifiedRouting =
               </View>
             ) : (
               <TouchableOpacity style={styles.assetSelector} onPress={onOpenSearch} activeOpacity={0.7} disabled={!onOpenSearch}>
-                <AssetIcon symbol={token.symbol} imageUrl={token.imageUrl} size={16} />
+                <AssetIcon symbol={token.symbol} imageUrl={token.imageUrl} chainKey={token.chainKey} address={token.address} size={16} />
                 <Text style={styles.assetSelectorText}>{paySymbol}</Text>
                 <Text style={styles.assetSelectorChevron}>⌄</Text>
               </TouchableOpacity>
@@ -1535,7 +1535,7 @@ const needsUnifiedRouting =
           <View style={styles.prMainRow}>
             {isBuySide ? (
               <TouchableOpacity style={styles.assetSelector} onPress={onOpenSearch} activeOpacity={0.7} disabled={!onOpenSearch}>
-                <AssetIcon symbol={token.symbol} imageUrl={token.imageUrl} size={16} />
+                <AssetIcon symbol={token.symbol} imageUrl={token.imageUrl} chainKey={token.chainKey} address={token.address} size={16} />
                 <Text style={styles.assetSelectorText}>{receiveSymbol}</Text>
                 <Text style={styles.assetSelectorChevron}>⌄</Text>
               </TouchableOpacity>
