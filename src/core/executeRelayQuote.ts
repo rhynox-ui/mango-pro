@@ -39,6 +39,7 @@ import {intentForQuote, type RelayQuote, type RelayTransactionStepItem} from './
 import {getEip7702AuthorizationIfNeeded, getSponsoredSmartAccountClient, isGaslessSupportedOnChain, isSmartAccountSponsorshipConfigured} from '../wallet/smartAccount.ts';
 import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, ARC_USDC, MAINNET_CHAIN_IDS, assetDecimalsForChain, chainKeyForChainId} from './chainData.ts';
 import {DEV_FEE_WALLET} from './fees.ts';
+import {sendEvmCallsViaRelayGasless, isPreBroadcastRelayError} from './relayGaslessEvm.ts';
 import {fetchWalletPrices} from './walletPrices.ts';
 import type {DerivedAccounts} from '../wallet/keys';
 
@@ -1389,6 +1390,31 @@ export async function executeRelayQuote(
       if (isGoogleSession) {
         hash = await sendRelayEvmStepViaParticle(session.evm.address as `0x${string}`, evmClients.publicClient, chainId, item, originToken, originAmount);
       } else if (useGasless && evmClients.sponsoredClient) {
+        // Relay is the PRIMARY EVM gasless executor. Pimlico remains the
+        // SECOND choice for a pre-broadcast Relay rejection. This keeps one
+        // deterministic policy everywhere: Relay -> Pimlico -> plain tx.
+        const relayGaslessEligible = Boolean(evmClients.walletClient && session.evm.privateKey);
+        if (relayGaslessEligible) {
+          try {
+            const relayResult = await sendEvmCallsViaRelayGasless({
+              chain: evmClients.publicClient.chain!,
+              fromAddress: evmClients.walletClient!.account!.address,
+              privateKey: session.evm.privateKey as `0x${string}`,
+              calls: [{
+                to: item.data?.to as `0x${string}`,
+                value: item.data?.value ? BigInt(item.data.value) : 0n,
+                data: (item.data?.data || '0x') as `0x${string}`,
+              }],
+            });
+            hash = relayResult.hash;
+            txHashes.push(hash);
+            continue;
+          } catch (relayErr) {
+            const relayMessage = relayErr instanceof Error ? relayErr.message : String(relayErr);
+            if (!isPreBroadcastRelayError(relayMessage)) throw relayErr;
+            console.warn('[relayGasless] Primary Relay execution rejected before broadcast; trying Pimlico second:', relayMessage);
+          }
+        }
         try {
           hash = await sendRelayEvmStepSponsored(evmClients.sponsoredClient, evmClients.publicClient, item, originToken, originAmount);
         } catch (err) {
