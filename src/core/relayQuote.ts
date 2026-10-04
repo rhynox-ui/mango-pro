@@ -160,6 +160,8 @@ export type RelayQuote = {
       amount?: string;
       amountFormatted?: string;
       amountUsd?: string | number;
+      /** Relay's guaranteed/minimum destination amount after slippage. */
+      minimumAmount?: string;
       currency?: {chainId?: number; address?: string; decimals?: number};
     };
     recipient?: string;
