@@ -1,7 +1,7 @@
 // src/settings/gaslessTradingPrefs.ts
 //
-// Default-on preference for the EIP-7702/Pimlico sponsored-gas trading
-// path (smartAccount.ts, executeRelayQuote.ts's sendRelayEvmStepSponsored).
+// Default-on preference for the EIP-7702 gasless trading path
+// (Relay primary, Pimlico secondary) (smartAccount.ts, executeRelayQuote.ts's sendRelayEvmStepSponsored).
 // This app's whole premise is not needing native gas to trade — a new
 // user shouldn't be able to fund the wallet and then discover trading
 // is blocked because they hold no ETH/BNB/etc. on top of it. App.tsx's
@@ -10,7 +10,7 @@
 // isn't silent), but the default here is ALSO true — matching that
 // intent for any read that happens before onboarding gets a chance to
 // set it (or a future call site that doesn't). Still overridable from
-// Security settings (a real chain/route Pimlico can't sponsor still
+// Security settings (a Relay/Pimlico gasless path that cannot sponsor still
 // falls back to a plain transaction either way — see
 // executeRelayQuote.ts — so turning this off never removes the ability
 // to trade, only which path is tried first) and still meaningless for a
