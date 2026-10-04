@@ -735,7 +735,7 @@ export function TokenTradeScreen({
                   recipientAddress: legRecipientAddress,
                   originAmountUsd: legUsd,
                   slippageTolerance: slippageBps ?? undefined,
-                  originGasOverhead: gaslessTradingEnabled ? '80000' : undefined,
+                  originGasOverhead: '80000',
                 };
                 const legQuote = await getRelayQuote(legParams);
                 const summary = summarizeQuote(legQuote, tokenDecimals ?? 18);
@@ -896,7 +896,7 @@ export function TokenTradeScreen({
         recipientAddress,
         originAmountUsd,
         slippageTolerance: slippageBps ?? undefined,
-        originGasOverhead: gaslessTradingEnabled ? '80000' : undefined,
+        originGasOverhead: '80000',
       };
       multiSourcePlanRef.current = [];
       getRelayQuote(quoteParams)
