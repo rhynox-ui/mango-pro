@@ -27,6 +27,9 @@ export const SYMBOL_TO_COINGECKO_ID: Record<string, string> = {
   USDT: 'tether',
   POL: 'polygon-ecosystem-token',
   OKB: 'okb',
+  HYPE: 'hyperliquid',
+  XPL: 'plasma',
+  USDT0: 'tether',
 };
 
 const PRICE_CACHE_TTL_MS = 60_000;

@@ -59,7 +59,7 @@ import {checkFallbackRoute, fetchLiveTokenPriceUsd, sweepFallbackFeeFromNativeBa
 import {fetchWalletPrices} from '../core/walletPrices';
 import {TransactionIntentError} from '../core/txIntentFirewall';
 import {describeTradeError} from '../core/tradeErrors';
-import {fetchErc20TokenMetadata, fetchSplMintDecimals, fetchWalletSplTokenBalance, fetchWalletTokenBalance} from '../wallet/walletRpc';
+import {fetchErc20TokenMetadata, fetchSplMintDecimals, fetchWalletNativeBalance, fetchWalletSolanaBalance, fetchWalletSplTokenBalance, fetchWalletTokenBalance} from '../wallet/walletRpc';
 import {formatAmountForInput, useAvailableBalance} from '../wallet/useAvailableBalance';
 import {addTxHistoryEntry} from '../wallet/txHistory';
 import {markOwnAction} from '../wallet/depositWatcher';
@@ -211,6 +211,7 @@ export function TokenTradeScreen({
   // It reuses every piece of this screen; only the quote, balance and
   // execution below branch on it, and no Relay path ever runs for it.
   const nearToken = token.chainKey === 'near';
+  const nativeToken = token.chainKey !== 'near' && token.address === currencyAddress(token.chainKey, NATIVE_SYMBOL[token.chainKey]);
 
   // true = Buy (paying the chain's native asset, receiving the token);
   // false = Sell (paying the token, receiving native) — same isNativeAsset
@@ -375,9 +376,11 @@ export function TokenTradeScreen({
     const lookup =
       chainKey === 'near'
         ? fetchNearTokenMeta(token.address).then(meta => meta.decimals)
-        : chainKey === 'solana'
-          ? fetchSplMintDecimals(token.address)
-          : fetchErc20TokenMetadata(chainKey, token.address).then(meta => meta.decimals);
+        : nativeToken
+          ? Promise.resolve(assetDecimalsForChain(chainKey, NATIVE_SYMBOL[chainKey]) ?? 18)
+          : chainKey === 'solana'
+            ? fetchSplMintDecimals(token.address)
+            : fetchErc20TokenMetadata(chainKey, token.address).then(meta => meta.decimals);
     lookup
       .then(decimals => {
         if (cancelled) return;
@@ -390,7 +393,7 @@ export function TokenTradeScreen({
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [token, nativeToken]);
 
   const solana = token.chainKey === 'solana';
   // Which chain the PAY side's balance actually needs to be read from —
@@ -422,11 +425,16 @@ export function TokenTradeScreen({
       // Spendable total: Arc's gas reserve comes out of its USDC balance.
       return Promise.resolve(spendableTotalUsd(cashPortfolio));
     }
+    if (nativeToken) {
+      return solana
+        ? fetchWalletSolanaBalance(session.solana.address)
+        : fetchWalletNativeBalance(token.chainKey, session.evm.address);
+    }
     if (tokenDecimals === null) return Promise.resolve(0);
     return solana
       ? fetchWalletSplTokenBalance(token.address, tokenDecimals, session.solana.address)
       : fetchWalletTokenBalance(token.chainKey, token.address, tokenDecimals, session.evm.address);
-  }, [session, isBuySide, solana, token, tokenDecimals, cashPortfolio]);
+  }, [session, isBuySide, solana, nativeToken, token, tokenDecimals, cashPortfolio]);
 
   // Bumped by the "Couldn't load balance" retry tap below — useAvailableBalance
   // only refetches when one of its deps changes, and none of the real deps
