@@ -52,11 +52,9 @@ export async function fundNearUsdcForTrade(
   {
     store = oneClickSwapStore,
     now = () => Date.now(),
-    fetchImpl = fetch,
   }: {
     store?: OneClickSwapStore;
     now?: () => number;
-    fetchImpl?: typeof fetch;
   } = {},
 ): Promise<{sourceChain: ChainKey; sourceAmount: string; depositAddress: string; destinationTxHashes: string[]}> {
   if (!session.near) throw new NearTradeError('This wallet has no NEAR account.');
@@ -64,8 +62,8 @@ export async function fundNearUsdcForTrade(
 
   const portfolio = await fetchUsdcPortfolio(session, {forceFresh: true});
   const candidates = portfolio.results
-    .filter(r => r.status === 'ok' && r.balance > 0 && TOKEN_ADDRESSES.USDC[r.chainKey] && r.chainKey !== 'arc')
-    .sort((a, b) => (b.status === 'ok' ? b.balance : 0) - (a.status === 'ok' ? a.balance : 0));
+    .filter((r): r is Extract<typeof r, {status: 'ok'}> => r.status === 'ok' && r.balance > 0 && Boolean(TOKEN_ADDRESSES.USDC[r.chainKey]) && r.chainKey !== 'arc')
+    .sort((a, b) => b.balance - a.balance);
   if (candidates.length === 0) throw new NearTradeError('There is no USDC available on a supported source chain to fund this NEAR trade.');
 
   const tokens = await fetchOneClickTokens({baseUrl: ONE_CLICK_PROXY_BASE_URL, timeoutMs: 20_000});
