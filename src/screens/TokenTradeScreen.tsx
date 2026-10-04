@@ -53,7 +53,7 @@ import {resolveDexScreenerPair} from '../core/dexScreener';
 import {NEAR_USDC, NEAR_USDC_DECIMALS} from '../core/chainData';
 import {executeNearTrade, fetchNearTokenBalance, fetchNearTokenMeta, quoteNearTrade, NearSendError, type NearTradeQuote} from '../core/nearTrade';
 import {getRelayQuote, summarizeQuote, type GetRelayQuoteParams, type QuoteSummary, type RelayQuote} from '../core/relayQuote';
-import {executeRelayQuote, getPartialTxHashes, type ExecuteStep} from '../core/executeRelayQuote';
+import {executeRelayQuote, getPartialTxHashes, preflightRelayQuoteExecution, type ExecuteStep} from '../core/executeRelayQuote';
 import {loadGaslessTradingEnabled} from '../settings/gaslessTradingPrefs';
 import {fetchWalletPrices} from '../core/walletPrices';
 import {TransactionIntentError} from '../core/txIntentFirewall';
@@ -1066,8 +1066,15 @@ export function TokenTradeScreen({
         const allHashes: string[] = [];
         const allWarnings: string[] = [];
         try {
+          // Fomo trades can draw from multiple hidden USDC source chains.
+          // Validate EVERY Relay leg before the first one broadcasts. This
+          // prevents the old "one leg landed, a later leg failed" state
+          // when a later chain has an unsafe Solana instruction or lacks
+          // Relay gasless execution support.
+          setExecuteState('build');
+          await Promise.all(multiSourcePlan.map(leg => preflightRelayQuoteExecution(leg.quote, session)));
+
           for (const leg of multiSourcePlan) {
-            setExecuteState('build');
             const result = await executeRelayQuote(leg.quote, session, step => setExecuteState(step), {
               useGaslessTrading: gaslessTradingEnabled,
               requote: () => getRelayQuote(leg.params),
