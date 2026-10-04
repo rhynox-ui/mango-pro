@@ -1393,8 +1393,7 @@ export async function executeRelayQuote(
         // only after Relay has rejected before broadcast, making the order
         // real rather than merely conceptual.
         try {
-          try {
-            const relayResult = await sendEvmCallsViaRelayGasless({
+          const relayResult = await sendEvmCallsViaRelayGasless({
               chain: evmClients.publicClient.chain!,
               fromAddress: evmClients.walletClient!.account!.address,
               privateKey: session.evm.privateKey as `0x${string}`,
@@ -1403,15 +1402,14 @@ export async function executeRelayQuote(
                 value: item.data?.value ? BigInt(item.data.value) : 0n,
                 data: (item.data?.data || '0x') as `0x${string}`,
               }],
-            });
-            hash = relayResult.hash;
-            txHashes.push(hash);
-            continue;
-          } catch (relayErr) {
-            const relayMessage = relayErr instanceof Error ? relayErr.message : String(relayErr);
-            if (!isPreBroadcastRelayError(relayMessage)) throw relayErr;
-            console.warn('[relayGasless] Primary Relay execution rejected before broadcast; trying Pimlico second:', relayMessage);
-          }
+          });
+          hash = relayResult.hash;
+          txHashes.push(hash);
+          continue;
+        } catch (relayErr) {
+          const relayMessage = relayErr instanceof Error ? relayErr.message : String(relayErr);
+          if (!isPreBroadcastRelayError(relayMessage)) throw relayErr;
+          console.warn('[relayGasless] Primary Relay execution rejected before broadcast; trying Pimlico second:', relayMessage);
         }
 
         // Pimlico is the SECOND gasless choice and is constructed lazily,
