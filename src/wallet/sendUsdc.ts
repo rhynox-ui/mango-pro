@@ -26,6 +26,7 @@ import bs58 from 'bs58';
 import {getViemChain, transportFor} from '../core/chainRegistry.ts';
 import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, assetDecimalsForChain, type ChainKey} from '../core/chainData.ts';
 import {getEip7702AuthorizationIfNeeded, getSponsoredSmartAccountClient, isGaslessSupportedOnChain, isSmartAccountSponsorshipConfigured} from './smartAccount.ts';
+import {sendEvmCashAssetViaRelayGasless} from './relayGaslessWithdrawal.ts';
 import {signAndSendSponsoredSolanaStep, type SolanaTransactionSigner} from '../core/executeRelayQuote.ts';
 import type {DerivedAccounts} from './keys';
 
@@ -109,6 +110,15 @@ async function sendEvmCashAsset(chainKey: ChainKey, asset: CashAsset, session: D
   // executeRelayQuote.ts's own dispatch already holds sponsored EVM
   // steps to, never a broader catch-and-retry.
   if (useGaslessTrading && isSmartAccountSponsorshipConfigured() && isGaslessSupportedOnChain(chain.id)) {
+    const isPimlicoInfrastructureFailure = (message: string) => /pimlico_getUserOperationGasPrice|HTTP request failed|status:\s*5(?:00|02|03|04)|error code:\s*1101|Could not reach Pimlico/i.test(message);
+    const tryRelayGaslessFallback = async (): Promise<{hash: string} | null> => {
+      try {
+        return await sendEvmCashAssetViaRelayGasless({chain, chainKey, tokenAddress: tokenAddress as `0x${string}`, fromAddress, toAddress: toAddress as `0x${string}`, amountRaw, privateKey: account.privateKey as `0x${string}`});
+      } catch (relayErr) {
+        console.warn('[sendUsdc] Relay gasless withdrawal fallback was not available:', relayErr instanceof Error ? relayErr.message : String(relayErr));
+        return null;
+      }
+    };
     let sponsoredClient: Awaited<ReturnType<typeof getSponsoredSmartAccountClient>> | null = null;
     try {
       sponsoredClient = await getSponsoredSmartAccountClient({chain, owner: account});
@@ -116,7 +126,12 @@ async function sendEvmCashAsset(chainKey: ChainKey, asset: CashAsset, session: D
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (message && !/timeout|network|fetch|429|403/i.test(message)) {
-        throw new Error(`This withdrawal would revert: ${message}`);
+        if (isPimlicoInfrastructureFailure(message)) {
+          const relayResult = await tryRelayGaslessFallback();
+          if (relayResult) return relayResult;
+        } else {
+          throw new Error(`This withdrawal would revert: ${message}`);
+        }
       }
       // A transient hiccup building the client or running the pre-flight
       // call — nothing was ever broadcast, safe to fall through to plain.
@@ -132,8 +147,13 @@ async function sendEvmCashAsset(chainKey: ChainKey, asset: CashAsset, session: D
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         const isPreBroadcastRejection = /invalid fields set on user operation|invalid useroperation|\baa[0-9]{2}\b/i.test(message);
-        if (!isPreBroadcastRejection) throw err;
-        console.warn('[sendUsdc] Sponsored withdrawal rejected before broadcast, falling back to a plain transaction:', message);
+        const isPimlicoFailure = isPimlicoInfrastructureFailure(message);
+        if (!isPreBroadcastRejection && !isPimlicoFailure) throw err;
+        if (useGaslessTrading) {
+          const relayResult = await tryRelayGaslessFallback();
+          if (relayResult) return relayResult;
+        }
+        console.warn('[sendUsdc] Sponsored withdrawal failed before broadcast; Relay gasless fallback was unavailable, continuing to the existing plain path:', message);
       }
     }
   }
