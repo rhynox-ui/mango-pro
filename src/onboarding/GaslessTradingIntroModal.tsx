@@ -12,7 +12,7 @@
 // toggle, since there's nothing to opt into here.
 //
 // Skipped entirely for a Google/Particle session (App.tsx never shows
-// it there): that path has no local key to sign a 7702 delegation
+// it there): Relay handles the gasless execution path directly
 // with, so there's nothing true to tell that user yet.
 
 import {useMemo} from 'react';
