@@ -280,7 +280,7 @@ export function assertSolanaTransactionMatchesIntent(
         closeAuthority !== expectedSigner
       ) {
         throw new SolanaIntentError(
-          'This route tries to close a token account without returning its recovered funds to your wallet. ' +
+          'This route closes a token account without returning its recovered funds to your wallet. ' +
             'It was stopped before signing; nothing was sent and nothing was spent.',
         );
       }
