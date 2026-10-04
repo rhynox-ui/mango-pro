@@ -24,6 +24,11 @@ check('withdrawal execution has no stale Pimlico/permissionless gas endpoint', (
   assert.equal(/pimlico|getUserOperationGasPrice|permissionless/i.test(SEND_USDC_SOURCE), false);
 });
 
+check('EVM cash withdrawal never contains a native-gas fallback', () => {
+  assert.equal(/createWalletClient|writeContract|estimateGas|estimateFeesPerGas|falling back to normal gas/i.test(SEND_USDC_SOURCE), false);
+  assert.match(SEND_USDC_SOURCE, /sendEvmCallsViaRelayGasless/);
+});
+
 function check(label, fn) {
   fn();
   n++;
