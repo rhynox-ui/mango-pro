@@ -971,7 +971,7 @@ const needsUnifiedRouting =
           setQuote(summarizeQuote(q, receiveDecimalsFallback));
           setQuoteLoading(false);
         })
-        .catch(relayErr => {
+        .catch(async relayErr => {
           if (requestId !== quoteRequestIdRef.current) return;
           const relayErrorMessage = relayErr instanceof Error ? relayErr.message : 'Could not get a quote — try again.';
           // Relay itself has no route for this pair — try a fallback DEX
