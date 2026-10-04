@@ -31,7 +31,7 @@
 
 import {useEffect, useMemo, useRef, useState} from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {ActivityIndicator, FlatList, Keyboard, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {ActivityIndicator, FlatList, Image, Keyboard, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import {AssetIcon} from '../components/AssetIcon';
 import {FilterIcon, GearIcon, NewspaperIcon, StarIcon} from '../components/icons';
 import {FloatingMangoDecor} from '../components/FloatingMangoDecor';
