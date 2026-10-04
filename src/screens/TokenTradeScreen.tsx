@@ -43,6 +43,7 @@ import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {ActivityIndicator, Image, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import Svg, {Circle, Path} from 'react-native-svg';
 import {formatUnits, parseUnits} from 'viem';
+import {getCrossChain0xQuote, executeCrossChain0xQuote, type CrossChain0xQuote} from '../core/crossChain0x.ts';
 import {TokenChartPanel} from '../components/TokenChartPanel';
 import {AssetIcon} from '../components/AssetIcon';
 import {ChevronLeftIcon} from '../components/icons';
@@ -82,12 +83,9 @@ import {cashLogoUrl, fetchCashPortfolio, spendableCash, spendableTotalUsd, CASH_
  */
 type PayOrigin = {chainKey: ChainKey};
 
-type MultiSourceLeg = {
-  chainKey: ChainKey;
-  amountUsd: number;
-  quote: RelayQuote;
-  params: GetRelayQuoteParams;
-};
+type MultiSourceLeg =
+  | {provider: 'relay'; chainKey: ChainKey; amountUsd: number; quote: RelayQuote; params: GetRelayQuoteParams}
+  | {provider: '0x'; chainKey: ChainKey; amountUsd: number; quote: CrossChain0xQuote; sellAmount: string};
 
 export type DemoToken = {
   /** A Relay chain, or 'near' — a NEAR token trades through nearTrade.ts instead of Relay. */
@@ -700,8 +698,32 @@ const needsUnifiedRouting =
                   originAmountUsd: legUsd,
                   slippageTolerance: slippageBps ?? undefined,
                 };
-                const legQuote = await getRelayQuote(legParams);
-                const summary = summarizeQuote(legQuote, tokenDecimals ?? 18);
+                let legProvider: 'relay' | '0x' = 'relay';
+                let legQuote: RelayQuote | CrossChain0xQuote;
+                try {
+                  legQuote = await getRelayQuote(legParams);
+                } catch (relayErr) {
+                  // FOMO-style cross-chain recovery: when Relay has no direct
+                  // route, ask 0x's Cross-Chain API for a complete swap+bridge
+                  // route. This is a separate cross-chain layer; the existing
+                  // same-chain fallbackDex.ts route formation is untouched.
+                  if (contributor.chainKey === 'solana') throw relayErr;
+                  legProvider = '0x';
+                  legQuote = await getCrossChain0xQuote({
+                    fromChainKey: contributor.chainKey,
+                    toChainKey: chainKey,
+                    sellToken: currencyAddress(contributor.chainKey, fromSymbol),
+                    buyToken: token.address,
+                    sellAmount: legAmountBaseUnits,
+                    userAddress: legUserAddress,
+                    destinationAddress: legRecipientAddress,
+                    originAmountUsd: legUsd,
+                    slippageBps: slippageBps,
+                  });
+                }
+                const summary = legProvider === 'relay'
+                  ? summarizeQuote(legQuote as RelayQuote, tokenDecimals ?? 18)
+                  : crossChain0xSummary(legQuote as CrossChain0xQuote, tokenDecimals ?? 18);
                 const impact = summary.priceImpactPct;
                 // Never let an aggregate weighted average hide a toxic
                 // individual leg (e.g. $1 at 100% impact + $9 at 2%).
@@ -724,6 +746,8 @@ const needsUnifiedRouting =
                   legUsd,
                   legParams,
                   legQuote,
+                  ...(legProvider === 'relay' ? {params: legParams} : {sellAmount: legAmountBaseUnits}),
+                  provider: legProvider,
                   impact,
                   outputScore,
                   totalFeeUsd: summary.totalFeeUsd ?? Number.POSITIVE_INFINITY,
@@ -769,12 +793,11 @@ const needsUnifiedRouting =
             if (executable.length === 0) break;
 
             const best = executable[0];
-            plan.push({
-              chainKey: best.contributor.chainKey,
-              amountUsd: best.legUsd,
-              quote: best.legQuote,
-              params: best.legParams,
-            });
+            plan.push(
+              best.provider === 'relay'
+                ? {provider: 'relay', chainKey: best.contributor.chainKey, amountUsd: best.legUsd, quote: best.legQuote as RelayQuote, params: best.legParams}
+                : {provider: '0x', chainKey: best.contributor.chainKey, amountUsd: best.legUsd, quote: best.legQuote as CrossChain0xQuote, sellAmount: best.legParams.amountBaseUnits},
+            );
             remainingUsd -= best.legUsd;
 
             const usedIndex = remainingContributors.findIndex(c => c.chainKey === best.contributor.chainKey);
@@ -805,7 +828,9 @@ const needsUnifiedRouting =
           let weightedImpact = 0;
           let weightedInput = 0;
           for (const leg of plan) {
-            const summary = summarizeQuote(leg.quote, receiveDecimalsFallback);
+            const summary = leg.provider === 'relay'
+              ? summarizeQuote(leg.quote, receiveDecimalsFallback)
+              : crossChain0xSummary(leg.quote, receiveDecimalsFallback);
             try { if (summary.receivedAmountFormatted) totalReceivedBaseUnits += parseUnits(summary.receivedAmountFormatted, receiveDecimalsFallback); } catch {}
             totalReceiveUsd += summary.receiveAmountUsd ?? 0;
             totalFeeUsd += summary.totalFeeUsd ?? 0;
@@ -1139,13 +1164,26 @@ const needsUnifiedRouting =
         try {
           for (const leg of multiSourcePlan) {
             setExecuteState('build');
-            const result = await executeRelayQuote(leg.quote, session, step => setExecuteState(step), {
-              useGaslessTrading: gaslessTradingEnabled,
-              requote: () => getRelayQuote(leg.params),
-            });
-            allHashes.push(...result.txHashes);
-            allWarnings.push(...result.warnings);
-            
+            if (leg.provider === 'relay') {
+              const result = await executeRelayQuote(leg.quote, session, step => setExecuteState(step), {
+                useGaslessTrading: gaslessTradingEnabled,
+                requote: () => getRelayQuote(leg.params),
+              });
+              allHashes.push(...result.txHashes);
+              allWarnings.push(...result.warnings);
+            } else {
+              const result = await executeCrossChain0xQuote({
+                quote: leg.quote,
+                fromChainKey: leg.chainKey,
+                session,
+                sellAmount: leg.sellAmount,
+                destinationChainId: MAINNET_CHAIN_IDS[chainKey],
+                destinationCurrency: token.address,
+                recipientAddress: solana ? session.solana.address : session.evm.address,
+                userAddress: leg.chainKey === 'solana' ? session.solana.address : session.evm.address,
+              });
+              allHashes.push(result.hash);
+            }
           }
           txHashes = allHashes;
           warnings = allWarnings;
