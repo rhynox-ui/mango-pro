@@ -55,7 +55,7 @@ export async function fetchWalletAssets(
     body: JSON.stringify({evmAddress, solanaAddress}),
   })
     .then(async response => {
-      const payload = await response.json().catch(() => null);
+      const payload = (await response.json().catch(() => null)) as {error?: string} | null;
       if (!response.ok) throw new Error(payload?.error || `Wallet asset index failed: ${response.status}`);
       const result = payload as WalletAssetsResult;
       cachedKey = key;
