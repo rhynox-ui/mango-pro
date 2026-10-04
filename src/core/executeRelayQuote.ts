@@ -1448,7 +1448,7 @@ export async function executeRelayQuote(
           // pre-flight simulate) — never on an ambiguous failure after the
           // UserOperation may already have been accepted, where retrying
           // with a plain transaction could double-execute it.
-          const isPreBroadcastRejection = /invalid fields set on user operation|invalid useroperation|\baa[0-9]{2}\b|this transaction would revert/i.test(message);
+          const isPreBroadcastRejection = /invalid fields set on user operation|invalid useroperation|\baa[0-9]{2}\b|this transaction would revert|error code:\s*1101|cloudflare.*1101|worker threw.*exception|http request failed/i.test(message);
           if (!isPreBroadcastRejection) throw err;
 
           // "This transaction would revert" is OUR OWN pre-flight simulate
