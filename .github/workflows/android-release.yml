@@ -65,13 +65,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
@@ -123,14 +123,14 @@ jobs:
         run: rm -f app/release.keystore keystore.properties
 
       - name: Upload AAB artifact (Play Store upload)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: mango-pro-release-aab-v${{ inputs.version_name }}-${{ github.run_number }}
           path: android/app/build/outputs/bundle/release/*.aab
           retention-days: 30
 
       - name: Upload APK artifact (direct install)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: mango-pro-release-apk-v${{ inputs.version_name }}-${{ github.run_number }}
           path: android/app/build/outputs/apk/release/*.apk
