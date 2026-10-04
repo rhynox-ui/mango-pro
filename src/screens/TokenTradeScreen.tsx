@@ -353,9 +353,10 @@ export function TokenTradeScreen({
     const destinationCash = tokenChainKey
       ? cashPortfolio?.results.find(r => r.status === 'ok' && r.chainKey === tokenChainKey)
       : undefined;
-    const destinationSpendable = destinationCash?.status === 'ok'
-      ? spendableCash(tokenChainKey, destinationCash.balance)
-      : 0;
+    const destinationSpendable =
+      tokenChainKey && destinationCash?.status === 'ok'
+        ? spendableCash(tokenChainKey, destinationCash.balance)
+        : 0;
     let preferredChain: ChainKey = best?.chainKey ?? fallbackChain;
     if (destinationSpendable > 0 && tokenChainKey) {
       preferredChain = tokenChainKey;
