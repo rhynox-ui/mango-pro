@@ -696,6 +696,7 @@ function TokenRow({
   colors: Colors;
   onPress?: (token: DiscoveryToken) => void;
   starred: boolean;
+  // Entry MC is display-only position analytics.
   entryMarketCapUsd: number | null;
 }) {
   const styles = makeStyles(colors);
