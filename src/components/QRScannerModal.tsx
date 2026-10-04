@@ -1,6 +1,6 @@
 import React, {useEffect, useState} from 'react';
-import {ActivityIndicator, Modal, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
-import {Camera} from 'react-native-camera-kit';
+import {ActivityIndicator, Modal, Platform, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
+import {Camera, CameraType} from 'react-native-camera-kit';
 import {PERMISSIONS, RESULTS, request} from 'react-native-permissions';
 
 export function QRScannerModal({
@@ -31,7 +31,7 @@ export function QRScannerModal({
           // CameraKit requires an explicit runtime permission before the
           // Camera component is mounted. This keeps denied camera access
           // from producing a blank native preview.
-          PERMISSIONS.ANDROID.CAMERA,
+          Platform.OS === 'ios' ? PERMISSIONS.IOS.CAMERA : PERMISSIONS.ANDROID.CAMERA,
         );
         if (!cancelled) {
           if (permission === RESULTS.GRANTED) setReady(true);
@@ -61,7 +61,7 @@ export function QRScannerModal({
           {ready ? (
             <Camera
               style={StyleSheet.absoluteFill}
-              cameraType="back"
+              cameraType={CameraType.Back}
               scanBarcode
               showFrame
               onReadCode={event => {
