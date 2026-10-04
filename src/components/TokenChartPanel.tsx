@@ -155,7 +155,7 @@ export function TokenChartPanel({chainKey, tokenAddress}: {chainKey: TradeChain;
             source={{uri: embedUrl}}
             style={styles.webview}
             containerStyle={styles.webviewContainer}
-            originWhitelist={['https://*']}
+            originWhitelist={['https://dexscreener.com']}
             onShouldStartLoadWithRequest={onShouldStartLoadWithRequest}
             javaScriptEnabled
             domStorageEnabled
