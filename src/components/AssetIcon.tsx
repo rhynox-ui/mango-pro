@@ -66,14 +66,23 @@ export function AssetIcon({symbol, imageUrl, chainKey, address, size = 16}: {sym
       resolveTokenLogo(chainKey, address).then(setFetchedUrl).catch(() => setFetchedUrl(null));
     }
   }, [imageUrl, chainKey, address]);
-  const resolvedImageUrl = imageUrl || fetchedUrl;
+  const resolvedImageUrl = failed ? fetchedUrl : imageUrl || fetchedUrl;
   const s = StyleSheet.create({
     circle: {width: size, height: size, borderRadius: size / 2, backgroundColor: colors.pillBg, alignItems: 'center', justifyContent: 'center'},
     letter: {fontSize: size * 0.55, fontWeight: '700', color: colors.textPrimary},
     image: {width: size, height: size, borderRadius: size / 2},
   });
   if (resolvedImageUrl && !failed) {
-    return <Image source={{uri: resolvedImageUrl}} style={s.image} onError={() => setFailed(true)} />;
+    return <Image
+      source={{uri: resolvedImageUrl}}
+      style={s.image}
+      onError={() => {
+        if (chainKey && address && !fetchedUrl) {
+          resolveTokenLogo(chainKey, address).then(setFetchedUrl).catch(() => {});
+        }
+        setFailed(true);
+      }}
+    />;
   }
   return (
     <View style={s.circle}>
