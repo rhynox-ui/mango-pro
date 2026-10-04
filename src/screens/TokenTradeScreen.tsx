@@ -870,6 +870,10 @@ const needsUnifiedRouting =
 
         buildPlan().then(plan => {
           if (requestId !== quoteRequestIdRef.current) return;
+          if (plan.length === 0 && crossChainQuoteRef.current) {
+            multiSourcePlanRef.current = [];
+            return;
+          }
           multiSourcePlanRef.current = plan;
           rawQuoteRef.current = null;
           lastQuoteParamsRef.current = null;
@@ -988,8 +992,17 @@ const needsUnifiedRouting =
           // pretending a same-chain aggregator could ever answer a
           // cross-chain request.
           if (isBuySide && payOrigin.chainKey !== chainKey) {
+            try {
+              const routed = await tryCrossChainBuy(payOrigin.chainKey);
+              if (routed) return;
+            } catch (crossErr) {
+              if (requestId !== quoteRequestIdRef.current) return;
+              setQuoteError(crossErr instanceof Error ? crossErr.message : 'Cross-chain routing failed.');
+            }
             rawQuoteRef.current = null;
             fallbackParamsRef.current = null;
+            crossChainQuoteRef.current = null;
+            crossChainOriginRef.current = null;
             setQuote(null);
             setQuoteLoading(false);
             setQuoteError(relayErrorMessage);
