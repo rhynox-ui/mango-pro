@@ -1124,42 +1124,7 @@ export function TokenTradeScreen({
         warnings = result.warnings;
         receivedAmountFormatted = quote?.receivedAmountFormatted ?? null;
       } else {
-        // Fallback path re-quotes fresh (tryFallbackProviders runs its
-        // own quoteAllProviders internally) rather than reusing the
-        // preview amount — same as the Relay path only ever executes the
-        // exact quote it already locked in, never a display value.
-        setExecuteState('signing');
-        const result = await tryFallbackProviders({...fallbackParams!, session});
-        setExecuteState('done');
-        txHashes = [result.hash];
-        warnings = [];
-        try {
-          receivedAmountFormatted = formatUnits(BigInt(result.buyAmount), fallbackParams!.buyDecimals ?? 18);
-        } catch {
-          receivedAmountFormatted = null;
-        }
-        // Best-effort, fire-and-forget — the trade above already
-        // succeeded, so this never affects it either way. Only needed
-        // when the winning provider didn't already collect Mango's fee
-        // inline (1inch's own Integrator Fee does; 0x doesn't; neither
-        // pump.fun nor PumpSwap ever does). Branches on chain since the
-        // sweep itself is chain-specific — EVM native balance vs. SOL.
-        if (!result.feeCollectedInline) {
-          if (chainKey === 'solana') {
-            sweepFallbackFeeFromSolanaBalance({
-              solanaAddress: session.solana.address,
-              session,
-              originAmountUsd: fallbackParams!.originAmountUsd,
-            }).catch(() => {});
-          } else {
-            sweepFallbackFeeFromNativeBalance({
-              chainKey,
-              evmAddress: session.evm.address,
-              session,
-              originAmountUsd: fallbackParams!.originAmountUsd,
-            }).catch(() => {});
-          }
-        }
+        throw new Error('Relay did not return an executable Fomo trade route.');
       }
       setExecuteWarnings(warnings);
       setExecuteTxHashes(txHashes);
