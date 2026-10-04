@@ -25,6 +25,7 @@ import {disableBiometricUnlock} from '../wallet/biometricAuth';
 import {enableAppLock, disableAppLock} from '../wallet/appLockAuth';
 import {EnableBiometricModal} from '../wallet/EnableBiometricModal';
 import {RevealPhraseModal} from '../wallet/RevealPhraseModal';
+import {ExportPrivateKeyModal} from '../wallet/ExportPrivateKeyModal';
 import {loadGaslessTradingEnabled, setGaslessTradingEnabled} from '../settings/gaslessTradingPrefs';
 import {isSmartAccountSponsorshipConfigured} from '../wallet/smartAccount';
 
@@ -36,6 +37,7 @@ export function SecurityScreen({onBack}: {onBack: () => void}) {
   const {biometricAvailable, biometricEnabled, biometryLabel, setBiometricEnabled, appLockEnabled, setAppLockEnabled} = useBiometric();
   const [showEnableBiometric, setShowEnableBiometric] = useState(false);
   const [showRevealPhrase, setShowRevealPhrase] = useState(false);
+  const [showExportPrivateKeys, setShowExportPrivateKeys] = useState(false);
   const [appLockBusy, setAppLockBusy] = useState(false);
   const [gaslessEnabled, setGaslessEnabledState] = useState(false);
   const isSeedSession = session?.authMethod !== 'google';
@@ -144,6 +146,10 @@ export function SecurityScreen({onBack}: {onBack: () => void}) {
             <Text style={styles.rowLabel}>Reveal recovery phrase</Text>
           </TouchableOpacity>
           <Text style={styles.sectionHint}>Requires your password. Use this to double-check your backup or to import this same wallet into another app.</Text>
+          <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={() => setShowExportPrivateKeys(true)}>
+            <Text style={styles.rowLabel}>Export private keys</Text>
+          </TouchableOpacity>
+          <Text style={styles.sectionHint}>Derives your EVM, Solana, and NEAR account keys locally. Never share them.</Text>
         </>
       )}
       <Text style={styles.sectionLabel}>Auto-lock</Text>
@@ -170,6 +176,7 @@ export function SecurityScreen({onBack}: {onBack: () => void}) {
         }}
       />
       <RevealPhraseModal visible={showRevealPhrase} onClose={() => setShowRevealPhrase(false)} />
+      <ExportPrivateKeyModal visible={showExportPrivateKeys} onClose={() => setShowExportPrivateKeys(false)} />
     </View>
   );
 }
