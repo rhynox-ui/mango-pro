@@ -22,6 +22,8 @@ import {DEV_FEE_WALLET_NEAR, appFeeBps} from './fees.ts';
 import {IntearRouteError, assertIntearRouteSafe, feeTransaction, fetchIntearRoutes, pickSafeRoute, type IntearRoute, type SafeRoute} from './intearRouter.ts';
 import {classifySwapOutcomes, type SwapOutcomeStatus} from './nearOutcome.ts';
 import {nearRpc, nearView} from './nearRpc.ts';
+import {assertRelayGaslessEvmAvailable} from './relayGaslessEvm.ts';
+import {getViemChain} from './chainRegistry.ts';
 import {NearSendError, ensureNearAccount, sendSponsoredNearCalls, type NearCall, type NearRelayOutcome} from './nearSigning.ts';
 import type {DerivedAccounts} from '../wallet/keys';
 import {fetchUsdcPortfolio} from './usdcBalances.ts';
@@ -75,6 +77,20 @@ export async function fundNearUsdcForTrade(
     const blockchain = ({ethereum: 'eth', base: 'base', arbitrum: 'arb', bnb: 'bsc', avalanche: 'avax', solana: 'sol', plasma: 'plasma', xlayer: 'xlayer'} as Partial<Record<ChainKey, string>>)[sourceChain];
     const sourceContract = TOKEN_ADDRESSES.USDC[sourceChain];
     if (!blockchain || !sourceContract) continue;
+
+    // NEAR Intents still requires the origin-chain USDC deposit transaction.
+    // For Mango's local-seed EVM wallets, that source transaction is itself
+    // gasless through the same Relay/Calibur executor used by the rest of
+    // Mango's EVM cash movement. Refuse a source candidate that Relay cannot
+    // actually sponsor instead of showing a quote that will later die on gas.
+    // Google/Particle sessions keep their existing Particle signing path.
+    if (sourceChain !== 'solana' && session.authMethod !== 'google') {
+      try {
+        await assertRelayGaslessEvmAvailable(getViemChain(sourceChain));
+      } catch {
+        continue;
+      }
+    }
     const sourceAsset = findOneClickAssetId(tokens, blockchain, sourceContract);
     if (!sourceAsset) continue;
     const decimals = assetDecimalsForChain(sourceChain, 'USDC') ?? NEAR_USDC_DECIMALS;
