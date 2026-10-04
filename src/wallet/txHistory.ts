@@ -73,6 +73,8 @@ export type TxHistoryEntry = {
   tokenAddress?: string;
   /** Same real-logo-or-none contract as everywhere else this app shows an icon — never fabricated when absent. */
   tokenImageUrl?: string | null;
+  /** DexScreener market cap captured when this token was successfully bought. Display-only analytics; never used to authorize or size a transaction. */
+  entryMarketCapUsd?: number | null;
 };
 
 let entries: TxHistoryEntry[] = [];
