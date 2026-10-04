@@ -344,7 +344,7 @@ export function ProfileScreen({
     }
     let cancelled = false;
     setWalletAssetsLoading(true);
-    fetchWalletAssets(session.evm.address, session.solana.address)
+    fetchWalletAssets(session.evm.address, session.solana.address, session.near?.address ?? null)
       .then(result => {
         if (cancelled) return;
         setWalletAssets(result.holdings);
@@ -366,8 +366,6 @@ export function ProfileScreen({
     const byKey = new Map<string, WalletAsset>();
     for (const asset of walletAssets) byKey.set(asset.key, asset);
     for (const position of openPositions) {
-      // NEAR uses a separate trade path and is not part of the indexed EVM/Solana asset set yet.
-      if (position.chainKey === 'near') continue;
       const key = `${position.chainKey}:${position.tokenAddress}`;
       if (!byKey.has(key)) {
         byKey.set(key, {
@@ -797,7 +795,7 @@ export function ProfileScreen({
                 <View style={styles.closedTradeMain}>
                   <Text style={styles.closedTradeTitle} numberOfLines={1}>{asset.symbol}</Text>
                   <Text style={styles.closedTradeSubtitle} numberOfLines={1}>
-                    {formatTokenAmount(asset.amount)} {asset.symbol} · {CHAIN_LABEL[asset.chainKey]}
+                    {formatTokenAmount(asset.amount)} {asset.symbol} · {asset.chainKey === 'near' ? NEAR_LABEL : CHAIN_LABEL[asset.chainKey]}
                   </Text>
                 </View>
                 <View style={styles.closedTradeRight}>
