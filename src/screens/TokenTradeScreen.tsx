@@ -1198,7 +1198,7 @@ const needsUnifiedRouting =
             const raw = leg.provider === 'relay'
               ? leg.quote?.details?.currencyOut?.amount
               : leg.quote?.quotes?.[0]?.buyAmount;
-            return sum + (typeof raw === 'string' && /^\\d+$/.test(raw) ? BigInt(raw) : 0n);
+            return sum + (typeof raw === 'string' && /^\d+$/.test(raw) ? BigInt(raw) : 0n);
           }, 0n);
           const outputDecimals = tokenDecimals ?? 18;
           receivedAmountFormatted = totalReceivedRaw > 0n
