@@ -34,10 +34,10 @@
 //   aggregate USDC (native only on the rare chain with no verified
 //   cash address at all).
 // - Execution is real on both sides: tapping Buy/Sell runs the quote
-//   through src/core/txIntentFirewall.ts (via executeRelayQuote.ts)
-//   before signing anything, then signs and broadcasts directly with
-//   the session's own key — same non-custodial, direct-broadcast model
-//   as every other send in this app.
+//   through Relay's Fomo-style cross-chain execution path. Mango checks
+//   the complete intent before signing, then uses Relay-sponsored EVM
+//   execution (and the verified Solana execution path) rather than
+//   silently falling back to a native-gas DEX transaction.
 
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {ActivityIndicator, Image, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
