@@ -153,6 +153,8 @@ function CashBadge({chainKey, size = 16}: {chainKey: ChainKey; size?: number}) {
   const url = cashLogoUrl(chainKey);
   const s = StyleSheet.create({
     circle: {width: size, height: size, borderRadius: size / 2, backgroundColor: colors.pillBg, alignItems: 'center', justifyContent: 'center'},
+    usdcCircle: {width: size, height: size, borderRadius: size / 2, backgroundColor: '#2775CA', alignItems: 'center', justifyContent: 'center'},
+    usdcSign: {fontSize: size * 0.58, lineHeight: size * 0.7, fontWeight: '800', color: '#fff'},
     sign: {fontSize: size * 0.6, fontWeight: '800', color: colors.textPrimary},
     image: {width: size, height: size, borderRadius: size / 2},
   });
@@ -160,8 +162,8 @@ function CashBadge({chainKey, size = 16}: {chainKey: ChainKey; size?: number}) {
     return <Image source={{uri: url}} style={s.image} onError={() => setFailed(true)} />;
   }
   return (
-    <View style={s.circle}>
-      <Text style={s.sign}>$</Text>
+    <View style={s.usdcCircle} accessibilityLabel="USDC">
+      <Text style={s.usdcSign}>$</Text>
     </View>
   );
 }
