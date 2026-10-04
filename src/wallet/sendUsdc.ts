@@ -14,16 +14,17 @@
 // decimals differ. Solana stays USDC-only; there's no USDG there in
 // this app's own verified data.
 //
-// Direct broadcast, same confirmed architecture decision as mobile's own
-// sendTransaction.js: this device signs with the session's own private
-// key and submits straight to the chain's RPC. No Mango backend ever
-// receives the signed transaction, let alone the key — see that file's
-// header for the fuller reasoning, which applies here unchanged.
+// EVM cash movement is Relay-sponsored: Mango never silently turns a
+// gasless withdrawal into a native-gas ERC-20 transfer. Local-seed EVM
+// sessions sign the Relay gasless authorization/call; Google sessions
+// still use Particle's native EVM signing surface because Particle RN does
+// not expose the EIP-7702 authorization primitive required by Mango's
+// Relay gasless EVM executor.
 
-import {createPublicClient, encodeFunctionData, parseUnits, isAddress} from 'viem';
+import {encodeFunctionData, parseUnits, isAddress} from 'viem';
 import {privateKeyToAccount} from 'viem/accounts';
 import bs58 from 'bs58';
-import {getViemChain, transportFor} from '../core/chainRegistry.ts';
+import {getViemChain} from '../core/chainRegistry.ts';
 import {TOKEN_ADDRESSES, ASSET_ONCHAIN_DECIMALS, assetDecimalsForChain, type ChainKey} from '../core/chainData.ts';
 import {sendEvmCallsViaRelayGasless} from '../core/relayGaslessEvm.ts';
 import {signAndSendSponsoredSolanaStep, type SolanaTransactionSigner} from '../core/executeRelayQuote.ts';
@@ -64,8 +65,6 @@ async function sendEvmCashAsset(chainKey: ChainKey, asset: CashAsset, session: D
   const tokenAddress = TOKEN_ADDRESSES[asset]?.[chainKey];
   if (!tokenAddress) throw new Error(`No verified ${asset} address for ${chainKey}.`);
   const chain = getViemChain(chainKey);
-  const transport = transportFor(chain.id);
-  const publicClient = createPublicClient({chain, transport});
   const fromAddress = session.evm.address as `0x${string}`;
 
   const decimals = assetDecimalsForChain(chainKey, asset) ?? ASSET_ONCHAIN_DECIMALS[asset];
@@ -85,7 +84,7 @@ async function sendEvmCashAsset(chainKey: ChainKey, asset: CashAsset, session: D
   if (session.authMethod === 'google') {
     const {sendEvmTransactionViaParticle} = await import('./particleSigning.ts');
     const hash = await sendEvmTransactionViaParticle(fromAddress, {chainId: chain.id, to: tokenAddress as `0x${string}`, data});
-    await publicClient.waitForTransactionReceipt({hash});
+    return {hash};
     return {hash};
   }
 
