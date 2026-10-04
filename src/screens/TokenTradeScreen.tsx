@@ -142,20 +142,17 @@ function formatEta(seconds: number): string {
  * The cash asset's own real logo (USDC/USDG, via cashLogoUrl's verified
  * Trust Wallet address) — NetworkIcon renders the CHAIN's icon, which
  * would be wrong for a stablecoin riding on top of it, so this needed
- * its own source. Falls back to the same honest-generic "$" mark
- * ProfileScreen's own Total-cash icon already uses (never a fabricated
- * brand mark) when chainKey has no confirmed logo URL, or the real one
- * fails to load.
+ * its own source. Falls back to a small USDC-branded blue mark if the
+ * remote logo cannot load, so the cash asset never renders as an
+ * anonymous generic dollar badge.
  */
 function CashBadge({chainKey, size = 16}: {chainKey: ChainKey; size?: number}) {
   const {colors} = useTheme();
   const [failed, setFailed] = useState(false);
   const url = cashLogoUrl(chainKey);
   const s = StyleSheet.create({
-    circle: {width: size, height: size, borderRadius: size / 2, backgroundColor: colors.pillBg, alignItems: 'center', justifyContent: 'center'},
     usdcCircle: {width: size, height: size, borderRadius: size / 2, backgroundColor: '#2775CA', alignItems: 'center', justifyContent: 'center'},
     usdcSign: {fontSize: size * 0.58, lineHeight: size * 0.7, fontWeight: '800', color: '#fff'},
-    sign: {fontSize: size * 0.6, fontWeight: '800', color: colors.textPrimary},
     image: {width: size, height: size, borderRadius: size / 2},
   });
   if (url && !failed) {
