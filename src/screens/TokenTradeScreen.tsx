@@ -66,7 +66,7 @@ import {useSession} from '../wallet/SessionContext';
 import {useTheme, type Colors} from '../theme/ThemeContext';
 import {TradeSettingsSheet} from '../components/TradeSettingsSheet';
 import {TradeResultModal, type TradeResultSummary} from '../components/TradeResultModal';
-import {fetchCashPortfolio, spendableCash, spendableTotalUsd, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio} from '../core/usdcBalances';
+import {fetchCashPortfolio, fetchUsdcPortfolio, spendableCash, spendableTotalUsd, CASH_ASSET_BY_CHAIN, CASH_SUPPORTED_CHAINS, type CashPortfolio, type UsdcPortfolio} from '../core/usdcBalances';
 
 /**
  * Buy-side only — which chain the user's cash actually gets spent from.
