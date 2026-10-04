@@ -91,7 +91,7 @@ export async function getCrossChainQuote(params: {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body),
   });
-  const json = await res.json().catch(() => ({}));
+  const json = await res.json().catch(() => ({} as {data?: unknown; error?: unknown}));
   if (!res.ok || !json?.data) throw apiError(json, 'No safe cross-chain route is available right now.');
   return json.data as CrossChainQuote;
 }
