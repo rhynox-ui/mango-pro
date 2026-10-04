@@ -17,17 +17,18 @@
 // swap pays no fee; a partly filled one pays the same share. NEAR gas is
 // covered by Mango (it costs a fraction of a cent per swap).
 
-import {NATIVE_NEAR, NEAR_USDC, NEAR_USDC_DECIMALS, TOKEN_ADDRESSES, assetDecimalsForChain, type ChainKey} from './chainData.ts';
+import {NATIVE_NEAR, NEAR_USDC, NEAR_USDC_DECIMALS, WRAP_NEAR, TOKEN_ADDRESSES, assetDecimalsForChain, type ChainKey} from './chainData.ts';
 import {DEV_FEE_WALLET_NEAR, appFeeBps} from './fees.ts';
 import {IntearRouteError, assertIntearRouteSafe, feeTransaction, fetchIntearRoutes, pickSafeRoute, type IntearRoute, type SafeRoute} from './intearRouter.ts';
 import {classifySwapOutcomes, type SwapOutcomeStatus} from './nearOutcome.ts';
 import {nearRpc, nearView} from './nearRpc.ts';
+import {assertRelayGaslessEvmAvailable} from './relayGaslessEvm.ts';
+import {getViemChain} from './chainRegistry.ts';
 import {NearSendError, ensureNearAccount, sendSponsoredNearCalls, type NearCall, type NearRelayOutcome} from './nearSigning.ts';
 import type {DerivedAccounts} from '../wallet/keys';
 import {fetchUsdcPortfolio} from './usdcBalances.ts';
 import {fetchOneClickTokens, findOneClickAssetId, ONE_CLICK_PROXY_BASE_URL, type OneClickQuoteRequest, requestOneClickQuote, fetchOneClickStatus, submitOneClickDepositTx} from './oneClick.ts';
 import {fundOneClickQuote, type OneClickSwapStore} from './oneClickDeposits.ts';
-import {oneClickSwapStore} from '../wallet/oneClickSwapStore.ts';
 
 export type NearTradeSide = 'buy' | 'sell';
 
@@ -75,6 +76,20 @@ export async function fundNearUsdcForTrade(
     const blockchain = ({ethereum: 'eth', base: 'base', arbitrum: 'arb', bnb: 'bsc', avalanche: 'avax', solana: 'sol', plasma: 'plasma', xlayer: 'xlayer'} as Partial<Record<ChainKey, string>>)[sourceChain];
     const sourceContract = TOKEN_ADDRESSES.USDC[sourceChain];
     if (!blockchain || !sourceContract) continue;
+
+    // NEAR Intents still requires the origin-chain USDC deposit transaction.
+    // For Mango's local-seed EVM wallets, that source transaction is itself
+    // gasless through the same Relay/Calibur executor used by the rest of
+    // Mango's EVM cash movement. Refuse a source candidate that Relay cannot
+    // actually sponsor instead of showing a quote that will later die on gas.
+    // Google/Particle sessions keep their existing Particle signing path.
+    if (sourceChain !== 'solana' && session.authMethod !== 'google') {
+      try {
+        await assertRelayGaslessEvmAvailable(getViemChain(sourceChain));
+      } catch {
+        continue;
+      }
+    }
     const sourceAsset = findOneClickAssetId(tokens, blockchain, sourceContract);
     if (!sourceAsset) continue;
     const decimals = assetDecimalsForChain(sourceChain, 'USDC') ?? NEAR_USDC_DECIMALS;
@@ -187,6 +202,12 @@ export function nearTradeFee(usdcUnits: bigint): bigint {
   return (usdcUnits * BigInt(appFeeBps(usd))) / 10_000n;
 }
 
+export type NearTradeStage = {
+  tokenIn: string;
+  tokenOut: string;
+  route: SafeRoute;
+};
+
 export type NearTradeQuote = {
   side: NearTradeSide;
   token: string;
@@ -197,6 +218,8 @@ export type NearTradeQuote = {
   tokenIn: string;
   tokenOut: string;
   route: SafeRoute;
+  /** Optional two-stage route, used when USDC and a Nearly DCL launch require wNEAR as the intermediate asset. */
+  stages?: NearTradeStage[];
   /** Mango's fee in USDC base units, before any partial-fill adjustment. */
   fee: bigint;
   /** What the user can expect / is guaranteed, after the fee. */
@@ -250,7 +273,60 @@ export async function quoteNearTrade({
   const swapIn = payUnits - buyFee;
   if (swapIn <= 0n) throw new NearTradeError('This amount is too small to trade.');
   const routes = await fetchIntearRoutes({tokenIn, tokenOut, amountIn: swapIn, slippageBps: bps, accountId, fetchImpl});
-  const route = pickRelayableRoute(routes, {accountId, tokenIn, tokenOut, amountIn: swapIn});
+  let route = pickRelayableRoute(routes, {accountId, tokenIn, tokenOut, amountIn: swapIn});
+  let stages: NearTradeStage[] | undefined;
+
+  // Intear providers are individually routed: Rhea can find USDC -> wNEAR,
+  // while Rhea DCL can find wNEAR -> a Nearly launch token, but the aggregator
+  // does not compose a Rhea hop with a DCL hop into one quote. Nearly launch
+  // pools such as NEARLY/wNEAR therefore need a safe two-stage route.
+  //
+  // This is deliberately limited to actual Nearly token accounts. We do not
+  // guess that an arbitrary ".near" token is a DCL launch, and every stage
+  // still goes through the exact same route firewall + relayer gas checks.
+  if (!route && token.endsWith('.nearlytrade.near') && token !== NEAR_USDC) {
+    const intermediate = WRAP_NEAR;
+    const firstRoutes = await fetchIntearRoutes({
+      tokenIn,
+      tokenOut: intermediate,
+      amountIn: swapIn,
+      slippageBps: bps,
+      accountId,
+      fetchImpl,
+    });
+    const first = pickRelayableRoute(firstRoutes, {
+      accountId,
+      tokenIn,
+      tokenOut: intermediate,
+      amountIn: swapIn,
+    });
+    if (first) {
+      const secondRoutes = await fetchIntearRoutes({
+        tokenIn: intermediate,
+        tokenOut,
+        // Spend only the first stage's guaranteed minimum. Any better fill
+        // stays in the wallet instead of being silently spent.
+        amountIn: first.minOut,
+        slippageBps: bps,
+        accountId,
+        fetchImpl,
+      });
+      const second = pickRelayableRoute(secondRoutes, {
+        accountId,
+        tokenIn: intermediate,
+        tokenOut,
+        amountIn: first.minOut,
+      });
+      if (second) {
+        route = second;
+        stages = [
+          {tokenIn, tokenOut: intermediate, route: first},
+          {tokenIn: intermediate, tokenOut, route: second},
+        ];
+      }
+    }
+  }
+
   if (!route) throw new NearTradeError(routes.length ? 'No safe route for this trade right now.' : 'No NEAR exchange can fill this trade right now.');
   const fee = buy ? buyFee : nearTradeFee(route.minOut);
   return {
@@ -261,6 +337,7 @@ export async function quoteNearTrade({
     tokenIn,
     tokenOut,
     route,
+    stages,
     fee,
     receiveUnits: buy ? route.amountOut : route.amountOut - fee,
     minReceiveUnits: buy ? route.minOut : route.minOut - fee,
@@ -349,27 +426,118 @@ export async function executeNearTrade(
     rpc = nearRpc,
     ensureAccount = ensureNearAccount,
     requote,
+    fetchImpl = fetch,
     now = () => Date.now(),
-  }: {send?: Send; view?: View; rpc?: Rpc; ensureAccount?: typeof ensureNearAccount; requote?: () => Promise<NearTradeQuote>; now?: () => number} = {},
+  }: {send?: Send; view?: View; rpc?: Rpc; ensureAccount?: typeof ensureNearAccount; requote?: () => Promise<NearTradeQuote>; fetchImpl?: typeof fetch; now?: () => number} = {},
 ): Promise<NearTradeResult> {
   if (!session.near) throw new NearTradeError('This wallet has no NEAR account.');
   const accountId = session.near.address;
-  const fresh = requote ?? (() => quoteNearTrade({side: initial.side, token: initial.token, payUnits: initial.payUnits, accountId, slippageBps: initial.slippageBps}));
+  const fresh = requote ?? (() => quoteNearTrade({side: initial.side, token: initial.token, payUnits: initial.payUnits, accountId, slippageBps: initial.slippageBps, fetchImpl}));
   const quote = now() - initial.quotedAt > NEAR_QUOTE_MAX_AGE_MS ? await fresh() : initial;
   if (quote.side !== initial.side || quote.token !== initial.token || quote.payUnits !== initial.payUnits) throw new NearTradeError('The trade changed — try again.');
   // Never send for less than the minimum the user was shown.
   if (quote.minReceiveUnits < initial.minReceiveUnits) throw new NearTradeError('The price moved since your quote — check the new amount and try again.');
   const {route} = quote;
-  assertIntearRouteSafe(route.txs, {accountId, tokenIn: quote.tokenIn, tokenOut: quote.tokenOut, amountIn: quote.swapIn, minOut: route.minOut});
+  const staged = quote.stages;
+  if (staged) {
+    for (let i = 0; i < staged.length; i++) {
+      const stage = staged[i];
+      assertIntearRouteSafe(stage.route.txs, {
+        accountId,
+        tokenIn: stage.tokenIn,
+        tokenOut: stage.tokenOut,
+        amountIn: i === 0 ? quote.swapIn : stage.route.minOut,
+        minOut: stage.route.minOut,
+      });
+    }
+  } else {
+    assertIntearRouteSafe(route.txs, {
+      accountId,
+      tokenIn: quote.tokenIn,
+      tokenOut: quote.tokenOut,
+      amountIn: quote.swapIn,
+      minOut: route.minOut,
+    });
+  }
+  const stageRoutes = staged?.map(stage => stage.route) ?? [route];
 
   const balanceIn = await fetchNearTokenBalance(quote.tokenIn, accountId, view);
   if (balanceIn < quote.payUnits) throw new NearTradeError(quote.side === 'buy' ? 'Not enough USDC on NEAR for this trade.' : "You don't hold that much of this token.");
   // A new NEAR account only exists once Mango's relayer has set it up
-  // (with starter NEAR for storage) — do that before counting its NEAR.
+  // (with starter NEAR) — do that before counting its NEAR.
   await ensureAccount(session, {rpc});
-  const needNear = attachedNear(route.txs);
+  const needNear = stageRoutes.reduce((sum, r) => sum + attachedNear(r.txs), 0n);
   if (needNear > 0n && needNear > (await spendableNear(accountId, rpc))) {
     throw new NearTradeError("Your NEAR account doesn't have enough NEAR to register this token (a one-time storage deposit).");
+  }
+
+  if (staged) {
+    // Capture the existing intermediate balance before the first leg so an
+    // already-held wNEAR is never accidentally spent.
+    const intermediateBefore = await fetchNearTokenBalance(WRAP_NEAR, accountId, view);
+    // Execute the bridge leg first. We intentionally spend only its shown
+    // minimum on the DCL leg so an unexpectedly better fill is never swept.
+    const first = staged[0];
+    const firstSent = await send(session, first.route.txs);
+    const firstVerdict = classifySwapOutcomes(first.route.txs, firstSent);
+    const firstHashes = [...firstVerdict.hashes];
+    if (firstVerdict.status !== 'ok') {
+      return {status: firstVerdict.status, hashes: firstHashes, feeCharged: 0n, feeError: null};
+    }
+
+    // Read the actual newly acquired wNEAR, then quote the DCL leg again.
+    // Existing wNEAR in the wallet is never touched.
+    const available = await fetchNearTokenBalance(WRAP_NEAR, accountId, view);
+    const acquired = available > intermediateBefore ? available - intermediateBefore : first.route.minOut;
+    if (acquired < first.route.minOut) throw new NearTradeError('The first routing leg returned less than its guaranteed minimum.');
+    const secondRoutes = await fetchIntearRoutes({
+      tokenIn: WRAP_NEAR,
+      tokenOut: quote.tokenOut,
+      amountIn: acquired,
+      slippageBps: quote.slippageBps,
+      accountId,
+      fetchImpl,
+    });
+    const second = pickRelayableRoute(secondRoutes, {
+      accountId,
+      tokenIn: WRAP_NEAR,
+      tokenOut: quote.tokenOut,
+      amountIn: acquired,
+    });
+    if (!second || second.minOut < quote.minReceiveUnits) {
+      throw new NearTradeError('The price moved while routing through wNEAR — nothing further was sent.');
+    }
+    assertIntearRouteSafe(second.txs, {
+      accountId,
+      tokenIn: WRAP_NEAR,
+      tokenOut: quote.tokenOut,
+      amountIn: acquired,
+      minOut: second.minOut,
+    });
+    const secondSent = await send(session, second.txs);
+    const secondVerdict = classifySwapOutcomes(second.txs, secondSent);
+    const hashes = [...firstHashes, ...secondVerdict.hashes];
+    if (secondVerdict.status !== 'ok') {
+      return {status: secondVerdict.status, hashes, feeCharged: 0n, feeError: null};
+    }
+    const fee = quote.fee;
+    let feeError: string | null = null;
+    let feeCharged = 0n;
+    if (fee > 0n) {
+      try {
+        const registration = await storageRegistration(NEAR_USDC, DEV_FEE_WALLET_NEAR, view);
+        const call = feeTransaction({token: NEAR_USDC, fee, feeAccount: DEV_FEE_WALLET_NEAR, feeRegistration: registration});
+        if (call) {
+          const [feeOutcome] = await send(session, [call]);
+          if (feeOutcome?.hash) hashes.push(feeOutcome.hash);
+          if (feeOutcome?.result && 'Failure' in feeOutcome.result) throw new Error("The fee transfer didn't go through.");
+          feeCharged = fee;
+        }
+      } catch (err) {
+        feeError = err instanceof Error ? err.message : "Mango's fee couldn't be sent.";
+      }
+    }
+    return {status: 'ok', hashes, feeCharged, feeError};
   }
 
   const sent = await send(session, route.txs);
