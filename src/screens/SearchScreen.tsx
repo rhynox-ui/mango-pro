@@ -7,7 +7,8 @@
 // tapping a result goes straight to the trade screen for now.
 
 import {useEffect, useRef, useState} from 'react';
-import {ActivityIndicator, FlatList, Image, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {ActivityIndicator, FlatList, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import {AssetIcon} from '../components/AssetIcon';
 import {SearchIcon} from '../components/icons';
 import {tradeChainLabel} from '../core/chainData';
 import {fmtCompactUsd, searchTokens, type TokenSearchResult} from '../core/tokenSearch';
@@ -105,18 +106,17 @@ export function SearchScreen({onSelectToken}: {onSelectToken: (result: TokenSear
 
 function ResultRow({result, colors, onPress}: {result: TokenSearchResult; colors: Colors; onPress: () => void}) {
   const styles = makeStyles(colors);
-  const [imageFailed, setImageFailed] = useState(false);
   const positive = (result.change24h ?? 0) >= 0;
   const marketCap = fmtCompactUsd(result.marketCapUsd);
   return (
     <TouchableOpacity style={styles.resultRow} onPress={onPress} activeOpacity={0.7}>
-      {result.imageUrl && !imageFailed ? (
-        <Image source={{uri: result.imageUrl}} style={styles.resultAvatarImage} onError={() => setImageFailed(true)} />
-      ) : (
-        <View style={styles.resultAvatar}>
-          <Text style={styles.resultAvatarText}>{result.symbol.slice(0, 1).toUpperCase()}</Text>
-        </View>
-      )}
+      <AssetIcon
+        symbol={result.symbol}
+        imageUrl={result.imageUrl}
+        chainKey={result.chainKey}
+        address={result.tokenAddress}
+        size={40}
+      />
       <View style={styles.resultInfo}>
         <Text style={styles.resultSymbol} numberOfLines={1}>
           {result.symbol}
