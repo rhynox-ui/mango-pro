@@ -326,55 +326,66 @@ export function ProfileScreen({
   // DexScreener.
   const [tradeCount, setTradeCount] = useState(0);
   const [closedPositions, setClosedPositions] = useState<ClosedPosition[]>([]);
-  // Native coins are real wallet assets too. They were previously absent
-  // because openPositions is intentionally trade-history based. Scan every
-  // supported native balance independently and merge only non-zero assets
-  // into the Open positions view; no token list/indexer is needed for native
-  // coins, and the existing trade-history positions remain unchanged.
+  const [openPositions, setOpenPositions] = useState<OpenPositionWithValue[]>([]);
+  const [nativePositions, setNativePositions] = useState<OpenPositionWithValue[]>([]);
+  const [walletAssets, setWalletAssets] = useState<WalletAsset[]>([]);
+  const [walletAssetsComplete, setWalletAssetsComplete] = useState(true);
+  const [walletAssetsLoading, setWalletAssetsLoading] = useState(false);
+
+  // Live wallet index: anything with a positive fungible balance appears
+  // here even when it never touched Mango before. txHistory remains the
+  // fallback for older positions if an upstream indexer is partial.
   useEffect(() => {
     if (!session) {
-      setNativePositions([]);
+      setWalletAssets([]);
+      setWalletAssetsComplete(true);
       return;
     }
     let cancelled = false;
-    const chains = (Object.keys(MAINNET_CHAIN_IDS) as ChainKey[]).filter(chain => chain !== 'arc');
-    Promise.all([
-      fetchWalletPrices().catch(() => ({} as Record<string, number>)),
-      Promise.allSettled(chains.map(async chainKey => {
-        const balance = chainKey === 'solana'
-          ? await fetchWalletSolanaBalance(session.solana.address)
-          : await fetchWalletNativeBalance(chainKey, session.evm.address);
-        return {chainKey, balance};
-      })),
-    ]).then(([prices, results]) => {
-      if (cancelled) return;
-      const native: OpenPositionWithValue[] = [];
-      for (const result of results) {
-        if (result.status !== 'fulfilled' || result.value.balance <= 0) continue;
-        const {chainKey, balance} = result.value;
-        const symbol = NATIVE_SYMBOL[chainKey];
-        const address = currencyAddress(chainKey, symbol);
-        const price = prices[symbol];
-        native.push({
-          key: `native:${chainKey}`,
-          chainKey,
-          chainLabel: CHAIN_LABEL[chainKey],
-          tokenAddress: address,
-          symbol,
-          imageUrl: null,
-          amountHeld: balance,
-          lastTradeAt: Date.now(),
-          valueUsd: typeof price === 'number' && Number.isFinite(price) ? balance * price : null,
-        });
-      }
-      setNativePositions(native);
-    });
+    setWalletAssetsLoading(true);
+    fetchWalletAssets(session.evm.address, session.solana.address)
+      .then(result => {
+        if (cancelled) return;
+        setWalletAssets(result.holdings);
+        setWalletAssetsComplete(result.complete);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setWalletAssetsComplete(false);
+      })
+      .finally(() => {
+        if (!cancelled) setWalletAssetsLoading(false);
+      });
     return () => {
       cancelled = true;
     };
   }, [session]);
-  const [openPositions, setOpenPositions] = useState<OpenPositionWithValue[]>([]);
-  const [nativePositions, setNativePositions] = useState<OpenPositionWithValue[]>([]);
+
+  const displayWalletAssets = useMemo(() => {
+    const byKey = new Map<string, WalletAsset>();
+    for (const asset of walletAssets) byKey.set(asset.key, asset);
+    for (const position of openPositions) {
+      const key = `${position.chainKey}:${position.tokenAddress}`;
+      if (!byKey.has(key)) {
+        byKey.set(key, {
+          key,
+          chainKey: position.chainKey,
+          address: position.tokenAddress,
+          symbol: position.symbol,
+          name: position.symbol,
+          decimals: 18,
+          amount: position.amountHeld,
+          valueUsd: position.valueUsd,
+          priceUsd: position.valueUsd != null && position.amountHeld > 0 ? position.valueUsd / position.amountHeld : null,
+          imageUrl: position.imageUrl,
+          isNative: false,
+        });
+      }
+    }
+    return [...byKey.values()].sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0));
+  }, [walletAssets, openPositions]);
+
+
   useEffect(() => {
     function recount(entries: ReturnType<typeof getTxHistory>) {
       const scoped = session ? filterTxHistoryForAccount(entries, {evmAddress: session.evm.address, solanaAddress: session.solana.address, nearAddress: session.near?.address}) : entries;
@@ -755,32 +766,55 @@ export function ProfileScreen({
       {/* This app has nothing that's actually a Perp yet, so the Perps
           filter always reads as empty here — an honest reflection of
           what exists, not a bug. */}
-      {positionTab === 'Open' && assetFilter !== 'Perps' && (openPositions.length > 0 || nativePositions.length > 0) ? (
+      {positionTab === 'Open' && assetFilter !== 'Perps' ? (
         <View style={styles.closedTradesList}>
-          {[...nativePositions, ...openPositions].map(position => (
-            <TouchableOpacity
-              key={position.key}
-              style={styles.closedTradeRow}
-              activeOpacity={0.6}
-              disabled={!onOpenToken}
-              onPress={() => onOpenToken?.({chainKey: position.chainKey, address: position.tokenAddress, symbol: position.symbol, imageUrl: position.imageUrl})}>
-              {position.key.startsWith('native:') ? (
-                <NetworkIcon chainKey={position.chainKey as ChainKey} size={30} />
-              ) : (
-                <AssetIcon symbol={position.symbol} imageUrl={position.imageUrl} size={30} />
-              )}
-              <View style={styles.closedTradeMain}>
-                <Text style={styles.closedTradeTitle} numberOfLines={1}>{position.symbol}</Text>
-                <Text style={styles.closedTradeSubtitle} numberOfLines={1}>
-                  {formatTokenAmount(position.amountHeld)} {position.symbol} on {position.chainLabel}
-                </Text>
-              </View>
-              <View style={styles.closedTradeRight}>
-                <Text style={styles.closedTradeTitle}>{position.valueUsd != null ? `$${formatUsd(position.valueUsd)}` : '—'}</Text>
-              </View>
-            </TouchableOpacity>
-          ))}
-        </View>) : positionTab === 'Closed' && assetFilter !== 'Perps' && closedPositions.length > 0 ? (
+          {walletAssetsLoading && displayWalletAssets.length === 0 ? (
+            <View style={styles.emptyPositions}>
+              <ActivityIndicator size="small" color={colors.textSecondary} />
+              <Text style={styles.emptyPositionsText}>Loading wallet assets…</Text>
+            </View>
+          ) : displayWalletAssets.length > 0 ? (
+            displayWalletAssets.map(asset => (
+              <TouchableOpacity
+                key={asset.key}
+                style={styles.closedTradeRow}
+                activeOpacity={0.6}
+                disabled={!onOpenToken}
+                onPress={() => onOpenToken?.({
+                  chainKey: asset.chainKey,
+                  address: asset.address,
+                  symbol: asset.symbol,
+                  imageUrl: asset.imageUrl,
+                })}>
+                {asset.isNative ? (
+                  <NetworkIcon chainKey={asset.chainKey} size={30} />
+                ) : (
+                  <AssetIcon symbol={asset.symbol} imageUrl={asset.imageUrl} size={30} />
+                )}
+                <View style={styles.closedTradeMain}>
+                  <Text style={styles.closedTradeTitle} numberOfLines={1}>{asset.symbol}</Text>
+                  <Text style={styles.closedTradeSubtitle} numberOfLines={1}>
+                    {formatTokenAmount(asset.amount)} {asset.symbol} · {CHAIN_LABEL[asset.chainKey]}
+                  </Text>
+                </View>
+                <View style={styles.closedTradeRight}>
+                  <Text style={styles.closedTradeTitle}>
+                    {asset.valueUsd != null ? `$${formatUsd(asset.valueUsd)}` : '—'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ))
+          ) : (
+            <View style={styles.emptyPositions}>
+              <Text style={styles.emptyPositionsText}>No wallet assets</Text>
+              <Text style={styles.emptyPositionsHint}>Balances received outside Mango will appear here automatically.</Text>
+            </View>
+          )}
+          {!walletAssetsComplete && displayWalletAssets.length > 0 ? (
+            <Text style={styles.emptyPositionsHint}>Some wallet assets could not be verified right now.</Text>
+          ) : null}
+        </View>
+      ) : positionTab === 'Closed' && assetFilter !== 'Perps' && closedPositions.length > 0 ? (
         <View style={styles.closedTradesList}>
           {/* One row per fully-exited TOKEN (computeClosedPositions
               aggregates every Buy/Sell down to a net ~0 amount), not one
