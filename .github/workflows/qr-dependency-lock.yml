@@ -23,6 +23,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/qr-dependency-lock.yml
           git add package-lock.json
           git commit -m "Update lockfile for QR dependencies"
           git push
