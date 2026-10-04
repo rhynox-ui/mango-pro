@@ -1416,7 +1416,7 @@ export async function executeRelayQuote(
         // only after Relay's pre-broadcast rejection.
         const sponsoredClient = await getSponsoredSmartAccountClient({
           chain: evmClients.publicClient.chain!,
-          owner: evmClients.walletClient.account!,
+          owner: privateKeyToAccount(session.evm.privateKey as `0x${string}`),
         });
         evmClients.sponsoredClient = sponsoredClient;
         try {
