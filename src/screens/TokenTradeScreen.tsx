@@ -660,6 +660,62 @@ const needsUnifiedRouting =
       // payOrigin can.
       const sellReceiveCurrency = receiveAsset === 'cash' ? currencyAddress(chainKey, CASH_ASSET_BY_CHAIN[chainKey] ?? 'USDC') : nativeCurrency;
       const originCurrency = isBuySide ? currencyAddress(payOrigin.chainKey, CASH_ASSET_BY_CHAIN[payOrigin.chainKey] ?? 'USDC') : token.address;
+      const tryCrossChainBuy = async (sourceChainKey: ChainKey): Promise<boolean> => {
+        if (!isBuySide || sourceChainKey === chainKey || !session) return false;
+        const sourceAsset = CASH_ASSET_BY_CHAIN[sourceChainKey] ?? 'USDC';
+        const sourceDecimals = assetDecimalsForChain(sourceChainKey, sourceAsset) ?? 6;
+        const sourceBalance = cashPortfolio?.results.find(r => r.chainKey === sourceChainKey)?.balanceUsd ?? 0;
+        if (sourceBalance + 0.000001 < amtNum) return false;
+
+        const sourceAddress = sourceChainKey === 'solana' ? session.solana.address : session.evm.address;
+        const destinationAddress = chainKey === 'solana' ? session.solana.address : session.evm.address;
+        const sellToken = currencyAddress(sourceChainKey, sourceAsset);
+        const sellAmount = parseUnits(amount, sourceDecimals).toString();
+
+        const crossQuote = await getCrossChainQuote({
+          originChainKey: sourceChainKey,
+          destinationChainKey: chainKey,
+          sellToken,
+          buyToken: token.address,
+          sellAmount,
+          originAddress: sourceAddress,
+          recipientAddress: destinationAddress,
+          slippageBps: slippageBps ?? undefined,
+        });
+
+        if (requestId !== quoteRequestIdRef.current) return false;
+        if (crossQuote.quote.sellAmount !== sellAmount || crossQuote.quote.buyAmount === '0' || crossQuote.quote.minBuyAmount === '0') {
+          throw new Error('Cross-chain router returned an unsafe or empty quote.');
+        }
+
+        const receiveDecimals = tokenDecimals ?? 18;
+        const receivedAmountFormatted = formatUnits(BigInt(crossQuote.quote.buyAmount), receiveDecimals);
+        const tokenPriceUsd = await fetchLiveTokenPriceUsd({chainKey, tokenAddress: token.address}).catch(() => null);
+        let priceImpactPct: number | null = null;
+        if (tokenPriceUsd != null) {
+          const receivedUsd = Number(receivedAmountFormatted) * tokenPriceUsd;
+          if (Number.isFinite(receivedUsd) && receivedUsd > 0) {
+            priceImpactPct = ((receivedUsd - amtNum) / amtNum) * 100;
+          }
+        }
+
+        crossChainQuoteRef.current = crossQuote;
+        crossChainOriginRef.current = sourceChainKey;
+        rawQuoteRef.current = null;
+        fallbackParamsRef.current = null;
+        multiSourcePlanRef.current = [];
+        setQuote({
+          totalFeeUsd: null,
+          etaSeconds: crossQuote.quote.estimatedTimeSeconds,
+          receivedAmountFormatted,
+          payAmountUsd: amtNum,
+          receiveAmountUsd: tokenPriceUsd != null ? Number(receivedAmountFormatted) * tokenPriceUsd : null,
+          priceImpactPct,
+        });
+        setQuoteError(null);
+        setQuoteLoading(false);
+        return true;
+      };
       if (isBuySide && needsUnifiedRouting && cashPortfolio) {
         const contributors = CASH_SUPPORTED_CHAINS
           .map(sourceChainKey => {
@@ -793,10 +849,20 @@ const needsUnifiedRouting =
           }
 
           if (remainingUsd > 0.01) {
+            // Relay has no direct source -> token route. Try the 0x
+            // Cross-Chain API before declaring the buy impossible. 0x can
+            // combine bridging and destination-side swap liquidity in one
+            // origin transaction, which is exactly the missing capability
+            // in the old planner.
+            const candidates = remainingContributors
+              .filter(c => c.balanceUsd + 0.000001 >= amtNum)
+              .sort((a, b) => b.balanceUsd - a.balanceUsd);
+            for (const candidate of candidates) {
+              if (await tryCrossChainBuy(candidate.chainKey)) return [];
+            }
             throw new Error(
-              'Only $' + (amtNum - remainingUsd).toFixed(2) +
-              ' of this buy has a safe direct route to ' + CHAIN_LABEL[chainKey] +
-              '; try a smaller amount or wait for another route.',
+              'No safe cross-chain route is available to ' + CHAIN_LABEL[chainKey] +
+              ' for this amount right now.',
             );
           }
           return plan;
@@ -838,14 +904,32 @@ const needsUnifiedRouting =
           });
           setQuoteError(null);
           setQuoteLoading(false);
-        }).catch(err => {
+        }).catch(async err => {
           if (requestId !== quoteRequestIdRef.current) return;
           multiSourcePlanRef.current = [];
           rawQuoteRef.current = null;
           fallbackParamsRef.current = null;
+          try {
+            const candidates = CASH_SUPPORTED_CHAINS
+              .map(sourceChainKey => ({
+                chainKey: sourceChainKey,
+                balanceUsd: cashPortfolio?.results.find(r => r.chainKey === sourceChainKey)?.balanceUsd ?? 0,
+              }))
+              .filter(c => c.balanceUsd + 0.000001 >= amtNum)
+              .sort((a, b) => b.balanceUsd - a.balanceUsd);
+            for (const candidate of candidates) {
+              if (await tryCrossChainBuy(candidate.chainKey)) return;
+            }
+          } catch (crossErr) {
+            if (requestId !== quoteRequestIdRef.current) return;
+            setQuoteError(crossErr instanceof Error ? crossErr.message : 'Cross-chain routing failed.');
+          }
+          if (requestId !== quoteRequestIdRef.current) return;
+          crossChainQuoteRef.current = null;
+          crossChainOriginRef.current = null;
           setQuote(null);
           setQuoteLoading(false);
-          setQuoteError(err instanceof Error ? err.message : 'Could not find direct routes for your combined cash balance.');
+          setQuoteError(err instanceof Error ? err.message : 'Could not find a safe route for your combined cash balance.');
         });
         return;
       }
