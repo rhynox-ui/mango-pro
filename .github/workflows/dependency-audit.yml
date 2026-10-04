@@ -39,7 +39,7 @@ jobs:
         run: npm audit --omit=dev || true
 
       - name: Fail on critical advisories
-        run: npm audit --omit=dev --audit-level=critical
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Software bill of materials
         if: always()
