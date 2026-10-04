@@ -1526,11 +1526,6 @@ export function TokenTradeScreen({
       {!isBuySide && tokenDecimalsError && <Text style={styles.errorText}>{tokenDecimalsError}</Text>}
       {!isBuySide && !tokenDecimalsError && tokenDecimals === null && amtNum > 0 && <Text style={styles.noteText}>Verifying this token…</Text>}
       {effectiveInsufficientBalance && <Text style={styles.errorText}>{nearToken && isBuySide ? 'Not enough USDC available to fund this NEAR trade.' : `Insufficient ${paySymbol} balance`}</Text>}
-      {needsUnifiedRouting && (
-        <Text style={styles.noteText}>
-          Your ${amtNum.toFixed(2)} buy will be split across available cash chains and routed directly to {CHAIN_LABEL[token.chainKey as ChainKey]} — no manual bridging or chain selection.
-        </Text>
-      )}
       <View style={styles.feeRow}>
         <View style={styles.feeRowLeft}>
           <View style={styles.feeDot} />
