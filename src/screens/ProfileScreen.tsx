@@ -9,7 +9,8 @@
 // "Joined <month year>" is the one real data point: today's date.
 
 import {useEffect, useMemo, useState} from 'react';
-import {ActivityIndicator, Alert, Image, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View} from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import {ActivityIndicator, Alert, Image, Modal, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View} from 'react-native';
 import {launchImageLibrary} from 'react-native-image-picker';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import Svg, {Defs, LinearGradient, Line as SvgLine, Path as SvgPath, Stop} from 'react-native-svg';
@@ -99,6 +100,15 @@ const POSITION_TABS = ['Open', 'Closed'] as const;
 type PositionTab = (typeof POSITION_TABS)[number];
 
 const ASSET_FILTERS = ['All', 'Tokens', 'Perps'] as const;
+const PROFILE_ASSET_HIDE_THRESHOLD_USD = 0.5;
+const PROFILE_ASSET_HIDE_PREF_KEY = 'mango_pro_hide_small_profile_assets_v1';
+
+function shouldHideProfileAsset(asset: WalletAsset): boolean {
+  const symbol = asset.symbol.trim().toUpperCase();
+  if (symbol === 'UNKNOWN') return true;
+  if (asset.valueUsd == null) return false;
+  return Number.isFinite(asset.valueUsd) && asset.valueUsd < PROFILE_ASSET_HIDE_THRESHOLD_USD;
+}
 type AssetFilterKey = (typeof ASSET_FILTERS)[number];
 
 function joinedLabel(): string {
@@ -343,6 +353,24 @@ export function ProfileScreen({
   const [walletAssets, setWalletAssets] = useState<WalletAsset[]>([]);
   const [walletAssetsComplete, setWalletAssetsComplete] = useState(true);
   const [walletAssetsLoading, setWalletAssetsLoading] = useState(false);
+  const [hideSmallBalances, setHideSmallBalances] = useState(true);
+  const [showHiddenBalances, setShowHiddenBalances] = useState(false);
+
+  useEffect(() => {
+    AsyncStorage.getItem(PROFILE_ASSET_HIDE_PREF_KEY)
+      .then(raw => setHideSmallBalances(raw === null ? true : raw === '1'))
+      .catch(() => setHideSmallBalances(true));
+  }, []);
+
+  async function toggleHideSmallBalances(enabled: boolean) {
+    setHideSmallBalances(enabled);
+    setShowHiddenBalances(false);
+    try {
+      await AsyncStorage.setItem(PROFILE_ASSET_HIDE_PREF_KEY, enabled ? '1' : '0');
+    } catch {
+      // UI preference only; failing to persist must not affect wallet state.
+    }
+  }
 
   // Live wallet index: anything with a positive fungible balance appears
   // here even when it never touched Mango before. txHistory remains the
@@ -396,6 +424,16 @@ export function ProfileScreen({
     }
     return [...byKey.values()].sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0));
   }, [walletAssets, openPositions]);
+
+  const hiddenWalletAssets = useMemo(
+    () => displayWalletAssets.filter(shouldHideProfileAsset),
+    [displayWalletAssets],
+  );
+
+  const visibleWalletAssets = useMemo(
+    () => hideSmallBalances && !showHiddenBalances ? displayWalletAssets.filter(asset => !shouldHideProfileAsset(asset)) : displayWalletAssets,
+    [displayWalletAssets, hideSmallBalances, showHiddenBalances],
+  );
 
   const positionMetricsByKey = useMemo(() => {
     const map = new Map<string, OpenPositionWithValue>();
@@ -817,8 +855,8 @@ export function ProfileScreen({
               <ActivityIndicator size="small" color={colors.textSecondary} />
               <Text style={styles.emptyPositionsText}>Loading wallet assets…</Text>
             </View>
-          ) : displayWalletAssets.length > 0 ? (
-            displayWalletAssets.map(asset => (
+          ) : visibleWalletAssets.length > 0 ? (
+            visibleWalletAssets.map(asset => (
               <TouchableOpacity
                 key={asset.key}
                 style={styles.closedTradeRow}
@@ -907,9 +945,24 @@ export function ProfileScreen({
         <Text style={styles.emptyPositions}>{positionTab === 'Open' ? 'No open positions' : 'No closed positions yet'}</Text>
       )}
 
-      <TouchableOpacity style={styles.showHiddenPill} activeOpacity={0.7}>
-        <Text style={styles.showHiddenText}>Show hidden</Text>
-      </TouchableOpacity>
+      <View style={styles.assetVisibilityRow}>
+        <View style={styles.assetVisibilityCopy}>
+          <Text style={styles.assetVisibilityTitle}>Hide zero or small balances</Text>
+          <Text style={styles.assetVisibilityHint}>Hide balances under $0.50 from this list</Text>
+        </View>
+        <Switch
+          value={hideSmallBalances}
+          onValueChange={toggleHideSmallBalances}
+          trackColor={{false: colors.panelBorder, true: colors.ctaBg}}
+          thumbColor={hideSmallBalances ? colors.ctaText : colors.textMuted}
+        />
+      </View>
+
+      {hideSmallBalances && hiddenWalletAssets.length > 0 ? (
+        <TouchableOpacity style={styles.showHiddenPill} activeOpacity={0.7} onPress={() => setShowHiddenBalances(value => !value)}>
+          <Text style={styles.showHiddenText}>{showHiddenBalances ? 'Hide hidden' : 'Show hidden (' + hiddenWalletAssets.length + ')'}</Text>
+        </TouchableOpacity>
+      ) : null}
 
       <Modal
         visible={depositStep !== null || withdrawStep !== null}
@@ -1511,6 +1564,24 @@ function makeStyles(colors: Colors) {
     closedTradeSubtitle: {color: colors.textMuted, fontSize: 11.5, marginTop: 2},
     closedTradeRight: {alignItems: 'flex-end', flexShrink: 0, gap: 2},
     closedTradeWhen: {color: colors.textMuted, fontSize: 11},
+
+    assetVisibilityRow: {
+      marginHorizontal: 16,
+      marginTop: 14,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      borderRadius: 12,
+      backgroundColor: colors.panel,
+      borderWidth: 1,
+      borderColor: colors.panelBorder,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12,
+    },
+    assetVisibilityCopy: {flex: 1, minWidth: 0},
+    assetVisibilityTitle: {color: colors.textPrimary, fontSize: 12.5, fontWeight: '700'},
+    assetVisibilityHint: {color: colors.textMuted, fontSize: 10.5, marginTop: 2},
 
     showHiddenPill: {
       alignSelf: 'center',
