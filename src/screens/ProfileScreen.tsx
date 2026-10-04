@@ -40,6 +40,8 @@ import {markOwnAction} from '../wallet/depositWatcher';
 import {computeClosedPositions, computeOpenPositions, withLiveValues, type ClosedPosition, type OpenPositionWithValue} from '../wallet/openPositions';
 import {hasUnseenNotifications, subscribeNotificationHistory} from '../notifications/notificationHistory';
 import {AssetIcon} from '../components/AssetIcon';
+import {AddressQRCode} from '../components/AddressQRCode';
+import {QRScannerModal} from '../components/QRScannerModal';
 import {privateKeyToAccount} from 'viem/accounts';
 import {ReferralModal} from '../referral/ReferralModal';
 import {getReferralStats, setReferralHandle, type ReferralSigner} from '../referral/referralApi';
@@ -157,6 +159,7 @@ export function ProfileScreen({
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [withdrawError, setWithdrawError] = useState<string | null>(null);
   const [withdrawTxId, setWithdrawTxId] = useState<string | null>(null);
+  const [qrScannerOpen, setQrScannerOpen] = useState(false);
   // Same Security-screen opt-in every other trade path already reads
   // (gaslessTradingPrefs.ts, defaults to true) — lets a crypto Withdraw
   // sponsor its own EVM gas the same way Convert now does.
@@ -513,6 +516,29 @@ export function ProfileScreen({
     setWithdrawAmount('');
     setWithdrawError(null);
     setWithdrawTxId(null);
+  }
+
+  function handleWithdrawQrValue(rawValue: string) {
+    const raw = rawValue.trim();
+    // Ignore any amount/asset encoded in payment QR codes. Scanning a QR
+    // must only fill the recipient field; the user still chooses the amount.
+    let address = raw;
+    if (/^ethereum:/i.test(address)) {
+      address = address.replace(/^ethereum:/i, '').split('?')[0].split('/')[0];
+    } else if (/^solana:/i.test(address)) {
+      address = address.replace(/^solana:/i, '').split('?')[0];
+    } else if (/^near:/i.test(address)) {
+      address = address.replace(/^near:/i, '').split('?')[0];
+    }
+    if (!withdrawChain || !isValidRecipientAddress(withdrawChain, address)) {
+      Alert.alert(
+        'Wrong network',
+        `That QR code does not contain a valid ${withdrawChain === 'solana' ? 'Solana' : 'wallet'} address for ${withdrawChain ? CHAIN_LABEL[withdrawChain] : 'this network'}.`,
+      );
+      return;
+    }
+    setWithdrawAddress(address);
+    setQrScannerOpen(false);
   }
 
   async function handleConfirmWithdraw() {
@@ -948,6 +974,16 @@ export function ProfileScreen({
                 </View>
 
                 <Text style={styles.modalSectionLabel}>Your {depositLabel} address</Text>
+                <AddressQRCode
+                  value={
+                    depositChain === 'near'
+                      ? `near:${session?.near?.address ?? ''}`
+                      : depositChain === 'solana'
+                      ? `solana:${session?.solana.address ?? ''}`
+                      : session?.evm.address ?? ''
+                  }
+                  size={210}
+                />
                 <Text style={styles.modalAddress} selectable numberOfLines={1} ellipsizeMode="middle">
                   {depositChain === 'near' ? (session?.near?.address ?? '—') : depositChain === 'solana' ? (session?.solana.address ?? '—') : (session?.evm.address ?? '—')}
                 </Text>
@@ -1012,15 +1048,23 @@ export function ProfileScreen({
                 </View>
 
                 <Text style={styles.modalSectionLabel}>Recipient address</Text>
-                <TextInput
-                  style={styles.formInput}
-                  value={withdrawAddress}
-                  onChangeText={setWithdrawAddress}
-                  placeholder={withdrawChain === 'solana' ? 'Solana address' : '0x…'}
-                  placeholderTextColor={colors.textMuted}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
+                <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                  <TextInput
+                    style={[styles.formInput, {flex: 1}]}
+                    value={withdrawAddress}
+                    onChangeText={setWithdrawAddress}
+                    placeholder={withdrawChain === 'solana' ? 'Solana address' : '0x…'}
+                    placeholderTextColor={colors.textMuted}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  <TouchableOpacity
+                    style={[styles.maxButton, {marginLeft: 8}]}
+                    onPress={() => setQrScannerOpen(true)}
+                    activeOpacity={0.7}>
+                    <Text style={styles.maxButtonText}>Scan QR</Text>
+                  </TouchableOpacity>
+                </View>
 
                 <Text style={[styles.modalSectionLabel, styles.modalSectionLabelSpaced]}>Amount ({CASH_ASSET_BY_CHAIN[withdrawChain]})</Text>
                 <View style={styles.amountRow}>
@@ -1159,6 +1203,13 @@ export function ProfileScreen({
           </View>
         </View>
       </Modal>
+
+      <QRScannerModal
+        visible={qrScannerOpen}
+        title={withdrawChain ? `Scan ${CHAIN_LABEL[withdrawChain]} address` : 'Scan recipient address'}
+        onClose={() => setQrScannerOpen(false)}
+        onScanned={handleWithdrawQrValue}
+      />
 
       <Modal visible={bioEditing} animationType="slide" transparent onRequestClose={() => setBioEditing(false)}>
         <View style={styles.modalBackdrop}>
