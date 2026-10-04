@@ -46,6 +46,11 @@ const SOLANA_RPC_URL = 'https://rpc.solanatracker.io/public';
 // Read-only token-account RPC only. Execution, simulation, signing, sending,
 // blockhashes, and confirmations continue to use SOLANA_RPC_URL unchanged.
 const SOLANA_TOKEN_ACCOUNT_READ_RPC_URL = 'https://api.mainnet.solana.com';
+// Sponsored-transaction simulation uses a standard Solana Labs mainnet RPC.
+// SOLANA_RPC_URL remains the execution/read/send path; this only prevents a
+// non-standard public RPC from reporting a false AccountNotFound for the
+// sponsor fee payer during pre-sign simulation.
+const SOLANA_SIMULATION_RPC_URL = 'https://api.mainnet.solana.com';
 
 // Real fix for a structural Solana gap, confirmed via real research
 // (Solana's own cookbook, and how Alchemy/Privy's production wallet
@@ -434,7 +439,16 @@ export async function signAndSendSponsoredSolanaStep(
   ]);
   const bs58 = bs58Module.default;
   const tokenAccountReadConnection = new Connection(SOLANA_TOKEN_ACCOUNT_READ_RPC_URL, 'confirmed');
+  const simulationConnection = new Connection(SOLANA_SIMULATION_RPC_URL, 'confirmed');
   const feePayerPubkey = new PublicKey(await getSolanaFeePayerPublicKey());
+  // AccountNotFound at this stage is a fee-payer validation failure on
+  // Solana. Read the sponsor balance from the standard RPC before asking
+  // it to simulate the full trade, so a genuinely unfunded sponsor gets
+  // a precise error instead of being misreported as a route failure.
+  const sponsorBalance = await simulationConnection.getBalance(feePayerPubkey, 'confirmed');
+  if (sponsorBalance <= 0) {
+    throw new Error('Mango fee sponsorship is temporarily unavailable because its Solana fee-payer wallet has no SOL. The sponsor needs a SOL top-up; the trade itself was not signed or sent.');
+  }
   const rewrittenInstructions = rewriteAccountCreationFundingInstructions(instructions, feePayerPubkey, TransactionInstruction);
 
   const {blockhash} = await connection.getLatestBlockhash('confirmed');
@@ -478,7 +492,7 @@ export async function signAndSendSponsoredSolanaStep(
 
           const candidateMessage = new TransactionMessage({payerKey: feePayerPubkey, instructions: candidateInstructions, recentBlockhash: blockhash}).compileToV0Message(lookupTables);
           const candidateTransaction = new VersionedTransaction(candidateMessage);
-          const simulation = await connection.simulateTransaction(candidateTransaction, {sigVerify: false, replaceRecentBlockhash: true});
+          const simulation = await simulationConnection.simulateTransaction(candidateTransaction, {sigVerify: false, replaceRecentBlockhash: true});
 
           if (!simulation.value.err && typeof simulation.value.unitsConsumed === 'number') {
             const safeUnits = Math.ceil(simulation.value.unitsConsumed * COMPUTE_BUDGET_SAFETY_MULTIPLE);
@@ -513,7 +527,7 @@ export async function signAndSendSponsoredSolanaStep(
   if (spendIntent) {
     const usdcMintAddress = TOKEN_ADDRESSES.USDC?.solana;
     const extra = recoveryUnitsIncluded > 0n && usdcMintAddress ? [...(spendIntent.extra ?? []), {mint: usdcMintAddress, units: recoveryUnitsIncluded}] : spendIntent.extra;
-    await assertSolanaSpendWithinIntentWeb3(connection, unsignedTransaction, signer.publicKey.toBase58(), {...spendIntent, extra}, tokenAccountReadConnection);
+    await assertSolanaSpendWithinIntentWeb3(simulationConnection, unsignedTransaction, signer.publicKey.toBase58(), {...spendIntent, extra}, tokenAccountReadConnection);
   }
 
   const transaction = await signer.sign(unsignedTransaction);
