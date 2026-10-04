@@ -12,11 +12,8 @@
 // set it (or a future call site that doesn't). Still overridable from
 // Security settings (if Relay cannot execute gaslessly, execution falls back
 // to a normal user-signed transaction — see
-// executeRelayQuote.ts — so turning this off never removes the ability
-// to trade, only which path is tried first) and still meaningless for a
-// Google/Particle session, which has no local key to sign a 7702
-// delegation with. Same AsyncStorage-backed shape autoLockPrefs.ts
-// already establishes.
+// executeRelayQuote.ts — native-gas fallback does not exist for trades.
+ // The stored preference remains for settings/API compatibility.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
